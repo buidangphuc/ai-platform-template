@@ -18,3 +18,5 @@ celerybeat-schedule.*
 logs/
 
 data/
+
+fastapi_template
