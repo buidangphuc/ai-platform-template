@@ -6,6 +6,7 @@ from app.core.errors import register_exception_handlers
 from app.core.health import HealthService
 from app.core.logging import configure_logging
 from app.core.request_context import RequestIdMiddleware
+from app.modules.identity.repository import ApiKeyRepository
 
 
 def create_app(
@@ -24,6 +25,7 @@ def create_app(
     app.state.health_service = HealthService(
         check_external_dependencies=init_resources,
     )
+    app.state.api_key_repository = ApiKeyRepository()
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
     app.include_router(build_api_router(resolved_settings))
