@@ -1,15 +1,7 @@
 BOOTSTRAP_HEADERS = {"X-Bootstrap-Token": "test-bootstrap-token"}
 
 
-def configure_bootstrap_token(client):
-    client._transport.app.state.settings.API_KEY_BOOTSTRAP_TOKEN = (
-        "test-bootstrap-token"
-    )
-
-
 async def test_create_api_key_returns_secret_once(client):
-    configure_bootstrap_token(client)
-
     response = await client.post(
         "/api/v1/auth/api-keys",
         headers=BOOTSTRAP_HEADERS,
@@ -24,8 +16,6 @@ async def test_create_api_key_returns_secret_once(client):
 
 
 async def test_create_api_key_requires_bootstrap_token(client):
-    configure_bootstrap_token(client)
-
     response = await client.post(
         "/api/v1/auth/api-keys",
         json={"name": "local-test"},
@@ -36,8 +26,6 @@ async def test_create_api_key_requires_bootstrap_token(client):
 
 
 async def test_authenticated_endpoint_accepts_api_key(client):
-    configure_bootstrap_token(client)
-
     created = await client.post(
         "/api/v1/auth/api-keys",
         headers=BOOTSTRAP_HEADERS,

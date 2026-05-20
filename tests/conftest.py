@@ -18,6 +18,7 @@ def test_settings() -> Settings:
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
         API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+        API_KEY_BOOTSTRAP_TOKEN="test-bootstrap-token",  # pragma: allowlist secret
     )
 
 
