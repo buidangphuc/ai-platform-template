@@ -1,0 +1,31 @@
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.bootstrap.application import create_app
+from app.core.config import Settings
+
+
+@pytest.fixture()
+def test_settings() -> Settings:
+    return Settings(
+        ENVIRONMENT="test",
+        POSTGRES_HOST="localhost",
+        POSTGRES_USER="postgres",
+        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
+        POSTGRES_DB="ai_platform",
+        REDIS_HOST="localhost",
+        REDIS_PORT=6379,
+        REDIS_PASSWORD="",  # pragma: allowlist secret
+        REDIS_DATABASE=0,
+        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+    )
+
+
+@pytest.fixture()
+async def client(test_settings: Settings):
+    app = create_app(settings=test_settings, init_resources=False)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as test_client:
+        yield test_client

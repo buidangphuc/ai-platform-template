@@ -1,3 +1,3 @@
-from core.registrar import register_app
+from app.bootstrap.application import create_app
 
-app = register_app(init_db=True)
+app = create_app()
