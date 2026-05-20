@@ -102,15 +102,6 @@ class BuildTreeType(StrEnum):
     recursive = "recursive"
 
 
-class OperaLogCipherType(IntEnum):
-    """Operation log encryption type"""
-
-    aes = 0
-    md5 = 1
-    itsdangerous = 2
-    plan = 3
-
-
 class StatusType(IntEnum):
     """Status type"""
 
