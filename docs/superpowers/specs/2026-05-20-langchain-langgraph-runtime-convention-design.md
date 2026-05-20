@@ -1,8 +1,13 @@
-# LangChain and LangGraph Runtime Convention Design
+# LangChain, LangGraph, and LlamaIndex Runtime Convention Design
 
 Date: 2026-05-20
-Status: Draft for user review
+Status: Superseded by 2026-05-20-simplified-runtime-and-db-session-design.md
 Scope: Architecture amendment for the AI runtime layer after phases 1-4.
+
+Current note: this document records the earlier direction. The accepted current
+implementation removes the template-owned adapter registry, skips app
+observability in this phase, uses LangChain/LlamaIndex directly where useful,
+and treats SQLAlchemy `DbSession` as the database extension point.
 
 ## 1. Context
 
@@ -14,7 +19,8 @@ The template should not become a custom AI framework. It should be a FastAPI, ML
 
 ## 2. Decision
 
-Use LangChain and LangGraph conventions as the native convention inside the AI runtime layer.
+Use LangChain, LangGraph, and LlamaIndex conventions as the native convention
+inside the AI runtime layer.
 
 Custom Pydantic and Protocol contracts remain valuable at boundaries:
 
@@ -27,17 +33,18 @@ Custom Pydantic and Protocol contracts remain valuable at boundaries:
 - Persistence schemas.
 - Infrastructure adapters.
 
-Inside AI workflow code, prefer native LangChain and LangGraph types:
+Inside AI workflow code, prefer native ecosystem types:
 
 - `BaseChatModel`
 - `init_chat_model`
 - LangChain messages such as `HumanMessage`, `AIMessage`, and `ToolMessage`
 - `ChatPromptTemplate` and `PromptTemplate`
 - `Runnable`
-- LangChain `Document`
 - LangChain `Embeddings`
-- retriever/vector store conventions where practical
 - LangGraph `StateGraph`, `MessagesState`, compiled graphs, and graph state
+- LlamaIndex `Document`
+- LlamaIndex `VectorStoreIndex`
+- LlamaIndex node parsers, retrievers, and query/LLM primitives for RAG
 
 ## 3. LangSmith Decision
 
@@ -63,7 +70,8 @@ Dependency note: if a LangChain package includes LangSmith as a transitive imple
 3. Keep the FastAPI app, auth, rate limits, feedback, observability, eval, and research promotion pieces independent from LangSmith or any SaaS tool.
 4. Keep the local golden path runnable without cloud accounts.
 5. Preserve existing phase 1-4 behavior while migrating internal AI modules incrementally.
-6. Keep adapters where they add value: provider selection, infrastructure, observability export, cache storage, vector store selection, experiment tracking, and artifact promotion.
+6. Keep adapters where they add value: infrastructure, observability export, cache storage, experiment tracking, and artifact promotion.
+7. Avoid template-owned adapter-on-adapter layers when LangChain or LlamaIndex already provides the runtime abstraction.
 
 ## 5. Non-Goals
 
@@ -84,8 +92,9 @@ API / App Boundary
   FastAPI routes, Pydantic schemas, auth, rate limit, error envelope
 
 AI Runtime Layer
-  LangChain models, messages, prompts, tools, runnables, retrievers
+  LangChain models, messages, prompts, tools, runnables
   LangGraph graph factories, compiled graphs, state schemas
+  LlamaIndex documents, node parsers, indexes, retrievers, RAG LLM calls
 
 Template Control Plane
   registry, settings, observability adapters, eval runner, feedback,
@@ -94,9 +103,12 @@ Template Control Plane
 
 The key rule is:
 
-> LangChain and LangGraph are native inside the AI runtime layer, but not at every app boundary.
+> LangChain, LangGraph, and LlamaIndex are native inside the AI runtime layer,
+> but not at every app boundary.
 
-Routes should accept and return stable Pydantic schemas. Internally, services can convert those payloads into LangChain messages, documents, runnables, or graph state.
+Routes should accept and return stable Pydantic schemas. Internally, services can
+convert those payloads into LangChain messages/runnables, LangGraph state, or
+LlamaIndex documents/nodes.
 
 ## 7. Registry Changes
 
@@ -104,13 +116,15 @@ The registry should build AI runtime primitives directly:
 
 ```python
 runtime.chat_model          # BaseChatModel
-runtime.embeddings          # Embeddings
-runtime.prompt_registry     # returns ChatPromptTemplate or PromptTemplate
-runtime.rag_chain           # Runnable where useful
+runtime.langchain_embeddings # Embeddings
 runtime.agent_graph         # compiled LangGraph graph or Runnable
 ```
 
-Current custom contracts such as `LLMClient`, `LLMRequest`, and `LLMResponse` should move to compatibility status. They can remain as bridge wrappers while the app migrates, but new AI modules should not use them as the primary abstraction.
+Current custom contracts such as `LLMClient`, `EmbeddingClient`, and
+`VectorStore` should not be runtime adapter boundaries. Request/response schemas
+and cache-key schemas can remain where they preserve API flow or cross-cutting
+policy, but the template should not wrap LangChain or LlamaIndex with another
+provider abstraction by default.
 
 Provider configuration should use LangChain conventions where possible:
 
@@ -146,18 +160,22 @@ Rendering should use LangChain prompt rendering, not a custom `.format()` path, 
 
 This keeps prompt versioning and promotion in the template while letting AI engineers compose prompts naturally with runnables.
 
-## 9. RAG Convention
+## 9. Knowledge Retrieval Addon Convention
 
-RAG should move toward LangChain-native building blocks:
+RAG is not a standalone answer flow in this template. LlamaIndex is an advanced
+retrieval addon that feeds LangChain/LangGraph agents:
 
-- input documents become LangChain `Document`
+- input documents become LlamaIndex `Document`
 - metadata stays plain dictionaries
-- splitting can use LangChain splitters when useful
-- embeddings use LangChain `Embeddings`
-- retrieval returns documents with score metadata
-- answer generation is a runnable chain
+- splitting uses LlamaIndex node parsers
+- indexing uses `VectorStoreIndex`
+- retrieval uses LlamaIndex retrievers and `NodeWithScore`
+- optional LlamaIndex LLM calls are limited to retrieval-specific transforms such
+  as query rewrite, decomposition, HyDE, metadata extraction, and reranking
 
-The API can still expose the current Pydantic request/response shape. Internally, the flow should look like a standard LangChain RAG flow.
+The API exposes ingestion and search/debug endpoints. It should not expose
+`/rag/answer`; final user-facing answers belong to the LangGraph agent, usually
+through a LangChain `knowledge_search` tool backed by the LlamaIndex retriever.
 
 The template still owns:
 
@@ -293,11 +311,11 @@ This is an incremental refactor, not a rewrite.
 
 ### Phase A: Dependencies and Registry
 
-- Add LangChain and LangGraph dependencies.
+- Add LangChain, LangGraph, and LlamaIndex dependencies.
 - Add LangChain chat model factory.
 - Add LangChain embedding factory.
-- Add runtime registry fields for chat model, embeddings, prompts, and agent graph.
-- Keep existing custom `LLMClient` wrapper as a bridge.
+- Add runtime registry fields for chat model, embeddings, and agent runtime.
+- Remove template-owned LangChain bridge wrappers from the registry.
 
 ### Phase B: Prompt Registry
 
@@ -305,10 +323,12 @@ This is an incremental refactor, not a rewrite.
 - Return `ChatPromptTemplate` for chat prompts.
 - Keep prompt versioning and artifact manifests custom.
 
-### Phase C: RAG Runtime
+### Phase C: Knowledge Retrieval Runtime
 
-- Convert ingestion/search/answer internals to LangChain `Document`, `Embeddings`, retriever, and runnable conventions.
-- Keep API schemas unchanged.
+- Convert ingestion/search internals to LlamaIndex `Document`, `VectorStoreIndex`,
+  node parser, and retriever conventions.
+- Remove standalone `/rag/answer`.
+- Add a LangChain `knowledge_search` tool for agent use.
 - Preserve redaction, usage tracking, eval smoke, and local fake path.
 
 ### Phase D: Agent Runtime
@@ -329,16 +349,18 @@ This is an incremental refactor, not a rewrite.
 
 1. Local golden path still runs without cloud credentials.
 2. No direct LangSmith package selection, env var, code import, tracing profile, or eval upload path exists.
-3. AI modules use LangChain/LangGraph conventions internally.
+3. AI modules use LangChain, LangGraph, and LlamaIndex conventions internally.
 4. Public API schemas remain stable Pydantic models.
 5. Prompt registry can return LangChain prompt templates.
-6. RAG answer flow can be composed as a LangChain runnable.
-7. Default agent runtime is backed by a compiled LangGraph graph.
-8. Custom observability captures model, prompt, token, tool, and graph-node events.
-9. Custom eval runner can evaluate a runnable or compiled graph.
-10. Current fake/local smoke tests still pass.
-11. Docker build still passes.
-12. Existing feedback, usage, cache, and artifact manifest contracts still work.
+6. Knowledge indexing/search uses LlamaIndex primitives directly.
+7. There is no standalone `/rag/answer` product endpoint.
+8. Default agent runtime is backed by a compiled LangGraph graph and can call
+   the `knowledge_search` tool.
+9. Custom observability captures model, prompt, token, tool, and graph-node events.
+10. Custom eval runner can evaluate retrieval quality or a compiled graph.
+11. Current fake/local smoke tests still pass.
+12. Docker build still passes.
+13. Existing feedback, usage, cache, and artifact manifest contracts still work.
 
 ## 17. Risks and Mitigations
 
@@ -356,12 +378,15 @@ Mitigation: Route handlers convert at the boundary. API models remain Pydantic a
 
 Risk: Replacing current custom contracts in one pass can break phase 1-4 stability.
 
-Mitigation: Use bridge wrappers while migrating module by module.
+Mitigation: Keep Pydantic API schemas stable and migrate one runtime surface at a
+time.
 
 ## 18. Reference Sources
 
 - LangChain models: https://docs.langchain.com/oss/python/langchain/models
 - LangChain chat model factory reference: https://reference.langchain.com/python/langchain/chat_models/base/init_chat_model
+- LlamaIndex vector index: https://docs.llamaindex.ai/en/stable/module_guides/indexing/vector_store_index/
+- LlamaIndex embeddings: https://docs.llamaindex.ai/en/stable/module_guides/models/embeddings/
 - LangChain messages: https://docs.langchain.com/oss/python/langchain/messages
 - LangChain agents: https://docs.langchain.com/oss/python/langchain/agents
 - LangChain runtime context: https://docs.langchain.com/oss/python/langchain/runtime

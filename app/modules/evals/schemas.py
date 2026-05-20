@@ -16,7 +16,7 @@ class RAGEvalItemResult(BaseModel):
     id: str
     passed: bool
     matched_keywords: list[str]
-    answer: str
+    evidence: str
 
 
 class RAGEvalResult(BaseModel):

@@ -1,1 +1,0 @@
-"""Job queue adapter implementations."""

@@ -1,8 +1,13 @@
 # AI Solution Engineering Platform Template Design
 
 Date: 2026-05-20
-Status: Draft for user review
+Status: Superseded by 2026-05-20-simplified-runtime-and-db-session-design.md
 Scope: Controlled rebuild of this repository into a team-shareable AI solution engineering platform template.
+
+Current note: this document captures the initial broad spec. The current
+accepted phase target is narrower: no template-owned adapter registry, no app
+observability adapters yet, direct LangChain/LlamaIndex runtime usage, and
+database access through SQLAlchemy `DbSession`.
 
 ## 1. Context
 
@@ -103,9 +108,8 @@ The registry must not become a global service locator. Application services shou
 Preferred:
 
 ```python
-llm = registry.build_llm(settings.LLM_PROVIDER)
-vector_store = registry.build_vector_store(settings.VECTOR_STORE)
-rag_service = RagService(llm=llm, vector_store=vector_store)
+chat_model = registry.chat_model
+knowledge_service = KnowledgeRetrievalService(embed_model=llamaindex_embed_model)
 ```
 
 Avoid:
@@ -118,9 +122,6 @@ registry.get("llm").chat(...)
 
 Adapters should exist for:
 
-- LLM provider.
-- Embedding provider.
-- Vector store.
 - Object storage.
 - Job queue.
 - Observability exporter or profile.
@@ -132,6 +133,8 @@ Adapters should exist for:
 
 Do not adapterize by default:
 
+- LangChain chat models and embeddings.
+- LlamaIndex RAG indexes, retrievers, and node parsers.
 - Config/env loading.
 - Error response shape.
 - Request ID.
@@ -146,11 +149,17 @@ Do not adapterize by default:
 
 ### Vendor Type Rule
 
-Vendor types must not leak into core or modules. For example:
+Vendor SDK clients must not leak across the app boundary. Ecosystem runtime
+primitives are allowed inside AI modules when they are the chosen convention.
+For example:
 
-- Modules should depend on `LLMClient`, not `OpenAI`.
-- Modules should depend on `VectorStore`, not `QdrantClient`.
-- Modules should depend on `AgentRuntime`, not `StateGraph`.
+- Chat/agent modules may use LangChain `BaseChatModel`, messages, prompts, and
+  runnables directly.
+- RAG modules may use LlamaIndex `Document`, `VectorStoreIndex`, retrievers, and
+  node parsers directly.
+- Modules should still avoid raw provider clients such as `OpenAI`,
+  `QdrantClient`, or SaaS-specific tracing clients unless isolated in a clearly
+  named integration.
 
 ## 7. Proposed Folder Structure
 
@@ -340,7 +349,6 @@ Core capability endpoints should be generic:
 - `POST /api/v1/files`
 - `POST /api/v1/rag/index`
 - `POST /api/v1/rag/search`
-- `POST /api/v1/rag/answer`
 - `GET /api/v1/jobs/{job_id}`
 - `POST /api/v1/feedback`
 
@@ -352,7 +360,7 @@ Minimum feedback fields:
 request_id
 trace_id
 user_id or api_key_id
-target_type: llm_response | rag_answer | agent_run | eval_run
+target_type: llm_response | retrieval_result | agent_run | eval_run
 target_id
 rating: positive | negative | neutral
 labels: list[str]
@@ -464,7 +472,8 @@ Use LangGraph only when the workflow needs one or more of:
 - Long-running stateful execution.
 - Parallel or conditional agent branches.
 
-Do not require LangGraph for simple LLM calls, RAG answers, or a small number of tools.
+Do not require LangGraph for simple LLM calls or a small number of direct tools.
+Knowledge retrieval can stay a tool until the product workflow needs graph state.
 
 ## 13. Observability Design
 

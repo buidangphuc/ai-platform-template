@@ -16,6 +16,7 @@ dependencies = [
   "greenlet>=3.1.1,<4.0.0",
   "langchain>=1.0,<2.0",
   "langgraph>=1.0,<2.0",
+  "llama-index-core>=0.14,<0.15",
   "loguru>=0.7.3,<0.8.0",
   "msgspec>=0.19.0,<0.20.0",
   "numpy>=2.0,<3.0",

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from app.contracts.artifacts import ArtifactManifest, ArtifactType
+from research.artifacts.schemas import ArtifactManifest, ArtifactType
 
 
 def test_research_workspace_has_required_phase_4_structure():

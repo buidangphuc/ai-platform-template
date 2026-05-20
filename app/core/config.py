@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,45 +33,13 @@ class Settings(BaseSettings):
     API_KEY_BOOTSTRAP_TOKEN: str = ""
     DEFAULT_RATE_LIMIT_PER_MINUTE: int = 60
 
-    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
-    TRACE_CONTENT: Literal["off", "redacted", "full"] = "redacted"
-
     CHAT_MODEL: str = ""
-    EMBEDDING_MODEL: str = ""
-    VECTOR_STORE: Literal["in_memory"] = "in_memory"
-    STORAGE_BACKEND: Literal["local"] = "local"
-    LOCAL_STORAGE_ROOT: str = ".local/storage"
-    JOB_BACKEND: Literal["in_process"] = "in_process"
-    OBSERVABILITY_BACKEND: Literal["debug", "otel_debug"] = "debug"
-    LLM_CACHE_BACKEND: Literal["noop"] = "noop"
-    LLM_CACHE_ENABLED: bool = False
-    AGENT_RUNTIME: Literal["simple", "langgraph"] = "simple"
-    RAG_CHUNK_SIZE: int = 512
-    RAG_CHUNK_OVERLAP: int = 64
-    EXPERIMENT_TRACKER_BACKEND: Literal["local", "mlflow"] = "local"
-    LOCAL_EXPERIMENT_TRACKER_ROOT: str = "research/experiments/local"
-    MLFLOW_TRACKING_URI: str = "file:./research/experiments/mlruns"
-    MLFLOW_EXPERIMENT_NAME: str = "ai-platform-template"
 
     @field_validator("DEFAULT_RATE_LIMIT_PER_MINUTE")
     @classmethod
     def validate_default_rate_limit_per_minute(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("DEFAULT_RATE_LIMIT_PER_MINUTE must be positive")
-        return value
-
-    @field_validator("RAG_CHUNK_SIZE")
-    @classmethod
-    def validate_rag_chunk_size(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("RAG_CHUNK_SIZE must be positive")
-        return value
-
-    @field_validator("RAG_CHUNK_OVERLAP")
-    @classmethod
-    def validate_rag_chunk_overlap(cls, value: int) -> int:
-        if value < 0:
-            raise ValueError("RAG_CHUNK_OVERLAP must be non-negative")
         return value
 
     @computed_field
@@ -89,16 +56,7 @@ class Settings(BaseSettings):
         return {key: self._redacted_value(key, value) for key, value in values.items()}
 
     def _redacted_value(self, key: str, value: object) -> object:
-        visible_names = {
-            "VECTOR_STORE",
-            "STORAGE_BACKEND",
-            "JOB_BACKEND",
-            "OBSERVABILITY_BACKEND",
-            "LLM_CACHE_BACKEND",
-            "AGENT_RUNTIME",
-            "EXPERIMENT_TRACKER_BACKEND",
-        }
-        if key in visible_names or not value:
+        if not value:
             return value
 
         key_upper = key.upper()

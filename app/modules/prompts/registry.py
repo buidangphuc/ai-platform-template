@@ -14,15 +14,17 @@ class InMemoryPromptRegistry:
         registry = cls()
         registry.register(
             PromptTemplate(
-                name="rag.answer",
+                name="agent.default",
                 version="v1",
                 template=(
-                    "Answer the question using only the provided context.\n\n"
-                    "Question: {question}\n\n"
-                    "Context:\n{context}"
+                    "Complete the task using the provided input and retrieved "
+                    "knowledge when it is present.\n\n"
+                    "Task: {task}\n\n"
+                    "Input:\n{input}\n\n"
+                    "Retrieved knowledge:\n{knowledge_context}"
                 ),
-                variables=["question", "context"],
-                metadata={"capability": "rag"},
+                variables=["task", "input", "knowledge_context"],
+                metadata={"capability": "agent"},
             )
         )
         return registry

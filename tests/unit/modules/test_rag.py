@@ -1,32 +1,24 @@
-from langchain_core.embeddings.fake import DeterministicFakeEmbedding
-from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
-from langchain_core.runnables import Runnable
+from llama_index.core import Document, VectorStoreIndex
+from llama_index.core.embeddings import MockEmbedding
+from llama_index.core.node_parser import SentenceSplitter
 
-from app.adapters.observability.debug import DebugObservability
-from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.core.redaction import RedactionPolicy
-from app.modules.prompts.registry import InMemoryPromptRegistry
-from app.modules.rag.chunking import TextChunker
-from app.modules.rag.schemas import RagAnswerRequest, RagDocument, RagIndexRequest
-from app.modules.rag.service import RagService
+from app.modules.rag.schemas import RagDocument, RagIndexRequest
+from app.modules.rag.service import KnowledgeRetrievalService, build_rag_node_parser
 from app.modules.usage.tracker import InMemoryUsageTracker
 
 
-def build_rag_service() -> RagService:
-    return RagService(
-        embeddings=DeterministicFakeEmbedding(size=8),
-        vector_store=InMemoryVectorStore(),
-        chat_model=ParrotFakeChatModel(),
-        prompt_registry=InMemoryPromptRegistry.with_defaults(),
-        chunker=TextChunker(chunk_size=8, overlap=2),
+def build_knowledge_service() -> KnowledgeRetrievalService:
+    return KnowledgeRetrievalService(
+        embed_model=MockEmbedding(embed_dim=16),
+        node_parser=build_rag_node_parser(chunk_size=64, chunk_overlap=8),
         usage_tracker=InMemoryUsageTracker(),
-        observability=DebugObservability(),
         redaction_policy=RedactionPolicy(mode="redacted"),
     )
 
 
-async def test_rag_service_indexes_searches_and_answers_with_fake_adapters():
-    service = build_rag_service()
+async def test_knowledge_service_indexes_and_searches_with_llamaindex_runtime():
+    service = build_knowledge_service()
     await service.index(
         RagIndexRequest(
             documents=[
@@ -40,21 +32,17 @@ async def test_rag_service_indexes_searches_and_answers_with_fake_adapters():
     )
 
     search = await service.search("adapter contracts", top_k=1)
-    answer = await service.answer(
-        RagAnswerRequest(question="What makes provider swaps safer?", top_k=1)
-    )
 
     assert search.matches[0].document_id == "doc-1"
     assert "adapter contracts" in search.matches[0].text
-    assert "What makes provider swaps safer?" in answer.answer
-    assert answer.sources[0].document_id == "doc-1"
-    assert answer.usage.total_tokens > 0
     assert service.usage_tracker.records
-    assert isinstance(service.answer_chain, Runnable)
+    assert isinstance(service.index_store, VectorStoreIndex)
+    assert not hasattr(service, "vector_store")
+    assert not hasattr(service, "answer")
 
 
-async def test_rag_service_redacts_content_before_vector_storage():
-    service = build_rag_service()
+async def test_knowledge_service_redacts_content_before_vector_storage():
+    service = build_knowledge_service()
 
     await service.index(
         RagIndexRequest(
@@ -75,33 +63,32 @@ async def test_rag_service_redacts_content_before_vector_storage():
     assert search.matches[0].metadata["api_key"] == "[secret]"
 
 
-async def test_rag_ingestion_preserves_langchain_document_metadata_shape():
-    service = build_rag_service()
+async def test_rag_ingestion_preserves_llamaindex_node_metadata_shape():
+    service = build_knowledge_service()
 
     await service.index(
         RagIndexRequest(
             documents=[
                 RagDocument(
                     id="doc-1",
-                    text="LangChain documents carry page content and metadata.",
+                    text="LlamaIndex nodes carry text and metadata.",
                     metadata={"source": "unit"},
                 ),
             ],
         )
     )
 
-    stored_document = next(iter(service.vector_store._documents.values()))
+    search = await service.search("metadata", top_k=1)
 
-    assert (
-        stored_document.text == "LangChain documents carry page content and metadata."
-    )
-    assert stored_document.metadata["document_id"] == "doc-1"
-    assert stored_document.metadata["chunk_id"] == "doc-1:chunk:0"
-    assert stored_document.metadata["chunk_index"] == 0
-    assert stored_document.metadata["source"] == "unit"
+    assert search.matches[0].text == "LlamaIndex nodes carry text and metadata."
+    assert search.matches[0].document_id == "doc-1"
+    assert search.matches[0].chunk_id == "doc-1:chunk:0"
+    assert search.matches[0].metadata["document_id"] == "doc-1"
+    assert search.matches[0].metadata["chunk_id"] == "doc-1:chunk:0"
+    assert search.matches[0].metadata["source"] == "unit"
 
 
-async def test_rag_service_invokes_reranker():
+async def test_knowledge_service_invokes_reranker():
     class SpyReranker:
         def __init__(self) -> None:
             self.called = False
@@ -111,7 +98,7 @@ async def test_rag_service_invokes_reranker():
             return list(reversed(matches))
 
     reranker = SpyReranker()
-    service = build_rag_service()
+    service = build_knowledge_service()
     service.reranker = reranker
     await service.index(
         RagIndexRequest(
@@ -127,15 +114,8 @@ async def test_rag_service_invokes_reranker():
     assert reranker.called is True
 
 
-def test_text_chunker_uses_overlap_without_empty_chunks():
-    chunks = TextChunker(chunk_size=4, overlap=1).chunk_document(
-        document_id="doc-1",
-        text="one two three four five six seven",
-        metadata={"source": "unit"},
-    )
+def test_rag_node_parser_uses_deterministic_chunk_ids():
+    parser = build_rag_node_parser(chunk_size=64, chunk_overlap=8)
 
-    assert [chunk.text for chunk in chunks] == [
-        "one two three four",
-        "four five six seven",
-    ]
-    assert chunks[0].metadata["chunk_index"] == 0
+    assert isinstance(parser, SentenceSplitter)
+    assert parser.id_func(0, Document(text="content", id_="doc-1")) == "doc-1:chunk:0"

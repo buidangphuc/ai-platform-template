@@ -21,19 +21,7 @@ def test_settings_defaults_are_local_safe():
     assert settings.PROJECT_NAME == "AI Solution Engineering Platform"
     assert settings.API_V1_PREFIX == "/api/v1"
     assert settings.POSTGRES_URL.startswith("postgresql+asyncpg://")
-    assert settings.TRACE_CONTENT == "redacted"
     assert settings.CHAT_MODEL == ""
-    assert settings.EMBEDDING_MODEL == ""
-    assert settings.LLM_CACHE_BACKEND == "noop"
-    assert settings.LLM_CACHE_ENABLED is False
-    assert settings.OBSERVABILITY_BACKEND == "debug"
-    assert settings.LOCAL_STORAGE_ROOT == ".local/storage"
-    assert settings.AGENT_RUNTIME == "simple"
-    assert settings.RAG_CHUNK_SIZE == 512
-    assert settings.RAG_CHUNK_OVERLAP == 64
-    assert settings.EXPERIMENT_TRACKER_BACKEND == "local"
-    assert settings.LOCAL_EXPERIMENT_TRACKER_ROOT == "research/experiments/local"
-    assert settings.MLFLOW_EXPERIMENT_NAME == "ai-platform-template"
 
 
 def test_settings_redacts_secret_values():
@@ -84,7 +72,7 @@ def test_redacted_summary_redacts_secret_like_future_fields():
         )
         == "***"
     )
-    assert settings._redacted_value("VECTOR_STORE", "in_memory") == "in_memory"
+    assert settings._redacted_value("FUTURE_PUBLIC_VALUE", "visible") == "visible"
 
 
 def test_default_rate_limit_per_minute_must_be_positive():
@@ -118,12 +106,22 @@ def test_settings_keeps_model_selection_minimal():
         REDIS_DATABASE=0,
         API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
         CHAT_MODEL="gpt-test",
-        EMBEDDING_MODEL="text-embedding-test",
     )
 
     assert settings.CHAT_MODEL == "gpt-test"
-    assert settings.EMBEDDING_MODEL == "text-embedding-test"
     assert "LLM_PROVIDER" not in Settings.model_fields
     assert "EMBEDDING_PROVIDER" not in Settings.model_fields
     assert "CHAT_MODEL_PROVIDER" not in Settings.model_fields
     assert "FAKE_EMBEDDING_DIMENSIONS" not in Settings.model_fields
+    assert "EMBEDDING_MODEL" not in Settings.model_fields
+    assert "AGENT_RUNTIME" not in Settings.model_fields
+    assert "ADVANCED_RETRIEVAL_ENABLED" not in Settings.model_fields
+    assert "RAG_CHUNK_SIZE" not in Settings.model_fields
+    assert "RAG_CHUNK_OVERLAP" not in Settings.model_fields
+    assert "TRACE_CONTENT" not in Settings.model_fields
+    assert "STORAGE_BACKEND" not in Settings.model_fields
+    assert "JOB_BACKEND" not in Settings.model_fields
+    assert "LLM_CACHE_BACKEND" not in Settings.model_fields
+    assert "OBSERVABILITY_BACKEND" not in Settings.model_fields
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in Settings.model_fields
+    assert "EXPERIMENT_TRACKER_BACKEND" not in Settings.model_fields

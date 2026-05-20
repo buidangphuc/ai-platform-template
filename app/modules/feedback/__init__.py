@@ -1,0 +1,1 @@
+"""Feedback capture module."""

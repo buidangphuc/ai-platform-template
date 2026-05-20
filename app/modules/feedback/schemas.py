@@ -4,7 +4,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-FeedbackTargetType = Literal["llm_response", "rag_answer", "agent_run", "eval_run"]
+FeedbackTargetType = Literal[
+    "llm_response",
+    "retrieval_result",
+    "agent_run",
+    "eval_run",
+]
 FeedbackRating = Literal["positive", "negative", "neutral"]
 FeedbackIdentifier = Annotated[str, Field(min_length=1, max_length=128)]
 FeedbackLabel = Annotated[str, Field(min_length=1, max_length=64)]

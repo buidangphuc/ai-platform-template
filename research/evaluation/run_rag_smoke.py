@@ -4,31 +4,19 @@ import json
 import sys
 from pathlib import Path
 
-from langchain_core.embeddings.fake import DeterministicFakeEmbedding
-from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
+from llama_index.core.embeddings import MockEmbedding
 
-from app.adapters.mlops.local_tracker import LocalExperimentTracker
-from app.adapters.observability.debug import DebugObservability
-from app.adapters.vector_store.in_memory import InMemoryVectorStore
-from app.contracts.experiment_tracker import (
-    ArtifactRecord,
-    ExperimentRunStatus,
-    MetricRecord,
-)
 from app.core.redaction import RedactionPolicy
 from app.modules.evals.rag import RAGEvaluationService
 from app.modules.evals.schemas import RAGEvalCase, RAGEvalRequest
-from app.modules.prompts.registry import InMemoryPromptRegistry
-from app.modules.rag.chunking import TextChunker
 from app.modules.rag.schemas import RagDocument, RagIndexRequest
-from app.modules.rag.service import RagService
+from app.modules.rag.service import KnowledgeRetrievalService, build_rag_node_parser
 from app.modules.usage.tracker import InMemoryUsageTracker
 
 
 async def run_smoke(
     dataset: Path,
     report: Path,
-    tracker_root: Path,
     min_keyword_hit_rate: float = 1.0,
 ) -> dict[str, object]:
     records = [
@@ -36,24 +24,15 @@ async def run_smoke(
         for line in dataset.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    rag_service = RagService(
-        embeddings=DeterministicFakeEmbedding(size=16),
-        vector_store=InMemoryVectorStore(),
-        chat_model=ParrotFakeChatModel(),
-        prompt_registry=InMemoryPromptRegistry.with_defaults(),
-        chunker=TextChunker(chunk_size=64, overlap=8),
+    knowledge_service = KnowledgeRetrievalService(
+        embed_model=MockEmbedding(embed_dim=16),
+        node_parser=build_rag_node_parser(chunk_size=64, chunk_overlap=8),
         usage_tracker=InMemoryUsageTracker(),
-        observability=DebugObservability(),
         redaction_policy=RedactionPolicy(mode="redacted"),
-    )
-    tracker = LocalExperimentTracker(root=tracker_root)
-    run = await tracker.start_run(
-        "rag-smoke",
-        metadata={"dataset": str(dataset)},
     )
 
     for record in records:
-        await rag_service.index(
+        await knowledge_service.index(
             RagIndexRequest(
                 documents=[
                     RagDocument(id=document["id"], text=document["text"])
@@ -62,7 +41,7 @@ async def run_smoke(
             )
         )
 
-    evaluator = RAGEvaluationService(rag_service=rag_service)
+    evaluator = RAGEvaluationService(knowledge_service=knowledge_service)
     result = await evaluator.run(
         RAGEvalRequest(
             cases=[
@@ -82,26 +61,9 @@ async def run_smoke(
         result.model_dump_json(indent=2),
         encoding="utf-8",
     )
-    await tracker.log_metric(
-        run.run_id,
-        MetricRecord(
-            name="keyword_hit_rate",
-            value=result.metrics["keyword_hit_rate"],
-        ),
-    )
-    await tracker.log_artifact(
-        run.run_id,
-        ArtifactRecord(name="rag-smoke-report", uri=str(report)),
-    )
     keyword_hit_rate = float(result.metrics["keyword_hit_rate"])
     succeeded = keyword_hit_rate >= min_keyword_hit_rate and all(
         item.passed for item in result.items
-    )
-    await tracker.end_run(
-        run.run_id,
-        status=(
-            ExperimentRunStatus.SUCCEEDED if succeeded else ExperimentRunStatus.FAILED
-        ),
     )
     if not succeeded:
         raise RuntimeError(
@@ -124,6 +86,7 @@ def main() -> None:
     parser.add_argument(
         "--tracker-root",
         default="research/experiments/local",
+        help="Deprecated; kept for CLI compatibility.",
     )
     parser.add_argument(
         "--min-keyword-hit-rate",
@@ -137,7 +100,6 @@ def main() -> None:
             run_smoke(
                 dataset=Path(args.dataset),
                 report=Path(args.report),
-                tracker_root=Path(args.tracker_root),
                 min_keyword_hit_rate=args.min_keyword_hit_rate,
             )
         )

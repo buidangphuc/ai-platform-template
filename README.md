@@ -13,10 +13,9 @@ This repository currently covers the local application foundation:
 - API key bootstrap and authentication.
 - Fixed-window rate limiting foundation.
 - Feedback capture schema and endpoint.
-- Adapter contracts for LLM, embeddings, vector store, storage, jobs, observability, and LLM response caching.
-- Fake/local default adapters for local development and tests.
-- Prompt registry, RAG, RAG evaluation, usage tracking, redaction policy, and simple agent runtime.
-- Research workspace with sample datasets, artifact manifests, smoke evals, and local experiment tracking.
+- Native LangChain chat model wiring and LangGraph-ready agent runtime.
+- Prompt registry, optional LlamaIndex advanced retrieval, retrieval evaluation, usage tracking, and redaction policy.
+- Research workspace with sample datasets, artifact manifests, and smoke evals.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
 
@@ -46,11 +45,6 @@ Useful endpoints:
 - `POST /api/v1/auth/api-keys`
 - `GET /api/v1/auth/me`
 - `POST /api/v1/feedback`
-- `POST /api/v1/rag/index`
-- `POST /api/v1/rag/search`
-- `POST /api/v1/rag/answer`
-- `POST /api/v1/evals/rag`
-- `POST /api/v1/agents/run`
 
 All `/api/v1/*` platform endpoints except health and API-key bootstrap require
 `Authorization: Bearer <api-key>`.
@@ -70,21 +64,19 @@ The Docker path is a local golden path only. It builds the API image and runs th
 ```text
 app/
   api/                  Versioned FastAPI routers
-  adapters/             Fake/local and provider adapter implementations
   bootstrap/            App factory and service wiring
-  contracts/            typing.Protocol adapter contracts and payload models
   core/                 Settings, database, Redis, errors, logging, health
   modules/
+    agents/             Agent API schemas and LangGraph-backed runtime
     feedback/           Feedback schema, model, and repository
     identity/           API key identity model, repository, auth dependency
-    prompts/            In-memory prompt registry and default RAG prompt
-    rag/                Chunking, ingestion, retrieval, answer generation
-    evals/              Local RAG evaluation service
+    prompts/            In-memory prompt registry and default agent prompt
+    rag/                LlamaIndex-backed knowledge ingestion and retrieval
+    evals/              Local retrieval evaluation service
     usage/              In-memory usage/cost/latency records
     rate_limit/         Rate limit service contracts and implementations
 alembic/                Migration environment
 research/               Datasets, evals, training templates, artifact manifests
-ops/                    Local observability and MLOps profile examples
 scripts/                Local helper scripts
 tests/                  Unit and integration tests
 ```
@@ -102,31 +94,26 @@ make hygiene      # check stale template coupling
 
 Copy `.env.example` to `.env` for local development. Keep real secrets in environment variables or your team's secret manager, not in Git.
 
-## Adapter Defaults
+## Runtime Defaults
 
-The template boots without cloud credentials. LangChain is the default AI runtime;
-when model names are blank, the app uses LangChain Core local fake chat and
-embedding classes for tests and smoke runs:
+The template boots without cloud credentials. The app factory does not create AI
+runtime services by default; project business logic can wire LangChain,
+LangGraph, or LlamaIndex services where it actually needs them. Local research
+smoke tests still use fake/mock AI primitives outside the API app.
 
 - `CHAT_MODEL=`
-- `EMBEDDING_MODEL=`
-- `VECTOR_STORE=in_memory`
-- `STORAGE_BACKEND=local`
-- `JOB_BACKEND=in_process`
-- `OBSERVABILITY_BACKEND=debug`
-- `LLM_CACHE_BACKEND=noop`
-- `AGENT_RUNTIME=simple`
-- `EXPERIMENT_TRACKER_BACKEND=local`
 
 To use a real model, install the relevant LangChain provider package, set the
 provider's standard environment variables in your runtime, then set
-`CHAT_MODEL` and `EMBEDDING_MODEL`. The LLM cache wrapper is always wired, but
-`LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy
-can be added later without changing call sites.
+`CHAT_MODEL`. Knowledge retrieval integrations should be wired through
+LlamaIndex primitives at the `KnowledgeRetrievalService` boundary instead of
+adding a template-owned vector-store adapter.
 
-The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. Set `OBSERVABILITY_BACKEND=otel_debug` and `OTEL_EXPORTER_OTLP_ENDPOINT` to emit OpenTelemetry-style debug records through the app adapter without coupling app code to Grafana, Datadog, Phoenix, or a custom collector.
-
-The default experiment tracker writes JSON records under `research/experiments/local`. The optional MLflow profile is documented in `ops/mlops/mlflow.local.env.example`; it is import-safe and only requires MLflow when a downstream project enables that adapter.
+App observability, experiment tracking, LLM response caching, object storage,
+and job queues are intentionally not wrapped by template adapters in this phase.
+Use the tools required by the target project directly at the module boundary.
+Database access goes through `app.core.database.DbSession`, a normal SQLAlchemy
+session dependency.
 
 ## Research Workspace
 
@@ -145,25 +132,8 @@ Run the local smoke eval with:
 make eval-smoke
 ```
 
-The smoke command uses fake/local adapters, writes a report under `research/evaluation/reports/`, and logs a local experiment under `research/experiments/local/`. Generated reports and local tracker runs are ignored by Git.
-
-## AI Capability Smoke
-
-The Phase 3 app includes local-only AI capability endpoints backed by fake/local adapters:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/rag/index \
-  -H "Authorization: Bearer <api-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"documents":[{"id":"doc-1","text":"Phase three adds RAG support."}]}'
-
-curl -X POST http://localhost:8000/api/v1/rag/answer \
-  -H "Authorization: Bearer <api-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What does phase three add?","top_k":1}'
-```
-
-`AGENT_RUNTIME=simple` uses the configured LLM adapter. `AGENT_RUNTIME=langgraph` is import-safe but intentionally requires a downstream project to provide a LangGraph runner.
+The smoke command uses local fake/mock primitives and writes a report under
+`research/evaluation/reports/`. Generated reports are ignored by Git.
 
 ## API Key Bootstrap
 

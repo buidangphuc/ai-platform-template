@@ -8,7 +8,7 @@
         "prompt registry",
         "rag evaluation"
       ],
-      "answer": "Baseline sample confirms local RAG smoke coverage."
+      "evidence": "Baseline sample confirms local retrieval smoke coverage."
     }
   ],
   "metrics": {

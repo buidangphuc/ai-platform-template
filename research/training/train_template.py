@@ -14,7 +14,7 @@ def write_manifest(output: Path) -> None:
         "created_at": datetime.now(UTC).isoformat(),
         "input_schema": {"type": "object"},
         "output_schema": {"type": "object"},
-        "runtime_dependencies": ["app.contracts.llm"],
+        "runtime_dependencies": ["app.modules.llm.runtime"],
         "eval_report": "research/evaluation/reports/rag_smoke.json",
         "risk_notes": ["Template output only; replace with real training evaluation."],
         "artifact_uri": "research/artifacts/sample-model",

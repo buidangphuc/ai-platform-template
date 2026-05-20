@@ -1,59 +1,21 @@
-from typing import Any
+from llama_index.core.embeddings import MockEmbedding
 
-from langchain_core.embeddings.fake import DeterministicFakeEmbedding
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
-
-from app.adapters.observability.debug import DebugObservability
-from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.core.redaction import RedactionPolicy
 from app.modules.evals.rag import RAGEvaluationService
 from app.modules.evals.schemas import RAGEvalCase, RAGEvalRequest
-from app.modules.prompts.registry import InMemoryPromptRegistry
-from app.modules.rag.chunking import TextChunker
 from app.modules.rag.schemas import RagDocument, RagIndexRequest
-from app.modules.rag.service import RagService
+from app.modules.rag.service import KnowledgeRetrievalService, build_rag_node_parser
 from app.modules.usage.tracker import InMemoryUsageTracker
 
 
-class WrongAnswerChatModel(BaseChatModel):
-    @property
-    def _llm_type(self) -> str:
-        return "wrong-answer"
-
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None = None,
-        run_manager: Any | None = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        return ChatResult(
-            generations=[
-                ChatGeneration(
-                    message=AIMessage(
-                        content="unrelated answer",
-                        response_metadata={"model_name": "wrong-answer"},
-                    )
-                )
-            ]
-        )
-
-
-async def test_rag_eval_service_scores_keyword_hits_against_sources():
-    rag = RagService(
-        embeddings=DeterministicFakeEmbedding(size=8),
-        vector_store=InMemoryVectorStore(),
-        chat_model=ParrotFakeChatModel(),
-        prompt_registry=InMemoryPromptRegistry.with_defaults(),
-        chunker=TextChunker(chunk_size=32, overlap=0),
+async def test_rag_eval_service_scores_keyword_hits_against_retrieved_evidence():
+    knowledge = KnowledgeRetrievalService(
+        embed_model=MockEmbedding(embed_dim=16),
+        node_parser=build_rag_node_parser(chunk_size=64, chunk_overlap=8),
         usage_tracker=InMemoryUsageTracker(),
-        observability=DebugObservability(),
         redaction_policy=RedactionPolicy(mode="redacted"),
     )
-    await rag.index(
+    await knowledge.index(
         RagIndexRequest(
             documents=[
                 RagDocument(
@@ -63,7 +25,7 @@ async def test_rag_eval_service_scores_keyword_hits_against_sources():
             ]
         )
     )
-    service = RAGEvaluationService(rag_service=rag)
+    service = RAGEvaluationService(knowledge_service=knowledge)
 
     result = await service.run(
         RAGEvalRequest(
@@ -80,20 +42,17 @@ async def test_rag_eval_service_scores_keyword_hits_against_sources():
 
     assert result.metrics["keyword_hit_rate"] == 1.0
     assert result.items[0].passed is True
+    assert "prompt registry" in result.items[0].evidence
 
 
-async def test_rag_eval_service_scores_generated_answer_not_only_sources():
-    rag = RagService(
-        embeddings=DeterministicFakeEmbedding(size=8),
-        vector_store=InMemoryVectorStore(),
-        chat_model=WrongAnswerChatModel(),
-        prompt_registry=InMemoryPromptRegistry.with_defaults(),
-        chunker=TextChunker(chunk_size=32, overlap=0),
+async def test_rag_eval_service_fails_when_retrieval_misses_expected_keywords():
+    knowledge = KnowledgeRetrievalService(
+        embed_model=MockEmbedding(embed_dim=16),
+        node_parser=build_rag_node_parser(chunk_size=64, chunk_overlap=8),
         usage_tracker=InMemoryUsageTracker(),
-        observability=DebugObservability(),
         redaction_policy=RedactionPolicy(mode="redacted"),
     )
-    await rag.index(
+    await knowledge.index(
         RagIndexRequest(
             documents=[
                 RagDocument(
@@ -103,7 +62,7 @@ async def test_rag_eval_service_scores_generated_answer_not_only_sources():
             ]
         )
     )
-    service = RAGEvaluationService(rag_service=rag)
+    service = RAGEvaluationService(knowledge_service=knowledge)
 
     result = await service.run(
         RAGEvalRequest(
@@ -111,7 +70,7 @@ async def test_rag_eval_service_scores_generated_answer_not_only_sources():
                 RAGEvalCase(
                     id="case-1",
                     question="Return an unrelated answer.",
-                    expected_keywords=["hidden evaluation keyword"],
+                    expected_keywords=["missing keyword"],
                 )
             ],
             top_k=1,

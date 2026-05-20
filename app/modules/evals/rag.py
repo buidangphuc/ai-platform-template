@@ -1,25 +1,26 @@
 from uuid import uuid4
 
 from app.modules.evals.schemas import RAGEvalItemResult, RAGEvalRequest, RAGEvalResult
-from app.modules.rag.schemas import RagAnswerRequest
-from app.modules.rag.service import RagService
+from app.modules.rag.service import KnowledgeRetrievalService
 
 
 class RAGEvaluationService:
-    def __init__(self, *, rag_service: RagService) -> None:
-        self.rag_service = rag_service
+    def __init__(self, *, knowledge_service: KnowledgeRetrievalService) -> None:
+        self.knowledge_service = knowledge_service
 
     async def run(self, request: RAGEvalRequest) -> RAGEvalResult:
         items: list[RAGEvalItemResult] = []
         total_keywords = 0
         matched_keywords = 0
         for case in request.cases:
-            answer = await self.rag_service.answer(
-                RagAnswerRequest(question=case.question, top_k=request.top_k)
+            search = await self.knowledge_service.search(
+                case.question,
+                top_k=request.top_k,
             )
-            answer_text = answer.answer.lower()
+            evidence = "\n\n".join(match.text for match in search.matches)
+            evidence_text = evidence.lower()
             expected = [keyword.lower() for keyword in case.expected_keywords]
-            matches = [keyword for keyword in expected if keyword in answer_text]
+            matches = [keyword for keyword in expected if keyword in evidence_text]
             total_keywords += len(expected)
             matched_keywords += len(matches)
             items.append(
@@ -27,7 +28,7 @@ class RAGEvaluationService:
                     id=case.id,
                     passed=len(matches) == len(expected),
                     matched_keywords=matches,
-                    answer=answer.answer,
+                    evidence=evidence,
                 )
             )
 

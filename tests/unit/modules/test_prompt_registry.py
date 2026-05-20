@@ -10,57 +10,62 @@ def test_prompt_registry_renders_named_prompt_version():
     registry = InMemoryPromptRegistry()
     registry.register(
         PromptTemplate(
-            name="rag.answer",
+            name="knowledge.context",
             version="v1",
-            template="Question: {question}\nContext: {context}",
-            variables=["question", "context"],
+            template="Query: {query}\nContext: {context}",
+            variables=["query", "context"],
         )
     )
 
     rendered = registry.render(
-        "rag.answer",
-        variables={"question": "What changed?", "context": "Contracts added."},
+        "knowledge.context",
+        variables={"query": "What changed?", "context": "Contracts added."},
     )
 
-    assert rendered.name == "rag.answer"
+    assert rendered.name == "knowledge.context"
     assert rendered.version == "v1"
-    assert rendered.content == "Question: What changed?\nContext: Contracts added."
+    assert rendered.content == "Query: What changed?\nContext: Contracts added."
 
 
 def test_prompt_registry_rejects_missing_variables():
     registry = InMemoryPromptRegistry()
     registry.register(
         PromptTemplate(
-            name="rag.answer",
+            name="knowledge.context",
             version="v1",
-            template="Question: {question}\nContext: {context}",
-            variables=["question", "context"],
+            template="Query: {query}\nContext: {context}",
+            variables=["query", "context"],
         )
     )
 
     with pytest.raises(ValueError, match="Missing prompt variables: context"):
-        registry.render("rag.answer", variables={"question": "What changed?"})
+        registry.render("knowledge.context", variables={"query": "What changed?"})
 
 
-def test_default_prompt_registry_contains_rag_answer_prompt():
+def test_default_prompt_registry_contains_agent_prompt():
     registry = InMemoryPromptRegistry.with_defaults()
 
     rendered = registry.render(
-        "rag.answer",
-        variables={"question": "What changed?", "context": "Contracts added."},
+        "agent.default",
+        variables={
+            "task": "What changed?",
+            "input": "{}",
+            "knowledge_context": "Contracts added.",
+        },
     )
 
-    assert rendered.name == "rag.answer"
+    assert rendered.name == "agent.default"
     assert "Contracts added." in rendered.content
 
 
 def test_prompt_registry_returns_langchain_chat_prompt_template():
     registry = InMemoryPromptRegistry.with_defaults()
 
-    prompt = registry.get_langchain_prompt("rag.answer")
+    prompt = registry.get_langchain_prompt("agent.default")
     messages = prompt.format_messages(
-        question="What changed?",
-        context="LangChain runtime convention.",
+        task="What changed?",
+        input="{}",
+        knowledge_context="LangChain runtime convention.",
     )
 
     assert isinstance(prompt, ChatPromptTemplate)
