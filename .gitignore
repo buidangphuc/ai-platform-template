@@ -9,7 +9,6 @@ static/media/
 .ruff_cache/
 .pytest_cache/
 .python-version
-celerybeat-schedule.*
 
 # vscode
 .vscode/

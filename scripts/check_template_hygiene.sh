@@ -5,8 +5,18 @@ blocked_patterns=(
   "app.admin"
   "app.task"
   "MYSQL_URL"
+  "mysql"
+  "asyncmy"
+  "aiomysql"
   "fba_"
+  "PFA"
+  "pfa"
   "OperaLog"
+  "propertyguru"
+  "celery"
+  "Celery"
+  "rabbitmq"
+  "RabbitMQ"
 )
 
 search_roots=(
@@ -20,6 +30,10 @@ search_roots=(
   docker-compose*.yaml
   Dockerfile
   README.md
+  pyproject.toml
+  requirements.txt
+  .github
+  .gitignore
 )
 
 rg_args=(
@@ -36,8 +50,15 @@ for pattern in "${blocked_patterns[@]}"; do
   rg_args+=(-e "$pattern")
 done
 
+existing_roots=()
+for root in "${search_roots[@]}"; do
+  if compgen -G "$root" >/dev/null; then
+    existing_roots+=("$root")
+  fi
+done
+
 rg_status=0
-rg "${rg_args[@]}" "${search_roots[@]}" || rg_status=$?
+rg "${rg_args[@]}" "${existing_roots[@]}" || rg_status=$?
 
 if [[ "$rg_status" -eq 0 ]]; then
   echo "Template hygiene check failed: blocked template coupling found" >&2

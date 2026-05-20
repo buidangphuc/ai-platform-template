@@ -1,6 +1,5 @@
 aiofiles
 alembic
-asyncmy
 asyncpg
 bcrypt
 cachetools

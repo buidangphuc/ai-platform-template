@@ -8,7 +8,6 @@ authors = [{ name = "Bui Dang Phuc", email = "buidangphuc2801@gmail.com" }]
 dependencies = [
   "aiofiles>=24.1.0,<25.0.0",
   "alembic>=1.18.0,<2.0.0",
-  "asyncmy>=0.2.10,<0.3.0",
   "asyncpg>=0.30.0,<0.31.0",
   "bcrypt>=4.3.0,<5.0.0",
   "cachetools>=5.5.2,<6.0.0",
