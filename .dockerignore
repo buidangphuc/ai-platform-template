@@ -1,8 +1,20 @@
-__pycache__/
-venv/
+.git/
 .venv/
-.python-version
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+.env
+.env.*
+!.env.example
 
 logs/
 data/
+docs/
+tests/
 scripts/
+*.md
+!README.md
