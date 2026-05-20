@@ -17,9 +17,9 @@ class RAGEvaluationService:
             answer = await self.rag_service.answer(
                 RagAnswerRequest(question=case.question, top_k=request.top_k)
             )
-            source_text = " ".join(source.text for source in answer.sources).lower()
+            answer_text = answer.answer.lower()
             expected = [keyword.lower() for keyword in case.expected_keywords]
-            matches = [keyword for keyword in expected if keyword in source_text]
+            matches = [keyword for keyword in expected if keyword in answer_text]
             total_keywords += len(expected)
             matched_keywords += len(matches)
             items.append(

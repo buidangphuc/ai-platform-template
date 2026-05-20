@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 from app.adapters.embeddings.fake import FakeEmbeddingClient
@@ -24,7 +25,10 @@ from app.modules.usage.tracker import InMemoryUsageTracker
 
 
 async def run_smoke(
-    dataset: Path, report: Path, tracker_root: Path
+    dataset: Path,
+    report: Path,
+    tracker_root: Path,
+    min_keyword_hit_rate: float = 1.0,
 ) -> dict[str, object]:
     records = [
         json.loads(line)
@@ -88,7 +92,21 @@ async def run_smoke(
         run.run_id,
         ArtifactRecord(name="rag-smoke-report", uri=str(report)),
     )
-    await tracker.end_run(run.run_id, status=ExperimentRunStatus.SUCCEEDED)
+    keyword_hit_rate = float(result.metrics["keyword_hit_rate"])
+    succeeded = keyword_hit_rate >= min_keyword_hit_rate and all(
+        item.passed for item in result.items
+    )
+    await tracker.end_run(
+        run.run_id,
+        status=(
+            ExperimentRunStatus.SUCCEEDED if succeeded else ExperimentRunStatus.FAILED
+        ),
+    )
+    if not succeeded:
+        raise RuntimeError(
+            "keyword_hit_rate below threshold: "
+            f"{keyword_hit_rate} < {min_keyword_hit_rate}"
+        )
     return result.model_dump(mode="json")
 
 
@@ -106,15 +124,25 @@ def main() -> None:
         "--tracker-root",
         default="research/experiments/local",
     )
+    parser.add_argument(
+        "--min-keyword-hit-rate",
+        type=float,
+        default=1.0,
+    )
     args = parser.parse_args()
 
-    result = asyncio.run(
-        run_smoke(
-            dataset=Path(args.dataset),
-            report=Path(args.report),
-            tracker_root=Path(args.tracker_root),
+    try:
+        result = asyncio.run(
+            run_smoke(
+                dataset=Path(args.dataset),
+                report=Path(args.report),
+                tracker_root=Path(args.tracker_root),
+                min_keyword_hit_rate=args.min_keyword_hit_rate,
+            )
         )
-    )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
     print(json.dumps(result["metrics"], sort_keys=True))
 
 

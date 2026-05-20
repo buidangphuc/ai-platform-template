@@ -52,6 +52,9 @@ Useful endpoints:
 - `POST /api/v1/evals/rag`
 - `POST /api/v1/agents/run`
 
+All `/api/v1/*` platform endpoints except health and API-key bootstrap require
+`Authorization: Bearer <api-key>`.
+
 ## Docker
 
 ```bash
@@ -113,9 +116,9 @@ The template boots without cloud credentials. Default providers are fake/local:
 - `AGENT_RUNTIME=simple`
 - `EXPERIMENT_TRACKER_BACKEND=local`
 
-To use an OpenAI-compatible API, set `LLM_PROVIDER=openai_compatible` or `EMBEDDING_PROVIDER=openai_compatible`, then provide `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and the model setting. The LLM cache wrapper is always wired, but `LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy can be added later without changing call sites.
+To use an OpenAI-compatible API, set `LLM_PROVIDER=openai_compatible` or `EMBEDDING_PROVIDER=openai_compatible`, then provide `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY` if that endpoint requires one, and the model setting. `OPENAI_API_KEY` and `OPENAI_BASE_URL` remain supported as OpenAI defaults. The LLM cache wrapper is always wired, but `LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy can be added later without changing call sites.
 
-The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. It is a backend-neutral smoke profile for teams that want to validate telemetry before wiring Grafana, Datadog, Phoenix, or a custom collector.
+The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. Set `OBSERVABILITY_BACKEND=otel_debug` and `OTEL_EXPORTER_OTLP_ENDPOINT` to emit OpenTelemetry-style debug records through the app adapter without coupling app code to Grafana, Datadog, Phoenix, or a custom collector.
 
 The default experiment tracker writes JSON records under `research/experiments/local`. The optional MLflow profile is documented in `ops/mlops/mlflow.local.env.example`; it is import-safe and only requires MLflow when a downstream project enables that adapter.
 
@@ -144,10 +147,12 @@ The Phase 3 app includes local-only AI capability endpoints backed by fake/local
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/rag/index \
+  -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
   -d '{"documents":[{"id":"doc-1","text":"Phase three adds RAG support."}]}'
 
 curl -X POST http://localhost:8000/api/v1/rag/answer \
+  -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
   -d '{"question":"What does phase three add?","top_k":1}'
 ```
@@ -178,6 +183,7 @@ The feedback endpoint stores lightweight records through an in-memory repository
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/feedback \
+  -H "Authorization: Bearer <api-key>" \
   -H "Content-Type: application/json" \
   -d '{
     "request_id": "req_1",

@@ -4,7 +4,6 @@ venv/
 .venv/
 .mypy_cache/
 log/
-alembic/versions/
 static/media/
 .ruff_cache/
 .pytest_cache/
@@ -25,5 +24,6 @@ research/experiments/mlruns/
 research/evaluation/reports/*
 !research/evaluation/reports/.gitkeep
 research/artifacts/sample_model_manifest.yaml
+research/artifacts/generated/
 
 fastapi_template

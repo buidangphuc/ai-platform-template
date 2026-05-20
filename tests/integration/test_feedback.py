@@ -3,7 +3,23 @@ import pytest
 from app.modules.feedback.models import Feedback
 
 
-async def test_create_feedback_returns_created_record(client):
+async def test_feedback_endpoint_requires_api_key(client):
+    response = await client.post(
+        "/api/v1/feedback",
+        json={
+            "request_id": "req_123",
+            "trace_id": "trace_456",
+            "target_type": "llm_response",
+            "target_id": "completion_789",
+            "rating": "positive",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_create_feedback_returns_created_record(client, auth_headers):
     payload = {
         "request_id": "req_123",
         "trace_id": "trace_456",
@@ -14,7 +30,7 @@ async def test_create_feedback_returns_created_record(client):
         "comment": "Good answer.",
     }
 
-    response = await client.post("/api/v1/feedback", json=payload)
+    response = await client.post("/api/v1/feedback", headers=auth_headers, json=payload)
 
     assert response.status_code == 201
     body = response.json()
@@ -26,6 +42,8 @@ async def test_create_feedback_returns_created_record(client):
     assert body["rating"] == payload["rating"]
     assert body["labels"] == payload["labels"]
     assert body["comment"] == payload["comment"]
+    assert body["api_key_id"].startswith("key_")
+    assert body["created_at"]
 
 
 @pytest.mark.parametrize(
@@ -43,7 +61,9 @@ async def test_create_feedback_returns_created_record(client):
         ("comment", "x" * 2001),
     ],
 )
-async def test_create_feedback_rejects_invalid_payload_values(client, field, value):
+async def test_create_feedback_rejects_invalid_payload_values(
+    client, auth_headers, field, value
+):
     payload = {
         "request_id": "req_123",
         "trace_id": "trace_456",
@@ -55,9 +75,27 @@ async def test_create_feedback_rejects_invalid_payload_values(client, field, val
     }
     payload[field] = value
 
-    response = await client.post("/api/v1/feedback", json=payload)
+    response = await client.post("/api/v1/feedback", headers=auth_headers, json=payload)
 
     assert response.status_code == 422
+
+
+async def test_validation_errors_use_standard_error_envelope(client, auth_headers):
+    response = await client.post(
+        "/api/v1/feedback",
+        headers={"X-Request-ID": "req-validation", **auth_headers},
+        json={
+            "request_id": "",
+            "trace_id": "trace_456",
+            "target_type": "llm_response",
+            "target_id": "completion_789",
+            "rating": "positive",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert response.json()["error"]["request_id"] == "req-validation"
 
 
 def test_feedback_model_indexes_lookup_identifiers():

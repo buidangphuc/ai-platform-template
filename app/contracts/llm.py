@@ -5,11 +5,19 @@ from pydantic import BaseModel, Field, model_validator
 MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
+class LLMToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    name: str
+    arguments: str = ""
+
+
 class ChatMessage(BaseModel):
     role: MessageRole
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
 
 
 class TokenUsage(BaseModel):
@@ -48,6 +56,7 @@ class LLMResponse(BaseModel):
     model: str
     finish_reason: str | None = None
     usage: TokenUsage = Field(default_factory=TokenUsage)
+    tool_calls: list[LLMToolCall] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
 

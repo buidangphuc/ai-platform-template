@@ -2,7 +2,13 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from app.contracts.llm import ChatMessage, LLMRequest, LLMResponse, TokenUsage
+from app.contracts.llm import (
+    ChatMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMToolCall,
+    TokenUsage,
+)
 
 
 class OpenAICompatibleLLMClient:
@@ -50,10 +56,14 @@ class OpenAICompatibleLLMClient:
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
             ),
+            tool_calls=[
+                self._tool_call_from_provider(tool_call)
+                for tool_call in (getattr(message, "tool_calls", None) or [])
+            ],
         )
 
-    def _message_to_provider(self, message: ChatMessage) -> dict[str, str]:
-        payload = {
+    def _message_to_provider(self, message: ChatMessage) -> dict[str, object]:
+        payload: dict[str, object] = {
             "role": message.role,
             "content": message.content,
         }
@@ -61,4 +71,30 @@ class OpenAICompatibleLLMClient:
             payload["name"] = message.name
         if message.tool_call_id:
             payload["tool_call_id"] = message.tool_call_id
+        if message.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "type": tool_call.type,
+                    "function": {
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                    },
+                }
+                for tool_call in message.tool_calls
+            ]
         return payload
+
+    def _tool_call_from_provider(self, tool_call: Any) -> LLMToolCall:
+        function = self._get_value(tool_call, "function") or {}
+        return LLMToolCall(
+            id=str(self._get_value(tool_call, "id") or ""),
+            type=str(self._get_value(tool_call, "type") or "function"),
+            name=str(self._get_value(function, "name") or ""),
+            arguments=str(self._get_value(function, "arguments") or ""),
+        )
+
+    def _get_value(self, payload: Any, name: str) -> Any:
+        if isinstance(payload, dict):
+            return payload.get(name)
+        return getattr(payload, name, None)

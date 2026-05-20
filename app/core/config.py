@@ -39,6 +39,8 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_COMPATIBLE_API_KEY: str = ""
+    OPENAI_COMPATIBLE_BASE_URL: str = ""
     LLM_PROVIDER: Literal["fake", "openai_compatible"] = "fake"
     LLM_MODEL: str = "fake-chat"
     EMBEDDING_PROVIDER: Literal["fake", "openai_compatible"] = "fake"
@@ -48,7 +50,7 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: Literal["local"] = "local"
     LOCAL_STORAGE_ROOT: str = ".local/storage"
     JOB_BACKEND: Literal["in_process"] = "in_process"
-    OBSERVABILITY_BACKEND: Literal["debug"] = "debug"
+    OBSERVABILITY_BACKEND: Literal["debug", "otel_debug"] = "debug"
     LLM_CACHE_BACKEND: Literal["noop"] = "noop"
     LLM_CACHE_ENABLED: bool = False
     AGENT_RUNTIME: Literal["simple", "langgraph"] = "simple"

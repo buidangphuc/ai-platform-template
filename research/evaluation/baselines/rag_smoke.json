@@ -1,0 +1,17 @@
+{
+  "run_id": "baseline-rag-smoke",
+  "items": [
+    {
+      "id": "rag-platform-template",
+      "passed": true,
+      "matched_keywords": [
+        "prompt registry",
+        "rag evaluation"
+      ],
+      "answer": "Baseline sample confirms local RAG smoke coverage."
+    }
+  ],
+  "metrics": {
+    "keyword_hit_rate": 1.0
+  }
+}

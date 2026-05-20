@@ -1,9 +1,14 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.modules.evals.rag import RAGEvaluationService
 from app.modules.evals.schemas import RAGEvalRequest, RAGEvalResult
+from app.modules.identity.auth import require_authenticated_request
 
-router = APIRouter(prefix="/evals", tags=["evals"])
+router = APIRouter(
+    prefix="/evals",
+    tags=["evals"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 
 def _service(request: Request) -> RAGEvaluationService:

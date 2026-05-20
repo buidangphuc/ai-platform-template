@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, status
+from fastapi.responses import JSONResponse
 
 from app.core.health import HealthService
 
@@ -18,7 +19,12 @@ async def health(request: Request):
 @router.get("/ready")
 async def readiness(request: Request):
     result = await _health_service(request).readiness()
-    return {
+    payload = {
         "status": result.status,
         "dependencies": result.dependencies,
     }
+    if result.status != "ok":
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=payload
+        )
+    return payload

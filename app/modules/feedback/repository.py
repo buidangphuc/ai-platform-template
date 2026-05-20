@@ -9,9 +9,15 @@ class FeedbackRepository:
     def __init__(self) -> None:
         self._memory: dict[str, FeedbackRecord] = {}
 
-    async def create(self, payload: CreateFeedbackRequest) -> FeedbackRecord:
+    async def create(
+        self,
+        payload: CreateFeedbackRequest,
+        *,
+        api_key_id: str | None = None,
+    ) -> FeedbackRecord:
         record = FeedbackRecord(
             feedback_id=new_feedback_id(),
+            api_key_id=api_key_id,
             **payload.model_dump(),
         )
         self._memory[record.feedback_id] = record

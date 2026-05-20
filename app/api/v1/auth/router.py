@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Header, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Request, Response, status
 
-from app.core.errors import AppError
 from app.core.security import create_api_key, hash_api_key
-from app.modules.identity.auth import authenticate_api_key, validate_bootstrap_token
+from app.modules.identity.auth import (
+    require_authenticated_request,
+    validate_bootstrap_token,
+)
 from app.modules.identity.repository import ApiKeyRepository
 from app.modules.identity.schemas import (
     AuthenticatedPrincipal,
@@ -42,17 +44,7 @@ async def create_key(
 
 
 @router.get("/me", response_model=AuthenticatedPrincipal)
-async def me(request: Request):
-    principal = await authenticate_api_key(
-        request.headers.get("Authorization"),
-        settings=request.app.state.settings,
-        repository=_repository(request),
-    )
-    rate_limit = await request.app.state.rate_limiter.check(principal.api_key_id)
-    if not rate_limit.allowed:
-        raise AppError(
-            code="rate_limit_exceeded",
-            message="Rate limit exceeded",
-            status_code=429,
-        )
+async def me(
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_request),
+):
     return principal

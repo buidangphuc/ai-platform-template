@@ -50,6 +50,54 @@ async def test_rag_service_indexes_searches_and_answers_with_fake_adapters():
     assert service.usage_tracker.records
 
 
+async def test_rag_service_redacts_content_before_vector_storage():
+    service = build_rag_service()
+
+    await service.index(
+        RagIndexRequest(
+            documents=[
+                RagDocument(
+                    id="doc-1",
+                    text="Contact admin@example.com with Bearer abc123",
+                    metadata={"api_key": "sk-secret-value"},  # pragma: allowlist secret
+                ),
+            ],
+        )
+    )
+
+    search = await service.search("Contact", top_k=1)
+
+    assert "admin@example.com" not in search.matches[0].text
+    assert "Bearer abc123" not in search.matches[0].text
+    assert search.matches[0].metadata["api_key"] == "[secret]"
+
+
+async def test_rag_service_invokes_reranker():
+    class SpyReranker:
+        def __init__(self) -> None:
+            self.called = False
+
+        def rerank(self, matches):
+            self.called = True
+            return list(reversed(matches))
+
+    reranker = SpyReranker()
+    service = build_rag_service()
+    service.reranker = reranker
+    await service.index(
+        RagIndexRequest(
+            documents=[
+                RagDocument(id="doc-1", text="alpha beta"),
+                RagDocument(id="doc-2", text="alpha gamma"),
+            ],
+        )
+    )
+
+    await service.search("alpha", top_k=2)
+
+    assert reranker.called is True
+
+
 def test_text_chunker_uses_overlap_without_empty_chunks():
     chunks = TextChunker(chunk_size=4, overlap=1).chunk_document(
         document_id="doc-1",

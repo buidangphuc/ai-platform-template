@@ -1,6 +1,6 @@
 import hmac
 
-from fastapi import Header
+from fastapi import Header, Request
 
 from app.core.config import Settings
 from app.core.errors import AppError
@@ -55,3 +55,19 @@ def authorization_header(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> str | None:
     return authorization
+
+
+async def require_authenticated_request(request: Request) -> AuthenticatedPrincipal:
+    principal = await authenticate_api_key(
+        request.headers.get("Authorization"),
+        settings=request.app.state.settings,
+        repository=request.app.state.api_key_repository,
+    )
+    rate_limit = await request.app.state.rate_limiter.check(principal.api_key_id)
+    if not rate_limit.allowed:
+        raise AppError(
+            code="rate_limit_exceeded",
+            message="Rate limit exceeded",
+            status_code=429,
+        )
+    return principal

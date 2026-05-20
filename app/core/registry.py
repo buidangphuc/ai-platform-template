@@ -12,6 +12,7 @@ from app.adapters.llm_cache.noop import NoOpLLMResponseCache
 from app.adapters.mlops.local_tracker import LocalExperimentTracker
 from app.adapters.mlops.mlflow import MLflowExperimentTracker
 from app.adapters.observability.debug import DebugObservability
+from app.adapters.observability.otel_debug import OTelDebugObservability
 from app.adapters.storage.local import LocalObjectStorage
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.contracts.agents import AgentRuntime
@@ -40,7 +41,9 @@ class RuntimeAdapters:
     experiment_tracker: ExperimentTracker
 
 
-def build_runtime_adapters(settings: Settings) -> RuntimeAdapters:
+def build_runtime_adapters(
+    settings: Settings, *, usage_tracker=None
+) -> RuntimeAdapters:
     llm_cache = _build_llm_cache(settings)
     base_llm = _build_llm(settings)
     llm = CachedLLMClient(
@@ -60,7 +63,10 @@ def build_runtime_adapters(settings: Settings) -> RuntimeAdapters:
         observability=observability,
         llm_cache=llm_cache,
         agent_runtime=_build_agent_runtime(
-            settings, llm=llm, observability=observability
+            settings,
+            llm=llm,
+            observability=observability,
+            usage_tracker=usage_tracker,
         ),
         experiment_tracker=_build_experiment_tracker(settings),
     )
@@ -70,10 +76,16 @@ def _build_llm(settings: Settings) -> LLMClient:
     if settings.LLM_PROVIDER == "fake":
         return FakeLLMClient(model=settings.LLM_MODEL)
     if settings.LLM_PROVIDER == "openai_compatible":
-        _require_openai_api_key(settings, setting_name="LLM_PROVIDER")
+        api_key = _openai_compatible_api_key(settings)
+        base_url = _openai_compatible_base_url(settings)
+        _require_openai_compatible_api_key(
+            api_key=api_key,
+            base_url=base_url,
+            setting_name="LLM_PROVIDER",
+        )
         return OpenAICompatibleLLMClient(
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_BASE_URL,
+            api_key=api_key or "not-needed",
+            base_url=base_url,
             model=settings.LLM_MODEL,
         )
     raise ValueError(f"Unsupported LLM_PROVIDER: {settings.LLM_PROVIDER}")
@@ -86,10 +98,16 @@ def _build_embeddings(settings: Settings) -> EmbeddingClient:
             dimensions=settings.FAKE_EMBEDDING_DIMENSIONS,
         )
     if settings.EMBEDDING_PROVIDER == "openai_compatible":
-        _require_openai_api_key(settings, setting_name="EMBEDDING_PROVIDER")
+        api_key = _openai_compatible_api_key(settings)
+        base_url = _openai_compatible_base_url(settings)
+        _require_openai_compatible_api_key(
+            api_key=api_key,
+            base_url=base_url,
+            setting_name="EMBEDDING_PROVIDER",
+        )
         return OpenAICompatibleEmbeddingClient(
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_BASE_URL,
+            api_key=api_key or "not-needed",
+            base_url=base_url,
             model=settings.EMBEDDING_MODEL,
         )
     raise ValueError(f"Unsupported EMBEDDING_PROVIDER: {settings.EMBEDDING_PROVIDER}")
@@ -116,6 +134,8 @@ def _build_jobs(settings: Settings) -> JobQueue:
 def _build_observability(settings: Settings) -> ObservabilityClient:
     if settings.OBSERVABILITY_BACKEND == "debug":
         return DebugObservability()
+    if settings.OBSERVABILITY_BACKEND == "otel_debug":
+        return OTelDebugObservability(endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT)
     raise ValueError(
         f"Unsupported OBSERVABILITY_BACKEND: {settings.OBSERVABILITY_BACKEND}"
     )
@@ -132,12 +152,14 @@ def _build_agent_runtime(
     *,
     llm: LLMClient,
     observability: ObservabilityClient,
+    usage_tracker=None,
 ) -> AgentRuntime:
     if settings.AGENT_RUNTIME == "simple":
         return SimpleAgentRuntime(
             llm=llm,
             observability=observability,
             redaction_policy=RedactionPolicy.from_trace_content(settings.TRACE_CONTENT),
+            usage_tracker=usage_tracker,
         )
     if settings.AGENT_RUNTIME == "langgraph":
         return LangGraphAgentRuntime()
@@ -157,8 +179,26 @@ def _build_experiment_tracker(settings: Settings) -> ExperimentTracker:
     )
 
 
-def _require_openai_api_key(settings: Settings, *, setting_name: str) -> None:
-    if not settings.OPENAI_API_KEY:
+def _openai_compatible_api_key(settings: Settings) -> str:
+    return settings.OPENAI_COMPATIBLE_API_KEY or settings.OPENAI_API_KEY
+
+
+def _openai_compatible_base_url(settings: Settings) -> str:
+    return settings.OPENAI_COMPATIBLE_BASE_URL or settings.OPENAI_BASE_URL
+
+
+def _require_openai_compatible_api_key(
+    *,
+    api_key: str,
+    base_url: str,
+    setting_name: str,
+) -> None:
+    if _is_openai_host(base_url) and not api_key:
         raise ValueError(
-            f"OPENAI_API_KEY is required when {setting_name}=openai_compatible",
+            f"OPENAI_API_KEY or OPENAI_COMPATIBLE_API_KEY is required when "
+            f"{setting_name}=openai_compatible against api.openai.com",
         )
+
+
+def _is_openai_host(base_url: str) -> bool:
+    return "api.openai.com" in base_url

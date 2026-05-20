@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -22,7 +23,10 @@ class CreateFeedbackRequest(BaseModel):
     rating: FeedbackRating
     labels: list[FeedbackLabel] = Field(default_factory=list)
     comment: FeedbackComment | None = None
+    user_id: FeedbackIdentifier | None = None
 
 
 class FeedbackRecord(CreateFeedbackRequest):
     feedback_id: str
+    api_key_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

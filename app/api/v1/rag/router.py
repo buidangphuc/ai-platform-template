@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 
+from app.modules.identity.auth import require_authenticated_request
 from app.modules.rag.schemas import (
     RagAnswerRequest,
     RagAnswerResponse,
@@ -10,7 +11,11 @@ from app.modules.rag.schemas import (
 )
 from app.modules.rag.service import RagService
 
-router = APIRouter(prefix="/rag", tags=["rag"])
+router = APIRouter(
+    prefix="/rag",
+    tags=["rag"],
+    dependencies=[Depends(require_authenticated_request)],
+)
 
 
 def _service(request: Request) -> RagService:

@@ -5,7 +5,7 @@ This folder is for experiments, datasets, training templates, evaluation templat
 Promotion rule:
 
 - Every promoted artifact needs a manifest in `research/artifacts/`.
-- The manifest must include runtime dependencies, an eval report or smoke result, and risk notes.
+- The manifest must include runtime dependencies, a tracked eval baseline or smoke result, and risk notes.
 - App code should consume promoted artifacts only after the manifest is valid.
 
 Useful commands:

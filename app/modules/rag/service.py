@@ -8,6 +8,7 @@ from app.core.redaction import RedactionPolicy
 from app.modules.prompts.registry import InMemoryPromptRegistry
 from app.modules.rag.chunking import TextChunker
 from app.modules.rag.ingestion import RagIngestionService
+from app.modules.rag.reranking import ScoreReranker
 from app.modules.rag.retrievers import VectorRagRetriever
 from app.modules.rag.schemas import (
     RagAnswerRequest,
@@ -46,14 +47,28 @@ class RagService:
             embeddings=embeddings,
             vector_store=vector_store,
             chunker=chunker,
+            redaction_policy=redaction_policy,
         )
         self.retriever = VectorRagRetriever(
             embeddings=embeddings,
             vector_store=vector_store,
         )
+        self.reranker = ScoreReranker()
 
     async def index(self, request: RagIndexRequest) -> RagIndexResponse:
-        return await self.ingestion.index(request)
+        started_at = time.perf_counter()
+        response = await self.ingestion.index(request)
+        await self.usage_tracker.record(
+            UsageRecord(
+                operation="rag.index",
+                provider="runtime",
+                model="embedding",
+                latency_ms=(time.perf_counter() - started_at) * 1000,
+                estimated_cost=0.0,
+                metadata={"chunk_count": response.chunk_count},
+            )
+        )
+        return response
 
     async def search(
         self,
@@ -62,7 +77,20 @@ class RagService:
         top_k: int = 5,
         filters: dict[str, str | int | float | bool] | None = None,
     ) -> RagSearchResponse:
-        return await self.retriever.search(query, top_k=top_k, filters=filters)
+        started_at = time.perf_counter()
+        response = await self.retriever.search(query, top_k=top_k, filters=filters)
+        reranked_matches = self.reranker.rerank(response.matches)
+        await self.usage_tracker.record(
+            UsageRecord(
+                operation="rag.search",
+                provider="runtime",
+                model="embedding",
+                latency_ms=(time.perf_counter() - started_at) * 1000,
+                estimated_cost=0.0,
+                metadata={"top_k": top_k, "match_count": len(reranked_matches)},
+            )
+        )
+        return RagSearchResponse(matches=reranked_matches)
 
     async def search_request(self, request: RagSearchRequest) -> RagSearchResponse:
         return await self.search(

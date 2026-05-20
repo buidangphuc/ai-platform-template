@@ -15,7 +15,7 @@ output_schema:
 runtime_dependencies:
   - app.modules.prompts.registry
   - app.modules.rag.service
-eval_report: research/evaluation/reports/rag_smoke.json
+eval_report: research/evaluation/baselines/rag_smoke.json
 risk_notes:
   - Uses keyword smoke metrics only; replace with task-specific evals before production.
 artifact_uri: app/modules/prompts/registry.py

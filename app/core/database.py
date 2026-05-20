@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     AsyncEngine,
@@ -49,6 +50,15 @@ async def dispose_engine() -> None:
         await _engine.dispose()
     _engine = None
     _sessionmaker = None
+
+
+async def check_postgres_connection(settings: Settings) -> None:
+    engine = create_async_engine(settings.POSTGRES_URL, pool_pre_ping=True)
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    finally:
+        await engine.dispose()
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

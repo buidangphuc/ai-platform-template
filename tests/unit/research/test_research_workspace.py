@@ -32,6 +32,7 @@ def test_sample_artifact_manifest_matches_contract():
     assert manifest.runtime_dependencies
     assert manifest.eval_report
     assert manifest.artifact_uri
+    assert Path(manifest.eval_report).exists()
 
 
 def test_rag_smoke_dataset_matches_json_schema():
@@ -52,3 +53,9 @@ def test_rag_smoke_dataset_matches_json_schema():
         record = json.loads(line)
         assert required <= record.keys()
         assert isinstance(record["expected_keywords"], list)
+
+
+def test_research_generated_artifacts_are_ignored():
+    gitignore = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "research/artifacts/generated/" in gitignore

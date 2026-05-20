@@ -9,6 +9,7 @@ from app.contracts.llm import ChatMessage, LLMRequest
 class FakeChatCompletions:
     def __init__(self) -> None:
         self.kwargs: dict[str, object] | None = None
+        self.tool_calls: list[object] = []
 
     async def create(self, **kwargs):
         self.kwargs = kwargs
@@ -16,7 +17,10 @@ class FakeChatCompletions:
             model=kwargs["model"],
             choices=[
                 SimpleNamespace(
-                    message=SimpleNamespace(content="hello from provider"),
+                    message=SimpleNamespace(
+                        content="hello from provider",
+                        tool_calls=self.tool_calls,
+                    ),
                     finish_reason="stop",
                 ),
             ],
@@ -74,6 +78,40 @@ async def test_openai_compatible_llm_translates_contract_request():
     assert response.content == "hello from provider"
     assert response.model == "gpt-test"
     assert response.usage.total_tokens == 7
+
+
+async def test_openai_compatible_llm_preserves_tool_calls():
+    provider = FakeOpenAIClient()
+    provider.chat_completions.tool_calls = [
+        SimpleNamespace(
+            id="call_1",
+            type="function",
+            function=SimpleNamespace(
+                name="search_docs",
+                arguments='{"query":"phase 3"}',
+            ),
+        )
+    ]
+    client = OpenAICompatibleLLMClient(
+        client=provider,
+        model="gpt-test",
+    )
+
+    response = await client.complete(
+        LLMRequest(
+            messages=[ChatMessage(role="user", content="hello")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "search_docs"},
+                }
+            ],
+        )
+    )
+
+    assert response.tool_calls[0].id == "call_1"
+    assert response.tool_calls[0].name == "search_docs"
+    assert response.tool_calls[0].arguments == '{"query":"phase 3"}'
 
 
 async def test_openai_compatible_embeddings_translate_contract_request():
