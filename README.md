@@ -12,9 +12,11 @@ This repository currently covers the local application foundation:
 - Request ID middleware, logging context, and standard error envelope.
 - API key bootstrap and authentication.
 - Fixed-window rate limiting foundation.
-- Native LangChain chat model wiring and LangGraph `MessagesState` graph builder.
+- Native LangChain chat model wiring with per-instance Langfuse tracker.
 - LlamaIndex advanced retrieval support code using native `Document` and
   `NodeWithScore` primitives, retrieval smoke checks, and redaction policy.
+- Self-hosted Langfuse local stack via Docker Compose for tracing, prompt
+  management, and eval scores.
 - Research workspace with sample datasets, artifact manifests, and smoke evals.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
@@ -79,23 +81,25 @@ app/
   bootstrap/            App factory and service wiring
   core/                 Settings, database, Redis, errors, logging, health
   modules/
-    agents/             Native LangGraph agent graph factory
     identity/           API key identity model, repository, auth dependency
-    rag/                LlamaIndex-backed retrieval support for agents
+    llm/                LangChain chat model factory and per-instance Langfuse tracker
+    rag/                LlamaIndex-backed knowledge retrieval and tool builders
     rate_limit/         Rate limit service contracts and implementations
 alembic/                Migration environment
 research/               Datasets, evals, training templates, artifact manifests
-scripts/                Local helper scripts
+scripts/                Local helper scripts (including Langfuse smoke runners)
 tests/                  Unit and integration tests
 ```
 
 ## Local Commands
 
 ```bash
-make dev          # run local API with uvicorn reload
-make test         # run full pytest suite
-make eval-smoke   # run local RAG evaluation smoke test
-make hygiene      # check stale template coupling
+make dev                    # run local API with uvicorn reload
+make test                   # run full pytest suite
+make eval-smoke             # run local RAG evaluation smoke test
+make smoke-langfuse         # exercise the Langfuse callback against the local stack
+make smoke-langfuse-prompt  # exercise the Langfuse prompt-management flow
+make hygiene                # check stale template coupling
 ```
 
 ## Secrets
@@ -105,9 +109,9 @@ Copy `.env.example` to `.env` for local development. Keep real secrets in enviro
 ## Runtime Defaults
 
 The template boots without cloud credentials. The app factory does not create AI
-runtime services by default; project business logic can wire LangChain,
-LangGraph, or LlamaIndex services where it actually needs them. Local research
-smoke tests still use fake/mock AI primitives outside the API app.
+runtime services by default; project business logic can wire LangChain or
+LlamaIndex services where it actually needs them. Local research smoke tests
+still use fake/mock AI primitives outside the API app.
 
 - `CHAT_PROVIDER=`
 - `CHAT_MODEL_NAME=`
@@ -119,7 +123,7 @@ smoke tests still use fake/mock AI primitives outside the API app.
 To use a real model, install the relevant LangChain provider package, set the
 provider's standard environment variables in your runtime, then set
 `CHAT_PROVIDER` and `CHAT_MODEL_NAME` to a supported pair (see
-`app/core/config.py::CHAT_MODELS_BY_PROVIDER`). Knowledge retrieval integrations should pass LlamaIndex
+`app/core/config.py`). Knowledge retrieval integrations should pass LlamaIndex
 `Document` objects into `KnowledgeRetrievalService` and consume retrieved
 `NodeWithScore` values instead of adding template-owned RAG schemas, rerankers,
 or vector-store adapters.
@@ -131,11 +135,11 @@ Database access goes through `app.core.database.DbSession`, a normal SQLAlchemy
 session dependency.
 
 Langfuse is only wired at the AI execution boundary. Use
-`build_llm_instance(..., instance_id="...", service_name="...")` to create a
-native LangChain `BaseChatModel` plus a per-instance Langfuse tracker. Pass
-`instance.trace_config(...)` into LangChain or LangGraph calls to keep parallel
-LLM services separated by instance, service, session, user, and request
-metadata.
+`build_llm_instance(..., instance_id="...", service_name="...")` from
+`app.modules.llm.runtime` to create a native LangChain `BaseChatModel` plus a
+per-instance Langfuse tracker. Pass `instance.trace_config(...)` into LangChain
+calls to keep parallel LLM services separated by instance, service, session,
+user, and request metadata.
 
 The app factory registers a FastAPI lifespan that calls
 `langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and
