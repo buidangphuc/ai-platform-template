@@ -1,3 +1,6 @@
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts.prompt import PromptTemplate as LangChainPromptTemplate
+
 from app.modules.prompts.schemas import PromptRender, PromptTemplate
 
 
@@ -51,6 +54,18 @@ class InMemoryPromptRegistry:
             variables=variables,
             metadata=template.metadata,
         )
+
+    def get_langchain_prompt(
+        self,
+        name: str,
+        *,
+        version: str | None = None,
+    ) -> ChatPromptTemplate | LangChainPromptTemplate:
+        template = self.get(name, version=version)
+        if template.template_type == "string":
+            return LangChainPromptTemplate.from_template(template.template)
+        messages = template.messages or [("human", template.template)]
+        return ChatPromptTemplate.from_messages(messages)
 
     def get(self, name: str, *, version: str | None = None) -> PromptTemplate:
         resolved_version = version or self._latest_versions.get(name)

@@ -53,9 +53,9 @@ def create_app(
         limit=resolved_settings.DEFAULT_RATE_LIMIT_PER_MINUTE,
     )
     app.state.rag_service = RagService(
-        embeddings=app.state.adapters.embeddings,
+        embeddings=app.state.adapters.langchain_embeddings,
         vector_store=app.state.adapters.vector_store,
-        llm=app.state.adapters.llm,
+        chat_model=app.state.adapters.chat_model,
         prompt_registry=app.state.prompt_registry,
         chunker=TextChunker(
             chunk_size=resolved_settings.RAG_CHUNK_SIZE,

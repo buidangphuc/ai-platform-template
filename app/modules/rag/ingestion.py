@@ -1,8 +1,10 @@
-from app.contracts.embeddings import EmbeddingClient
+from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
+
 from app.contracts.vector_store import VectorDocument, VectorStore
 from app.core.redaction import RedactionPolicy
 from app.modules.rag.chunking import TextChunker
-from app.modules.rag.embeddings import embed_chunks
+from app.modules.rag.embeddings import embed_documents
 from app.modules.rag.schemas import RagChunk, RagIndexRequest, RagIndexResponse
 
 
@@ -10,7 +12,7 @@ class RagIngestionService:
     def __init__(
         self,
         *,
-        embeddings: EmbeddingClient,
+        embeddings: Embeddings,
         vector_store: VectorStore,
         chunker: TextChunker,
         redaction_policy: RedactionPolicy,
@@ -31,16 +33,17 @@ class RagIngestionService:
             )
         ]
         redacted_chunks = [self._redact_chunk(chunk) for chunk in chunks]
-        vectors = await embed_chunks(self.embeddings, redacted_chunks)
+        documents = [self._chunk_to_document(chunk) for chunk in redacted_chunks]
+        vectors = await embed_documents(self.embeddings, documents)
         await self.vector_store.upsert(
             [
                 VectorDocument(
-                    id=chunk.id,
+                    id=str(document.metadata["chunk_id"]),
                     vector=vector,
-                    text=chunk.text,
-                    metadata=chunk.metadata,
+                    text=document.page_content,
+                    metadata=self._vector_metadata(document.metadata),
                 )
-                for chunk, vector in zip(redacted_chunks, vectors, strict=True)
+                for document, vector in zip(documents, vectors, strict=True)
             ]
         )
         return RagIndexResponse(
@@ -64,5 +67,25 @@ class RagIngestionService:
         return {
             key: value
             for key, value in redacted.items()
+            if isinstance(value, str | int | float | bool)
+        }
+
+    def _chunk_to_document(self, chunk: RagChunk) -> Document:
+        metadata = dict(chunk.metadata)
+        metadata.update(
+            {
+                "document_id": chunk.document_id,
+                "chunk_id": chunk.id,
+            }
+        )
+        return Document(page_content=chunk.text, metadata=metadata)
+
+    def _vector_metadata(
+        self,
+        metadata: dict[str, object],
+    ) -> dict[str, str | int | float | bool]:
+        return {
+            key: value
+            for key, value in metadata.items()
             if isinstance(value, str | int | float | bool)
         }

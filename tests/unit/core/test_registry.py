@@ -1,9 +1,7 @@
 import pytest
 
-from app.adapters.embeddings.fake import FakeEmbeddingClient
-from app.adapters.embeddings.openai_compatible import OpenAICompatibleEmbeddingClient
+from app.adapters.langchain.bridges import LangChainEmbeddingClient, LangChainLLMClient
 from app.adapters.llm.cached import CachedLLMClient
-from app.adapters.llm.openai_compatible import OpenAICompatibleLLMClient
 from app.adapters.llm_cache.noop import NoOpLLMResponseCache
 from app.adapters.mlops.local_tracker import LocalExperimentTracker
 from app.adapters.observability.otel_debug import OTelDebugObservability
@@ -18,7 +16,10 @@ def test_registry_builds_local_default_adapters(test_settings: Settings):
     adapters = build_runtime_adapters(test_settings)
 
     assert isinstance(adapters.llm, CachedLLMClient)
-    assert isinstance(adapters.embeddings, FakeEmbeddingClient)
+    assert isinstance(adapters.llm.client, LangChainLLMClient)
+    assert isinstance(adapters.embeddings, LangChainEmbeddingClient)
+    assert adapters.chat_model is not None
+    assert adapters.langchain_embeddings is not None
     assert isinstance(adapters.vector_store, InMemoryVectorStore)
     assert isinstance(adapters.storage, LocalObjectStorage)
     assert isinstance(adapters.llm_cache, NoOpLLMResponseCache)
@@ -53,8 +54,8 @@ def test_registry_allows_openai_compatible_local_endpoint_without_vendor_key(
 
     adapters = build_runtime_adapters(settings)
 
-    assert isinstance(adapters.llm.client, OpenAICompatibleLLMClient)
-    assert isinstance(adapters.embeddings, OpenAICompatibleEmbeddingClient)
+    assert isinstance(adapters.llm.client, LangChainLLMClient)
+    assert isinstance(adapters.embeddings, LangChainEmbeddingClient)
 
 
 def test_registry_builds_otel_debug_observability(test_settings: Settings):

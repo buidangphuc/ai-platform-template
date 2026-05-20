@@ -1,14 +1,13 @@
-from app.contracts.embeddings import EmbeddingClient, EmbeddingRequest
-from app.modules.rag.schemas import RagChunk
+from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 
 
-async def embed_chunks(
-    embeddings: EmbeddingClient,
-    chunks: list[RagChunk],
+async def embed_documents(
+    embeddings: Embeddings,
+    documents: list[Document],
 ) -> list[list[float]]:
-    if not chunks:
+    if not documents:
         return []
-    response = await embeddings.embed(
-        EmbeddingRequest(texts=[chunk.text for chunk in chunks])
+    return await embeddings.aembed_documents(
+        [document.page_content for document in documents]
     )
-    return response.vectors

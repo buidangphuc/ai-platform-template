@@ -1,8 +1,13 @@
-from app.adapters.embeddings.fake import FakeEmbeddingClient
-from app.adapters.llm.fake import FakeLLMClient
+from typing import Any
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
+from app.adapters.langchain.chat_models import TemplateFakeChatModel
+from app.adapters.langchain.embeddings import TemplateFakeEmbeddings
 from app.adapters.observability.debug import DebugObservability
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
-from app.contracts.llm import LLMRequest, LLMResponse
 from app.core.redaction import RedactionPolicy
 from app.modules.evals.rag import RAGEvaluationService
 from app.modules.evals.schemas import RAGEvalCase, RAGEvalRequest
@@ -13,16 +18,35 @@ from app.modules.rag.service import RagService
 from app.modules.usage.tracker import InMemoryUsageTracker
 
 
-class WrongAnswerLLM:
-    async def complete(self, request: LLMRequest) -> LLMResponse:
-        return LLMResponse(content="unrelated answer", model="wrong-answer")
+class WrongAnswerChatModel(BaseChatModel):
+    @property
+    def _llm_type(self) -> str:
+        return "wrong-answer"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        return ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=AIMessage(
+                        content="unrelated answer",
+                        response_metadata={"model_name": "wrong-answer"},
+                    )
+                )
+            ]
+        )
 
 
 async def test_rag_eval_service_scores_keyword_hits_against_sources():
     rag = RagService(
-        embeddings=FakeEmbeddingClient(model="fake-embedding", dimensions=8),
+        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=8),
         vector_store=InMemoryVectorStore(),
-        llm=FakeLLMClient(model="fake-chat"),
+        chat_model=TemplateFakeChatModel(model_name="fake-chat"),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),
         chunker=TextChunker(chunk_size=32, overlap=0),
         usage_tracker=InMemoryUsageTracker(),
@@ -60,9 +84,9 @@ async def test_rag_eval_service_scores_keyword_hits_against_sources():
 
 async def test_rag_eval_service_scores_generated_answer_not_only_sources():
     rag = RagService(
-        embeddings=FakeEmbeddingClient(model="fake-embedding", dimensions=8),
+        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=8),
         vector_store=InMemoryVectorStore(),
-        llm=WrongAnswerLLM(),
+        chat_model=WrongAnswerChatModel(),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),
         chunker=TextChunker(chunk_size=32, overlap=0),
         usage_tracker=InMemoryUsageTracker(),

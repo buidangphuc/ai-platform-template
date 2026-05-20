@@ -1,5 +1,7 @@
-from app.adapters.embeddings.fake import FakeEmbeddingClient
-from app.adapters.llm.fake import FakeLLMClient
+from langchain_core.runnables import Runnable
+
+from app.adapters.langchain.chat_models import TemplateFakeChatModel
+from app.adapters.langchain.embeddings import TemplateFakeEmbeddings
 from app.adapters.observability.debug import DebugObservability
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.core.redaction import RedactionPolicy
@@ -12,9 +14,9 @@ from app.modules.usage.tracker import InMemoryUsageTracker
 
 def build_rag_service() -> RagService:
     return RagService(
-        embeddings=FakeEmbeddingClient(model="fake-embedding", dimensions=8),
+        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=8),
         vector_store=InMemoryVectorStore(),
-        llm=FakeLLMClient(model="fake-chat"),
+        chat_model=TemplateFakeChatModel(model_name="fake-chat"),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),
         chunker=TextChunker(chunk_size=8, overlap=2),
         usage_tracker=InMemoryUsageTracker(),
@@ -48,6 +50,7 @@ async def test_rag_service_indexes_searches_and_answers_with_fake_adapters():
     assert answer.sources[0].document_id == "doc-1"
     assert answer.usage.total_tokens > 0
     assert service.usage_tracker.records
+    assert isinstance(service.answer_chain, Runnable)
 
 
 async def test_rag_service_redacts_content_before_vector_storage():
@@ -70,6 +73,32 @@ async def test_rag_service_redacts_content_before_vector_storage():
     assert "admin@example.com" not in search.matches[0].text
     assert "Bearer abc123" not in search.matches[0].text
     assert search.matches[0].metadata["api_key"] == "[secret]"
+
+
+async def test_rag_ingestion_preserves_langchain_document_metadata_shape():
+    service = build_rag_service()
+
+    await service.index(
+        RagIndexRequest(
+            documents=[
+                RagDocument(
+                    id="doc-1",
+                    text="LangChain documents carry page content and metadata.",
+                    metadata={"source": "unit"},
+                ),
+            ],
+        )
+    )
+
+    stored_document = next(iter(service.vector_store._documents.values()))
+
+    assert (
+        stored_document.text == "LangChain documents carry page content and metadata."
+    )
+    assert stored_document.metadata["document_id"] == "doc-1"
+    assert stored_document.metadata["chunk_id"] == "doc-1:chunk:0"
+    assert stored_document.metadata["chunk_index"] == 0
+    assert stored_document.metadata["source"] == "unit"
 
 
 async def test_rag_service_invokes_reranker():

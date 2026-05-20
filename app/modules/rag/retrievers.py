@@ -1,4 +1,5 @@
-from app.contracts.embeddings import EmbeddingClient, EmbeddingRequest
+from langchain_core.embeddings import Embeddings
+
 from app.contracts.vector_store import VectorSearchQuery, VectorStore
 from app.modules.rag.schemas import RagSearchMatch, RagSearchResponse
 
@@ -7,7 +8,7 @@ class VectorRagRetriever:
     def __init__(
         self,
         *,
-        embeddings: EmbeddingClient,
+        embeddings: Embeddings,
         vector_store: VectorStore,
     ) -> None:
         self.embeddings = embeddings
@@ -20,10 +21,10 @@ class VectorRagRetriever:
         top_k: int,
         filters: dict[str, str | int | float | bool] | None = None,
     ) -> RagSearchResponse:
-        embedded_query = await self.embeddings.embed(EmbeddingRequest(texts=[query]))
+        embedded_query = await self.embeddings.aembed_query(query)
         matches = await self.vector_store.search(
             VectorSearchQuery(
-                vector=embedded_query.vectors[0],
+                vector=embedded_query,
                 top_k=top_k,
                 filters=filters or {},
             )

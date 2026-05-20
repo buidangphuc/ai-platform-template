@@ -1,7 +1,10 @@
 import time
 
-from app.contracts.embeddings import EmbeddingClient
-from app.contracts.llm import ChatMessage, LLMClient, LLMRequest
+from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+from langchain_core.runnables import Runnable
+
 from app.contracts.observability import ObservabilityClient
 from app.contracts.vector_store import VectorStore
 from app.core.redaction import RedactionPolicy
@@ -26,9 +29,9 @@ class RagService:
     def __init__(
         self,
         *,
-        embeddings: EmbeddingClient,
+        embeddings: Embeddings,
         vector_store: VectorStore,
-        llm: LLMClient,
+        chat_model: BaseChatModel,
         prompt_registry: InMemoryPromptRegistry,
         chunker: TextChunker,
         usage_tracker: InMemoryUsageTracker,
@@ -37,7 +40,7 @@ class RagService:
     ) -> None:
         self.embeddings = embeddings
         self.vector_store = vector_store
-        self.llm = llm
+        self.chat_model = chat_model
         self.prompt_registry = prompt_registry
         self.chunker = chunker
         self.usage_tracker = usage_tracker
@@ -54,6 +57,7 @@ class RagService:
             vector_store=vector_store,
         )
         self.reranker = ScoreReranker()
+        self.answer_chain = self._build_answer_chain("rag.answer")
 
     async def index(self, request: RagIndexRequest) -> RagIndexResponse:
         started_at = time.perf_counter()
@@ -127,29 +131,29 @@ class RagService:
                 "ai.prompt.version": rendered_prompt.version,
             },
         ) as span:
-            llm_response = await self.llm.complete(
-                LLMRequest(
-                    messages=[
-                        ChatMessage(
-                            role="user",
-                            content=rendered_prompt.content,
-                        )
-                    ],
-                    prompt_version=f"{rendered_prompt.name}:{rendered_prompt.version}",
-                )
+            response_message = await self._build_answer_chain(
+                request.prompt_name,
+                version=request.prompt_version,
+            ).ainvoke(
+                {
+                    "question": request.question,
+                    "context": context or "No context found.",
+                }
             )
-            span.set_attribute("ai.model", llm_response.model)
-            span.set_attribute("ai.tokens.input", llm_response.usage.input_tokens)
-            span.set_attribute("ai.tokens.output", llm_response.usage.output_tokens)
+            usage_metadata = self._usage_metadata(response_message)
+            model = self._message_model(response_message)
+            span.set_attribute("ai.model", model)
+            span.set_attribute("ai.tokens.input", usage_metadata["input_tokens"])
+            span.set_attribute("ai.tokens.output", usage_metadata["output_tokens"])
 
         latency_ms = (time.perf_counter() - started_at) * 1000
         usage = await self.usage_tracker.record(
             UsageRecord(
                 operation="rag.answer",
                 provider="runtime",
-                model=llm_response.model,
-                input_tokens=llm_response.usage.input_tokens,
-                output_tokens=llm_response.usage.output_tokens,
+                model=model,
+                input_tokens=usage_metadata["input_tokens"],
+                output_tokens=usage_metadata["output_tokens"],
                 latency_ms=latency_ms,
                 estimated_cost=0.0,
                 metadata=self.redaction_policy.redact_mapping(
@@ -161,8 +165,56 @@ class RagService:
             )
         )
         return RagAnswerResponse(
-            answer=llm_response.content,
+            answer=self._message_content(response_message),
             sources=search_response.matches,
             usage=usage,
             prompt_version=rendered_prompt.version,
         )
+
+    def _build_answer_chain(
+        self,
+        prompt_name: str,
+        *,
+        version: str | None = None,
+    ) -> Runnable[dict[str, object], BaseMessage]:
+        prompt = self.prompt_registry.get_langchain_prompt(prompt_name, version=version)
+        return prompt | self.chat_model
+
+    def _usage_metadata(self, message: BaseMessage) -> dict[str, int]:
+        raw_usage = getattr(message, "usage_metadata", None) or {}
+        input_tokens = int(
+            raw_usage.get("input_tokens") or raw_usage.get("prompt_tokens") or 0
+        )
+        output_tokens = int(
+            raw_usage.get("output_tokens") or raw_usage.get("completion_tokens") or 0
+        )
+        total_tokens = int(
+            raw_usage.get("total_tokens") or input_tokens + output_tokens
+        )
+        if total_tokens and not input_tokens and not output_tokens:
+            output_tokens = total_tokens
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
+
+    def _message_model(self, message: BaseMessage) -> str:
+        metadata = getattr(message, "response_metadata", None) or {}
+        model_name = metadata.get("model_name") or metadata.get("model")
+        return str(model_name or getattr(self.chat_model, "model_name", "runtime"))
+
+    def _message_content(self, message: BaseMessage) -> str:
+        content = message.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and "text" in item:
+                    parts.append(str(item["text"]))
+                else:
+                    parts.append(str(item))
+            return "".join(parts)
+        return str(content)

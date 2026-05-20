@@ -105,3 +105,25 @@ def test_default_rate_limit_per_minute_must_be_positive():
                 API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
                 DEFAULT_RATE_LIMIT_PER_MINUTE=rate_limit,
             )
+
+
+def test_settings_accepts_langchain_chat_model_provider():
+    settings = Settings(
+        ENVIRONMENT="test",
+        POSTGRES_HOST="localhost",
+        POSTGRES_USER="postgres",
+        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
+        POSTGRES_DB="ai_platform",
+        REDIS_HOST="localhost",
+        REDIS_PORT=6379,
+        REDIS_PASSWORD="",  # pragma: allowlist secret
+        REDIS_DATABASE=0,
+        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+        LLM_PROVIDER="langchain",
+        CHAT_MODEL="gpt-test",
+        CHAT_MODEL_PROVIDER="openai",
+    )
+
+    assert settings.LLM_PROVIDER == "langchain"
+    assert settings.CHAT_MODEL == "gpt-test"
+    assert settings.CHAT_MODEL_PROVIDER == "openai"

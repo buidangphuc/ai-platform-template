@@ -1,13 +1,15 @@
 from dataclasses import dataclass
 
+from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
+
 from app.adapters.agents.langgraph import LangGraphAgentRuntime
 from app.adapters.agents.simple import SimpleAgentRuntime
-from app.adapters.embeddings.fake import FakeEmbeddingClient
-from app.adapters.embeddings.openai_compatible import OpenAICompatibleEmbeddingClient
 from app.adapters.jobs.in_process import InProcessJobQueue
+from app.adapters.langchain.bridges import LangChainEmbeddingClient, LangChainLLMClient
+from app.adapters.langchain.chat_models import build_chat_model
+from app.adapters.langchain.embeddings import build_embeddings
 from app.adapters.llm.cached import CachedLLMClient
-from app.adapters.llm.fake import FakeLLMClient
-from app.adapters.llm.openai_compatible import OpenAICompatibleLLMClient
 from app.adapters.llm_cache.noop import NoOpLLMResponseCache
 from app.adapters.mlops.local_tracker import LocalExperimentTracker
 from app.adapters.mlops.mlflow import MLflowExperimentTracker
@@ -31,7 +33,9 @@ from app.core.redaction import RedactionPolicy
 @dataclass(frozen=True)
 class RuntimeAdapters:
     llm: LLMClient
+    chat_model: BaseChatModel
     embeddings: EmbeddingClient
+    langchain_embeddings: Embeddings
     vector_store: VectorStore
     storage: ObjectStorage
     jobs: JobQueue
@@ -45,7 +49,12 @@ def build_runtime_adapters(
     settings: Settings, *, usage_tracker=None
 ) -> RuntimeAdapters:
     llm_cache = _build_llm_cache(settings)
-    base_llm = _build_llm(settings)
+    chat_model = _build_chat_model(settings)
+    langchain_embeddings = _build_langchain_embeddings(settings)
+    base_llm = LangChainLLMClient(
+        chat_model=chat_model,
+        default_model=settings.CHAT_MODEL or settings.LLM_MODEL,
+    )
     llm = CachedLLMClient(
         provider=settings.LLM_PROVIDER,
         client=base_llm,
@@ -56,7 +65,12 @@ def build_runtime_adapters(
     observability = _build_observability(settings)
     return RuntimeAdapters(
         llm=llm,
-        embeddings=_build_embeddings(settings),
+        chat_model=chat_model,
+        embeddings=LangChainEmbeddingClient(
+            embeddings=langchain_embeddings,
+            default_model=settings.EMBEDDING_MODEL,
+        ),
+        langchain_embeddings=langchain_embeddings,
         vector_store=_build_vector_store(settings),
         storage=_build_storage(settings),
         jobs=_build_jobs(settings),
@@ -64,7 +78,7 @@ def build_runtime_adapters(
         llm_cache=llm_cache,
         agent_runtime=_build_agent_runtime(
             settings,
-            llm=llm,
+            chat_model=chat_model,
             observability=observability,
             usage_tracker=usage_tracker,
         ),
@@ -72,45 +86,24 @@ def build_runtime_adapters(
     )
 
 
-def _build_llm(settings: Settings) -> LLMClient:
-    if settings.LLM_PROVIDER == "fake":
-        return FakeLLMClient(model=settings.LLM_MODEL)
+def _build_chat_model(settings: Settings) -> BaseChatModel:
     if settings.LLM_PROVIDER == "openai_compatible":
-        api_key = _openai_compatible_api_key(settings)
-        base_url = _openai_compatible_base_url(settings)
         _require_openai_compatible_api_key(
-            api_key=api_key,
-            base_url=base_url,
+            api_key=_openai_compatible_api_key(settings),
+            base_url=_openai_compatible_base_url(settings),
             setting_name="LLM_PROVIDER",
         )
-        return OpenAICompatibleLLMClient(
-            api_key=api_key or "not-needed",
-            base_url=base_url,
-            model=settings.LLM_MODEL,
-        )
-    raise ValueError(f"Unsupported LLM_PROVIDER: {settings.LLM_PROVIDER}")
+    return build_chat_model(settings)
 
 
-def _build_embeddings(settings: Settings) -> EmbeddingClient:
-    if settings.EMBEDDING_PROVIDER == "fake":
-        return FakeEmbeddingClient(
-            model=settings.EMBEDDING_MODEL,
-            dimensions=settings.FAKE_EMBEDDING_DIMENSIONS,
-        )
+def _build_langchain_embeddings(settings: Settings) -> Embeddings:
     if settings.EMBEDDING_PROVIDER == "openai_compatible":
-        api_key = _openai_compatible_api_key(settings)
-        base_url = _openai_compatible_base_url(settings)
         _require_openai_compatible_api_key(
-            api_key=api_key,
-            base_url=base_url,
+            api_key=_openai_compatible_api_key(settings),
+            base_url=_openai_compatible_base_url(settings),
             setting_name="EMBEDDING_PROVIDER",
         )
-        return OpenAICompatibleEmbeddingClient(
-            api_key=api_key or "not-needed",
-            base_url=base_url,
-            model=settings.EMBEDDING_MODEL,
-        )
-    raise ValueError(f"Unsupported EMBEDDING_PROVIDER: {settings.EMBEDDING_PROVIDER}")
+    return build_embeddings(settings)
 
 
 def _build_vector_store(settings: Settings) -> VectorStore:
@@ -150,13 +143,13 @@ def _build_llm_cache(settings: Settings) -> LLMResponseCache:
 def _build_agent_runtime(
     settings: Settings,
     *,
-    llm: LLMClient,
+    chat_model: BaseChatModel,
     observability: ObservabilityClient,
     usage_tracker=None,
 ) -> AgentRuntime:
     if settings.AGENT_RUNTIME == "simple":
         return SimpleAgentRuntime(
-            llm=llm,
+            chat_model=chat_model,
             observability=observability,
             redaction_policy=RedactionPolicy.from_trace_content(settings.TRACE_CONTENT),
             usage_tracker=usage_tracker,
