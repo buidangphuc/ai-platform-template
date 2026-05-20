@@ -1,1 +1,0 @@
-"""Research artifact manifest helpers."""

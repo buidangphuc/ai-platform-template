@@ -8,6 +8,7 @@ from app.core.config import Settings
 @pytest.fixture()
 def test_settings() -> Settings:
     return Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",

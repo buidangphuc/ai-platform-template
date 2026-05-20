@@ -1,7 +1,29 @@
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import computed_field, field_validator
+from pydantic import computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ChatProvider = Literal["", "anthropic", "openai", "google_genai"]
+
+ChatModelName = Literal[
+    "",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-opus-4-7",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+]
+
+CHAT_MODELS_BY_PROVIDER: dict[str, frozenset[str]] = {
+    "anthropic": frozenset(
+        {"claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-7"}
+    ),
+    "openai": frozenset({"gpt-4.1", "gpt-4.1-mini"}),
+    "google_genai": frozenset({"gemini-1.5-pro", "gemini-1.5-flash"}),
+}
 
 
 class Settings(BaseSettings):
@@ -33,7 +55,14 @@ class Settings(BaseSettings):
     API_KEY_BOOTSTRAP_TOKEN: str = ""
     DEFAULT_RATE_LIMIT_PER_MINUTE: int = 60
 
-    CHAT_MODEL: str = ""
+    CHAT_PROVIDER: ChatProvider = ""
+    CHAT_MODEL_NAME: ChatModelName = ""
+
+    LANGFUSE_ENABLED: bool = False
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
+    LANGFUSE_PROMPT_CACHE_TTL_SECONDS: int = 60
 
     @field_validator("DEFAULT_RATE_LIMIT_PER_MINUTE")
     @classmethod
@@ -41,6 +70,29 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("DEFAULT_RATE_LIMIT_PER_MINUTE must be positive")
         return value
+
+    @field_validator("LANGFUSE_PROMPT_CACHE_TTL_SECONDS")
+    @classmethod
+    def validate_langfuse_prompt_cache_ttl_seconds(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("LANGFUSE_PROMPT_CACHE_TTL_SECONDS must not be negative")
+        return value
+
+    @model_validator(mode="after")
+    def validate_chat_model_pair(self) -> "Settings":
+        if bool(self.CHAT_PROVIDER) != bool(self.CHAT_MODEL_NAME):
+            raise ValueError(
+                "CHAT_PROVIDER and CHAT_MODEL_NAME must both be set or both empty"
+            )
+        if self.CHAT_PROVIDER:
+            allowed = CHAT_MODELS_BY_PROVIDER[self.CHAT_PROVIDER]
+            if self.CHAT_MODEL_NAME not in allowed:
+                raise ValueError(
+                    f"CHAT_MODEL_NAME={self.CHAT_MODEL_NAME!r} is not supported "
+                    f"for CHAT_PROVIDER={self.CHAT_PROVIDER!r}. "
+                    f"Allowed: {sorted(allowed)}"
+                )
+        return self
 
     @computed_field
     @property

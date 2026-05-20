@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import yaml
-
 from research.artifacts.schemas import ArtifactManifest, ArtifactType
 
 
@@ -59,3 +58,26 @@ def test_research_generated_artifacts_are_ignored():
     gitignore = Path(".gitignore").read_text(encoding="utf-8")
 
     assert "research/artifacts/generated/" in gitignore
+
+
+def test_eval_logic_lives_in_research_not_app_runtime():
+    assert not Path("app/modules/evals").exists()
+
+
+def test_prompt_management_lives_outside_app_runtime():
+    assert not Path("app/modules/prompts").exists()
+
+    manifest_path = Path("research/artifacts/sample_prompt_manifest.yaml")
+    raw_manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+
+    assert "app.modules.prompts.registry" not in raw_manifest["runtime_dependencies"]
+    assert not raw_manifest["artifact_uri"].startswith("app/modules/prompts")
+
+
+def test_usage_tracking_lives_outside_app_runtime():
+    assert not Path("app/modules/usage").exists()
+
+
+def test_rag_uses_llamaindex_primitives_without_local_schema_layers():
+    assert not Path("app/modules/rag/schemas.py").exists()
+    assert not Path("app/modules/rag/reranking.py").exists()

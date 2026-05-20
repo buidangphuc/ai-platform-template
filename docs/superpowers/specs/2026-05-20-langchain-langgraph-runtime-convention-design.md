@@ -126,16 +126,20 @@ and cache-key schemas can remain where they preserve API flow or cross-cutting
 policy, but the template should not wrap LangChain or LlamaIndex with another
 provider abstraction by default.
 
-Provider configuration should use LangChain conventions where possible:
+Provider configuration is split into two closed-enum env vars; the runtime
+composes them into LangChain's `provider:model` target string when calling
+`init_chat_model`:
 
 ```env
-CHAT_MODEL=openai:gpt-4.1-mini
+CHAT_PROVIDER=openai
+CHAT_MODEL_NAME=gpt-4.1-mini
 EMBEDDING_MODEL=openai:text-embedding-3-small
 ```
 
-Exact model naming should follow LangChain's `init_chat_model` and `init_embeddings`
-conventions. Provider-specific API keys stay in environment variables expected by
-the relevant provider package.
+`CHAT_PROVIDER` and `CHAT_MODEL_NAME` are `Literal` fields validated together
+(both must be set or both empty, and the model must belong to the provider — see
+`app/core/config.py::CHAT_MODELS_BY_PROVIDER`). Provider-specific API keys stay
+in environment variables expected by the relevant provider package.
 
 ## 8. Prompt Convention
 
@@ -173,9 +177,10 @@ retrieval addon that feeds LangChain/LangGraph agents:
 - optional LlamaIndex LLM calls are limited to retrieval-specific transforms such
   as query rewrite, decomposition, HyDE, metadata extraction, and reranking
 
-The API exposes ingestion and search/debug endpoints. It should not expose
-`/rag/answer`; final user-facing answers belong to the LangGraph agent, usually
-through a LangChain `knowledge_search` tool backed by the LlamaIndex retriever.
+The template exposes retrieval support code, not default RAG endpoints. It
+should not expose `/rag/answer`; final user-facing answers belong to the
+LangGraph agent, usually through a LangChain `knowledge_search` tool backed by
+the LlamaIndex retriever.
 
 The template still owns:
 
@@ -196,12 +201,10 @@ The default local agent should be a small graph, not a separate custom runtime l
 START -> model_node -> END
 ```
 
-Project-specific agents can provide graph factories that return compiled graphs. The adapter should normalize:
-
-- API `AgentRequest` into graph input state
-- graph output into API `AgentResponse`
-- graph events into custom observability events
-- usage and latency into the template usage tracker
+Project-specific agents can provide graph factories that return compiled graphs.
+The template should not wrap them in a custom runtime or local agent
+request/response schema. Product APIs can translate HTTP payloads into native
+LangGraph input at their own boundary when an actual business workflow exists.
 
 Use LangChain's `create_agent` only when a prebuilt agent loop is enough. Use custom `StateGraph` when the workflow needs explicit nodes, state, branching, human review, memory, or long-running behavior.
 
@@ -314,7 +317,7 @@ This is an incremental refactor, not a rewrite.
 - Add LangChain, LangGraph, and LlamaIndex dependencies.
 - Add LangChain chat model factory.
 - Add LangChain embedding factory.
-- Add runtime registry fields for chat model, embeddings, and agent runtime.
+- Add direct LangChain chat model wiring and native LangGraph graph factories.
 - Remove template-owned LangChain bridge wrappers from the registry.
 
 ### Phase B: Prompt Registry
@@ -334,9 +337,9 @@ This is an incremental refactor, not a rewrite.
 ### Phase D: Agent Runtime
 
 - Replace custom simple agent loop with a small LangGraph graph.
-- Keep `AgentRequest` and `AgentResponse` API payloads.
-- Add graph factory extension points.
-- Emit graph node events through custom observability.
+- Use LangGraph `MessagesState` as the default graph state.
+- Add graph factory extension points that accept LangChain tools.
+- Do not emit custom observability events in this phase.
 
 ### Phase E: Eval Runner
 
@@ -354,13 +357,14 @@ This is an incremental refactor, not a rewrite.
 5. Prompt registry can return LangChain prompt templates.
 6. Knowledge indexing/search uses LlamaIndex primitives directly.
 7. There is no standalone `/rag/answer` product endpoint.
-8. Default agent runtime is backed by a compiled LangGraph graph and can call
-   the `knowledge_search` tool.
-9. Custom observability captures model, prompt, token, tool, and graph-node events.
-10. Custom eval runner can evaluate retrieval quality or a compiled graph.
+8. Default agent graph is a compiled LangGraph graph using `MessagesState` and
+   can mount the `knowledge_search` tool.
+9. Observability export remains deferred to project-specific tooling.
+10. Local research smoke checks can evaluate retrieval quality.
 11. Current fake/local smoke tests still pass.
 12. Docker build still passes.
-13. Existing feedback, usage, cache, and artifact manifest contracts still work.
+13. Feedback, usage, prompt registry, cache, and app observability wrappers are
+    absent from the runtime template.
 
 ## 17. Risks and Mitigations
 

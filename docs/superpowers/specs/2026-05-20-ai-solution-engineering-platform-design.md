@@ -368,17 +368,12 @@ comment: string | null
 created_at
 ```
 
-The RAG module should include:
+The RAG support module should stay thin over LlamaIndex:
 
 ```text
 app/modules/rag/
-  chunking.py
-  ingestion.py
-  embeddings.py
-  retrievers.py
-  reranking.py
   service.py
-  schemas.py
+  tools.py
 ```
 
 ## 10. MLOps Scope
@@ -428,7 +423,7 @@ Required capabilities:
 3. Prompt registry with version, metadata, variables, and test cases.
 4. Golden dataset support for LLM/RAG/agent evaluation.
 5. Optional LLM-as-judge metric adapter.
-6. OpenTelemetry spans around LLM calls, embedding calls, retrieval, reranking, tool calls, agent steps, and eval runs.
+6. OpenTelemetry spans around LLM calls, embedding calls, retrieval transforms, tool calls, agent steps, and eval runs.
 7. Token usage, model/provider, prompt version, latency, and estimated cost metadata.
 8. Redaction default-on for prompts, inputs, outputs, tokens, API keys, and PII.
 9. Guardrails/hooks for max input tokens, max output tokens, timeout, and safety blocks.
@@ -753,8 +748,7 @@ Secret handling requirement:
 - Add eval module.
 - Add usage/cost/latency tracking.
 - Add redaction policy.
-- Add simple agent runtime.
-- Add optional LangGraph adapter.
+- Add native LangGraph graph factory.
 
 ### Phase 4: Research and MLOps
 

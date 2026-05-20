@@ -8,6 +8,7 @@ from app.core.request_context import get_request_id
 
 def _settings() -> Settings:
     return Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",

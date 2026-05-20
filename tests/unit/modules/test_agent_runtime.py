@@ -1,80 +1,55 @@
-import pytest
+from pathlib import Path
+
 from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
+from langchain_core.messages import HumanMessage
+from llama_index.core import Document
 from llama_index.core.embeddings import MockEmbedding
 
 from app.core.redaction import RedactionPolicy
-from app.modules.agents.runtime import LangGraphAgentRuntime, SimpleAgentRuntime
-from app.modules.agents.schemas import AgentRequest
-from app.modules.rag.schemas import RagDocument, RagIndexRequest
+from app.modules.agents.default_graph import build_default_agent_graph
 from app.modules.rag.service import KnowledgeRetrievalService, build_rag_node_parser
-from app.modules.usage.tracker import InMemoryUsageTracker
+from app.modules.rag.tools import build_knowledge_search_tool
 
 
-async def test_simple_agent_runtime_runs_task_with_llm_and_events():
-    usage_tracker = InMemoryUsageTracker()
-    runtime = SimpleAgentRuntime(
-        chat_model=ParrotFakeChatModel(),
-        redaction_policy=RedactionPolicy(mode="redacted"),
-        usage_tracker=usage_tracker,
+def test_agent_module_uses_langgraph_without_runtime_schema_wrappers():
+    assert not Path("app/modules/agents/runtime.py").exists()
+    assert not Path("app/modules/agents/schemas.py").exists()
+
+
+async def test_default_agent_graph_invokes_native_messages_state():
+    graph = build_default_agent_graph(ParrotFakeChatModel())
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="Summarize status")]}
     )
 
-    response = await runtime.run(
-        AgentRequest(
-            task="Summarize status",
-            input={"status": "Phase 3 started"},
-        )
-    )
-
-    assert response.status == "completed"
-    assert "Summarize status" in response.output["content"]
-    assert [event.name for event in response.events] == ["llm.request", "llm.response"]
-    assert usage_tracker.records[0].operation == "agent.run"
-    assert runtime.graph is not None
-    assert hasattr(runtime.graph, "ainvoke")
+    assert "Summarize status" in result["messages"][-1].content
+    assert "output" not in result
+    assert hasattr(graph, "ainvoke")
 
 
-async def test_simple_agent_runtime_uses_knowledge_search_tool_when_available():
+async def test_default_agent_graph_accepts_langchain_tools():
     knowledge = KnowledgeRetrievalService(
         embed_model=MockEmbedding(embed_dim=16),
         node_parser=build_rag_node_parser(chunk_size=64, chunk_overlap=8),
-        usage_tracker=InMemoryUsageTracker(),
         redaction_policy=RedactionPolicy(mode="redacted"),
     )
     await knowledge.index(
-        RagIndexRequest(
-            documents=[
-                RagDocument(
-                    id="doc-1",
-                    text="Knowledge search provides advanced retrieval context.",
-                )
-            ]
-        )
+        [
+            Document(
+                id_="doc-1",
+                text="Knowledge search provides advanced retrieval context.",
+            )
+        ]
     )
-    runtime = SimpleAgentRuntime(
-        chat_model=ParrotFakeChatModel(),
-        redaction_policy=RedactionPolicy(mode="redacted"),
-        usage_tracker=InMemoryUsageTracker(),
-        knowledge_service=knowledge,
+    knowledge_tool = build_knowledge_search_tool(knowledge)
+
+    graph = build_default_agent_graph(
+        ParrotFakeChatModel(),
+        tools=[knowledge_tool],
     )
 
-    response = await runtime.run(
-        AgentRequest(
-            task="What provides advanced retrieval context?",
-            metadata={"knowledge_top_k": 1},
-        )
-    )
+    graph_nodes = graph.get_graph().nodes
 
-    assert response.status == "completed"
-    assert (
-        "Knowledge search provides advanced retrieval context."
-        in response.output["content"]
-    )
-    assert "tool.knowledge_search.response" in [event.name for event in response.events]
-    assert runtime.knowledge_search_tool.name == "knowledge_search"
-
-
-async def test_langgraph_runtime_is_import_safe_and_requires_runtime():
-    runtime = LangGraphAgentRuntime()
-
-    with pytest.raises(RuntimeError, match="LangGraph runtime is not configured"):
-        await runtime.run(AgentRequest(task="run graph"))
+    assert "tools" in graph_nodes
+    assert knowledge_tool.name == "knowledge_search"

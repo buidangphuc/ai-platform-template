@@ -14,7 +14,7 @@ def test_app_wiring_bootstraps_basic_runtime_only(test_settings: Settings):
     assert not hasattr(app.state, "knowledge_service")
     assert not hasattr(app.state, "rag_eval_service")
     assert not hasattr(app.state, "agent_runner")
+    assert not hasattr(app.state, "feedback_repository")
     assert app.state.health_service is not None
     assert app.state.api_key_repository is not None
-    assert app.state.feedback_repository is not None
     assert app.state.rate_limiter is not None

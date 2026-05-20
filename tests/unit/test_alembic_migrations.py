@@ -10,7 +10,7 @@ def test_alembic_tracks_foundation_schema_revision():
     )
     assert "op.create_table(" in revision_text
     assert '"api_keys"' in revision_text
-    assert '"feedback"' in revision_text
+    assert '"feedback"' not in revision_text
     assert "feedbacks" not in revision_text
     assert "platform" not in revision_text
 

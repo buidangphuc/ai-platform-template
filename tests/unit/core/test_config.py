@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -6,6 +8,7 @@ from app.core.config import Settings
 
 def test_settings_defaults_are_local_safe():
     settings = Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",
@@ -21,11 +24,18 @@ def test_settings_defaults_are_local_safe():
     assert settings.PROJECT_NAME == "AI Solution Engineering Platform"
     assert settings.API_V1_PREFIX == "/api/v1"
     assert settings.POSTGRES_URL.startswith("postgresql+asyncpg://")
-    assert settings.CHAT_MODEL == ""
+    assert settings.CHAT_PROVIDER == ""
+    assert settings.CHAT_MODEL_NAME == ""
+    assert settings.LANGFUSE_ENABLED is False
+    assert settings.LANGFUSE_PUBLIC_KEY == ""
+    assert settings.LANGFUSE_SECRET_KEY == ""
+    assert settings.LANGFUSE_BASE_URL == "https://cloud.langfuse.com"
+    assert settings.LANGFUSE_PROMPT_CACHE_TTL_SECONDS == 60
 
 
 def test_settings_redacts_secret_values():
     settings = Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",
@@ -37,6 +47,7 @@ def test_settings_redacts_secret_values():
         REDIS_DATABASE=0,
         API_KEY_PEPPER="pepper-secret",  # pragma: allowlist secret
         API_KEY_BOOTSTRAP_TOKEN="bootstrap-secret",  # pragma: allowlist secret
+        LANGFUSE_SECRET_KEY="langfuse-secret",  # pragma: allowlist secret
         FUTURE_SERVICE_API_KEY="sk-test",  # pragma: allowlist secret
     )
 
@@ -45,12 +56,14 @@ def test_settings_redacts_secret_values():
     assert summary["REDIS_PASSWORD"] == "***"
     assert summary["API_KEY_PEPPER"] == "***"
     assert summary["API_KEY_BOOTSTRAP_TOKEN"] == "***"
+    assert summary["LANGFUSE_SECRET_KEY"] == "***"
     assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
 
 
 def test_redacted_summary_redacts_secret_like_future_fields():
     settings = Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",
@@ -79,6 +92,7 @@ def test_default_rate_limit_per_minute_must_be_positive():
     for rate_limit in (0, -1):
         with pytest.raises(ValidationError):
             Settings(
+                _env_file=None,
                 ENVIRONMENT="test",
                 POSTGRES_HOST="localhost",
                 POSTGRES_USER="postgres",
@@ -95,6 +109,7 @@ def test_default_rate_limit_per_minute_must_be_positive():
 
 def test_settings_keeps_model_selection_minimal():
     settings = Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",
@@ -105,13 +120,15 @@ def test_settings_keeps_model_selection_minimal():
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
         API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
-        CHAT_MODEL="gpt-test",
+        CHAT_PROVIDER="openai",
+        CHAT_MODEL_NAME="gpt-4.1-mini",
     )
 
-    assert settings.CHAT_MODEL == "gpt-test"
+    assert settings.CHAT_PROVIDER == "openai"
+    assert settings.CHAT_MODEL_NAME == "gpt-4.1-mini"
+    assert "CHAT_MODEL" not in Settings.model_fields
     assert "LLM_PROVIDER" not in Settings.model_fields
     assert "EMBEDDING_PROVIDER" not in Settings.model_fields
-    assert "CHAT_MODEL_PROVIDER" not in Settings.model_fields
     assert "FAKE_EMBEDDING_DIMENSIONS" not in Settings.model_fields
     assert "EMBEDDING_MODEL" not in Settings.model_fields
     assert "AGENT_RUNTIME" not in Settings.model_fields
@@ -125,3 +142,74 @@ def test_settings_keeps_model_selection_minimal():
     assert "OBSERVABILITY_BACKEND" not in Settings.model_fields
     assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in Settings.model_fields
     assert "EXPERIMENT_TRACKER_BACKEND" not in Settings.model_fields
+
+
+def _base_settings_kwargs(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "_env_file": None,
+        "ENVIRONMENT": "test",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
+        "POSTGRES_DB": "ai_platform",
+        "REDIS_HOST": "localhost",
+        "REDIS_PORT": 6379,
+        "REDIS_PASSWORD": "",  # pragma: allowlist secret
+        "REDIS_DATABASE": 0,
+        "API_KEY_PEPPER": "test-pepper",  # pragma: allowlist secret
+    }
+    base.update(overrides)
+    return base
+
+
+def test_chat_provider_rejects_unknown_value():
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(CHAT_PROVIDER="bedrock"))
+
+
+def test_chat_model_name_rejects_unknown_value():
+    with pytest.raises(ValidationError):
+        Settings(
+            **_base_settings_kwargs(
+                CHAT_PROVIDER="openai",
+                CHAT_MODEL_NAME="gpt-9000",
+            )
+        )
+
+
+def test_chat_provider_and_model_name_must_both_be_set():
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(CHAT_PROVIDER="openai"))
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(CHAT_MODEL_NAME="gpt-4.1-mini"))
+
+
+def test_chat_provider_and_model_name_must_match():
+    with pytest.raises(ValidationError):
+        Settings(
+            **_base_settings_kwargs(
+                CHAT_PROVIDER="anthropic",
+                CHAT_MODEL_NAME="gpt-4.1-mini",
+            )
+        )
+
+
+def test_env_example_includes_local_langfuse_stack_defaults():
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+
+    public_key_line = (
+        "LANGFUSE_PUBLIC_KEY=lf_pk_local_ai_platform"  # pragma: allowlist secret
+    )
+    secret_key_line = (
+        "LANGFUSE_SECRET_KEY=lf_sk_local_ai_platform"  # pragma: allowlist secret
+    )
+    project_id_line = (
+        "LANGFUSE_INIT_PROJECT_ID=local-ai-platform"  # pragma: allowlist secret
+    )
+
+    assert "LANGFUSE_ENABLED=true" in env_example
+    assert public_key_line in env_example
+    assert secret_key_line in env_example
+    assert "LANGFUSE_BASE_URL=http://localhost:3000" in env_example
+    assert "LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000" in env_example
+    assert project_id_line in env_example

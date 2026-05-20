@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import get_settings
 from app.core.database import Base
-from app.modules.feedback.models import Feedback
 from app.modules.identity.models import ApiKey
 
 config = context.config
@@ -21,7 +20,7 @@ database_url = settings.POSTGRES_URL
 config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
-_registered_models = (ApiKey, Feedback)
+_registered_models = (ApiKey,)
 
 
 def run_migrations_offline() -> None:

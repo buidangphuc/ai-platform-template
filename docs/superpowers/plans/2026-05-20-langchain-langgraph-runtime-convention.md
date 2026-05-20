@@ -4,7 +4,7 @@
 
 **Goal:** Move the AI runtime layer toward native LangChain and LangGraph conventions while preserving the current API, local smoke path, custom observability, custom eval, and no-LangSmith runtime stance.
 
-**Architecture:** Add LangChain/LangGraph dependencies and registry primitives, then migrate prompts, RAG, and the default agent runtime internally. Keep current custom LLM/embedding contracts as bridge wrappers so existing cache/tests remain stable during this phase.
+**Architecture:** Use LangChain/LangGraph dependencies directly, keep RAG thin over LlamaIndex, and expose a native LangGraph agent graph factory without a custom runtime wrapper.
 
 **Tech Stack:** FastAPI, Pydantic, uv, LangChain, LangGraph, pytest, local fake chat/embedding implementations, existing vector store and observability adapters.
 
@@ -128,7 +128,7 @@ Expected: pass.
 
 - [ ] **Step 1: Write failing tests**
 
-Add tests that the default simple agent runtime has a compiled graph and returns `AgentResponse` through graph invocation.
+Add tests that the default agent factory returns a compiled LangGraph graph using native `MessagesState` and can mount LangChain tools through a `ToolNode`.
 
 - [ ] **Step 2: Run tests and verify red**
 

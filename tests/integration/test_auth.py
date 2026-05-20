@@ -49,6 +49,7 @@ async def test_authenticated_endpoint_accepts_api_key(client):
 
 async def test_authenticated_endpoint_returns_429_when_rate_limited():
     settings = Settings(
+        _env_file=None,
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
         POSTGRES_USER="postgres",

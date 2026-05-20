@@ -1,4 +1,5 @@
 from langchain_core.tools import StructuredTool
+from llama_index.core.schema import NodeWithScore
 from pydantic import BaseModel, Field
 
 from app.modules.rag.service import KnowledgeRetrievalService
@@ -23,18 +24,7 @@ def build_knowledge_search_tool(
             top_k=top_k,
             filters=filters or {},
         )
-        return {
-            "matches": [
-                {
-                    "chunk_id": match.chunk_id,
-                    "document_id": match.document_id,
-                    "text": match.text,
-                    "score": match.score,
-                    "metadata": match.metadata,
-                }
-                for match in response.matches
-            ]
-        }
+        return {"matches": [_to_tool_match(match) for match in response]}
 
     return StructuredTool.from_function(
         coroutine=knowledge_search,
@@ -42,3 +32,22 @@ def build_knowledge_search_tool(
         description="Search indexed knowledge and return retrieval evidence.",
         args_schema=KnowledgeSearchInput,
     )
+
+
+def _to_tool_match(match: NodeWithScore) -> dict[str, object]:
+    metadata = {
+        key: value
+        for key, value in match.node.metadata.items()
+        if isinstance(value, str | int | float | bool)
+    }
+    metadata["chunk_id"] = match.node.node_id
+    metadata["document_id"] = str(
+        metadata.get("document_id") or match.node.ref_doc_id or ""
+    )
+    return {
+        "chunk_id": metadata["chunk_id"],
+        "document_id": metadata["document_id"],
+        "text": match.node.text or "",
+        "score": float(match.score or 0.0),
+        "metadata": metadata,
+    }

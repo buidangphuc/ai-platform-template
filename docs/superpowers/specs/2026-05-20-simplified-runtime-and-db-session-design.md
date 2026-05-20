@@ -9,8 +9,8 @@ Scope: Current implementation target after the LangChain/LlamaIndex discussion.
 1. Do not keep a template-owned adapter registry in this phase.
 2. Keep LangChain, LangGraph, and LlamaIndex support as module-level building blocks, not app startup dependencies.
 3. Use LlamaIndex directly for research/eval or project-specific advanced retrieval code; it is not mounted as a standalone answer product.
-4. Skip app observability adapters, experiment trackers, object storage adapters, job queue adapters, and LLM response caching in this phase.
-5. Keep stable Pydantic payload schemas where they protect API flow, but place them with the module that owns them: agents, RAG, evals, feedback, usage, and research artifact manifests.
+4. Skip app observability adapters, local experiment trackers, local prompt registries, local usage tracking, object storage adapters, job queue adapters, and LLM response caching in this phase. AI execution tracing, prompt lookup, and custom eval scores use Langfuse at the LLM boundary.
+5. Keep stable Pydantic payload schemas where they protect API flow, but place them with the module that owns them: API identity and research artifact manifests. RAG uses LlamaIndex `Document` and `NodeWithScore` directly, and agents use LangGraph `MessagesState` directly, instead of local request/response schemas.
 6. Database access is not an adapter. Modules that need persistence should accept `app.core.database.DbSession`, use SQLAlchemy models/repositories in their own module, and keep transactions explicit at the request/service boundary.
 
 ## Runtime Wiring
@@ -21,7 +21,6 @@ Scope: Current implementation target after the LangChain/LlamaIndex discussion.
 - logging
 - health/readiness checks
 - API key auth repository
-- feedback repository
 - fixed-window rate limiter
 - request ID middleware
 - exception handlers
@@ -47,10 +46,30 @@ RAG, eval, and agent modules are support code. The template does not mount
 those routes only make sense once a downstream product defines the business
 workflow that calls them.
 
+`app/modules/rag` must stay thin over LlamaIndex. It accepts LlamaIndex
+`Document` objects for indexing and returns LlamaIndex `NodeWithScore` values
+for retrieval. Local RAG schemas, custom rerankers, and vector-store adapters are
+out of scope unless a downstream project has a concrete product reason to add
+them.
+
 ## Deferred
 
 - App observability/tracing export.
-- Langfuse, MLflow, LangSmith, Datadog, Grafana, Phoenix, or other vendor tooling.
+- Business-specific feedback capture.
+- Business-specific eval pipelines.
+- MLflow, LangSmith, Datadog, Grafana, Phoenix, or other vendor tooling.
 - LLM response cache policy.
 - Object storage and background job infrastructure.
 - Deployment pipeline.
+
+## Langfuse Rule
+
+Langfuse is not an app-wide observability adapter. It is used only where LLM,
+LangChain, or LangGraph execution happens. Each logical LLM service should
+create its own `LLMInstance` with a stable `instance_id` and `service_name`, then
+pass `instance.trace_config(...)` into LangChain or LangGraph calls. This keeps
+parallel LLM services separated in Langfuse traces, usage views, prompt
+versions, and eval scores.
+
+Local development uses the self-hosted Langfuse Docker stack and headless
+initialization from `.env`; no cloud credentials are required.

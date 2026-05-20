@@ -1,6 +1,6 @@
 # AI Solution Engineering Platform
 
-Reusable FastAPI foundation for AI solution engineering work. The template keeps the app shell, security baseline, local data services, and feedback/evaluation capture points clean so project-specific AI product code can be added without inheriting old business coupling.
+Reusable FastAPI foundation for AI solution engineering work. The template keeps the app shell, security baseline, and local data services clean so project-specific AI product code can be added without inheriting old business coupling.
 
 ## Scope
 
@@ -12,9 +12,9 @@ This repository currently covers the local application foundation:
 - Request ID middleware, logging context, and standard error envelope.
 - API key bootstrap and authentication.
 - Fixed-window rate limiting foundation.
-- Feedback capture schema and endpoint.
-- Native LangChain chat model wiring and LangGraph-ready agent runtime.
-- Prompt registry, optional LlamaIndex advanced retrieval, retrieval evaluation, usage tracking, and redaction policy.
+- Native LangChain chat model wiring and LangGraph `MessagesState` graph builder.
+- LlamaIndex advanced retrieval support code using native `Document` and
+  `NodeWithScore` primitives, retrieval smoke checks, and redaction policy.
 - Research workspace with sample datasets, artifact manifests, and smoke evals.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
@@ -44,7 +44,6 @@ Useful endpoints:
 - `GET /ready`
 - `POST /api/v1/auth/api-keys`
 - `GET /api/v1/auth/me`
-- `POST /api/v1/feedback`
 
 All `/api/v1/*` platform endpoints except health and API-key bootstrap require
 `Authorization: Bearer <api-key>`.
@@ -59,6 +58,19 @@ make docker-run
 
 The Docker path is a local golden path only. It builds the API image and runs the API, PostgreSQL, and Redis with `docker-compose.local.yaml`.
 
+To run the API with a local self-hosted Langfuse stack for AI tracing, prompt
+management, and eval scores:
+
+```bash
+cp .env.example .env
+make docker-run-langfuse
+```
+
+Langfuse is available at `http://localhost:3000`. The local project and API
+keys are bootstrapped from `.env` through Langfuse headless initialization. The
+API container uses `LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000`; host
+Python processes can use `LANGFUSE_BASE_URL=http://localhost:3000`.
+
 ## Project Layout
 
 ```text
@@ -67,13 +79,9 @@ app/
   bootstrap/            App factory and service wiring
   core/                 Settings, database, Redis, errors, logging, health
   modules/
-    agents/             Agent API schemas and LangGraph-backed runtime
-    feedback/           Feedback schema, model, and repository
+    agents/             Native LangGraph agent graph factory
     identity/           API key identity model, repository, auth dependency
-    prompts/            In-memory prompt registry and default agent prompt
-    rag/                LlamaIndex-backed knowledge ingestion and retrieval
-    evals/              Local retrieval evaluation service
-    usage/              In-memory usage/cost/latency records
+    rag/                LlamaIndex-backed retrieval support for agents
     rate_limit/         Rate limit service contracts and implementations
 alembic/                Migration environment
 research/               Datasets, evals, training templates, artifact manifests
@@ -101,19 +109,39 @@ runtime services by default; project business logic can wire LangChain,
 LangGraph, or LlamaIndex services where it actually needs them. Local research
 smoke tests still use fake/mock AI primitives outside the API app.
 
-- `CHAT_MODEL=`
+- `CHAT_PROVIDER=`
+- `CHAT_MODEL_NAME=`
+- `LANGFUSE_ENABLED=true`
+- `LANGFUSE_PUBLIC_KEY=lf_pk_local_ai_platform`
+- `LANGFUSE_SECRET_KEY=lf_sk_local_ai_platform`
+- `LANGFUSE_BASE_URL=http://localhost:3000`
 
 To use a real model, install the relevant LangChain provider package, set the
 provider's standard environment variables in your runtime, then set
-`CHAT_MODEL`. Knowledge retrieval integrations should be wired through
-LlamaIndex primitives at the `KnowledgeRetrievalService` boundary instead of
-adding a template-owned vector-store adapter.
+`CHAT_PROVIDER` and `CHAT_MODEL_NAME` to a supported pair (see
+`app/core/config.py::CHAT_MODELS_BY_PROVIDER`). Knowledge retrieval integrations should pass LlamaIndex
+`Document` objects into `KnowledgeRetrievalService` and consume retrieved
+`NodeWithScore` values instead of adding template-owned RAG schemas, rerankers,
+or vector-store adapters.
 
 App observability, experiment tracking, LLM response caching, object storage,
 and job queues are intentionally not wrapped by template adapters in this phase.
 Use the tools required by the target project directly at the module boundary.
 Database access goes through `app.core.database.DbSession`, a normal SQLAlchemy
 session dependency.
+
+Langfuse is only wired at the AI execution boundary. Use
+`build_llm_instance(..., instance_id="...", service_name="...")` to create a
+native LangChain `BaseChatModel` plus a per-instance Langfuse tracker. Pass
+`instance.trace_config(...)` into LangChain or LangGraph calls to keep parallel
+LLM services separated by instance, service, session, user, and request
+metadata.
+
+The app factory registers a FastAPI lifespan that calls
+`langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and
+`init_resources=True`, so any buffered traces from per-instance trackers are
+drained before the process exits. Tests construct the app with
+`init_resources=False`, which skips the flush hook.
 
 ## Research Workspace
 
@@ -151,23 +179,4 @@ Use the returned key with:
 ```bash
 curl http://localhost:8000/api/v1/auth/me \
   -H "Authorization: Bearer <api-key>"
-```
-
-## Feedback Capture
-
-The feedback endpoint stores lightweight records through an in-memory repository for now. The SQLAlchemy model is present so database persistence can be added later without changing the public payload contract.
-
-```bash
-curl -X POST http://localhost:8000/api/v1/feedback \
-  -H "Authorization: Bearer <api-key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "req_1",
-    "trace_id": "trace_1",
-    "target_type": "llm_response",
-    "target_id": "resp_1",
-    "rating": "negative",
-    "labels": ["hallucination"],
-    "comment": "Answer cited the wrong source"
-  }'
 ```

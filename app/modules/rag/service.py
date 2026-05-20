@@ -1,4 +1,4 @@
-import time
+from collections.abc import Sequence
 from typing import Any
 
 from llama_index.core import Document, VectorStoreIndex
@@ -7,17 +7,6 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import BaseNode, NodeWithScore
 
 from app.core.redaction import RedactionPolicy
-from app.modules.rag.reranking import ScoreReranker
-from app.modules.rag.schemas import (
-    RagDocument,
-    RagIndexRequest,
-    RagIndexResponse,
-    RagSearchMatch,
-    RagSearchRequest,
-    RagSearchResponse,
-)
-from app.modules.usage.schemas import UsageRecord
-from app.modules.usage.tracker import InMemoryUsageTracker
 
 
 def build_rag_node_parser(*, chunk_size: int, chunk_overlap: int) -> SentenceSplitter:
@@ -38,22 +27,19 @@ class KnowledgeRetrievalService:
         *,
         embed_model: BaseEmbedding,
         node_parser: SentenceSplitter,
-        usage_tracker: InMemoryUsageTracker,
         redaction_policy: RedactionPolicy,
     ) -> None:
         self.embed_model = embed_model
         self.node_parser = node_parser
-        self.usage_tracker = usage_tracker
         self.redaction_policy = redaction_policy
-        self.reranker = ScoreReranker()
         self.index_store: VectorStoreIndex | None = None
         self._documents: dict[str, Document] = {}
 
-    async def index(self, request: RagIndexRequest) -> RagIndexResponse:
-        started_at = time.perf_counter()
-        documents = [
-            self._to_llamaindex_document(document) for document in request.documents
-        ]
+    async def index(self, documents: Sequence[Document]) -> dict[str, int]:
+        if not documents:
+            raise ValueError("documents must not be empty")
+
+        documents = [self._redact_document(document) for document in documents]
         for document in documents:
             self._documents[document.id_] = document
 
@@ -63,20 +49,7 @@ class KnowledgeRetrievalService:
             transformations=[self.node_parser],
             embed_model=self.embed_model,
         )
-        await self.usage_tracker.record(
-            UsageRecord(
-                operation="rag.index",
-                provider="llamaindex",
-                model=self._embedding_model_name(),
-                latency_ms=(time.perf_counter() - started_at) * 1000,
-                estimated_cost=0.0,
-                metadata={"chunk_count": len(chunks)},
-            )
-        )
-        return RagIndexResponse(
-            indexed_count=len(request.documents),
-            chunk_count=len(chunks),
-        )
+        return {"indexed_count": len(documents), "chunk_count": len(chunks)}
 
     async def search(
         self,
@@ -84,52 +57,32 @@ class KnowledgeRetrievalService:
         *,
         top_k: int = 5,
         filters: dict[str, str | int | float | bool] | None = None,
-    ) -> RagSearchResponse:
-        started_at = time.perf_counter()
-        matches: list[RagSearchMatch] = []
-        if self.index_store is not None:
-            retriever = self.index_store.as_retriever(
-                similarity_top_k=max(top_k, top_k * 4 if filters else top_k),
-            )
-            retrieved = await retriever.aretrieve(query)
-            matches = [
-                self._search_match(node)
-                for node in retrieved
-                if self._matches_filters(node.node.metadata, filters or {})
-            ][:top_k]
+    ) -> list[NodeWithScore]:
+        if self.index_store is None:
+            return []
 
-        reranked_matches = self.reranker.rerank(matches)
-        await self.usage_tracker.record(
-            UsageRecord(
-                operation="rag.search",
-                provider="llamaindex",
-                model=self._embedding_model_name(),
-                latency_ms=(time.perf_counter() - started_at) * 1000,
-                estimated_cost=0.0,
-                metadata={"top_k": top_k, "match_count": len(reranked_matches)},
-            )
+        retriever = self.index_store.as_retriever(
+            similarity_top_k=max(top_k, top_k * 4 if filters else top_k),
         )
-        return RagSearchResponse(matches=reranked_matches)
+        retrieved = await retriever.aretrieve(query)
+        return [
+            node
+            for node in retrieved
+            if self._matches_filters(node.node.metadata, filters or {})
+        ][:top_k]
 
-    async def search_request(self, request: RagSearchRequest) -> RagSearchResponse:
-        return await self.search(
-            request.query,
-            top_k=request.top_k,
-            filters=request.filters,
-        )
-
-    def _to_llamaindex_document(self, document: RagDocument) -> Document:
+    def _redact_document(self, document: Document) -> Document:
         metadata = self._redact_metadata(document.metadata)
-        metadata["document_id"] = document.id
+        metadata["document_id"] = document.id_
         return Document(
             text=self.redaction_policy.redact_text(document.text),
-            id_=document.id,
+            id_=document.id_,
             metadata=metadata,
         )
 
     def _redact_metadata(
         self,
-        metadata: dict[str, str | int | float | bool],
+        metadata: dict[str, Any],
     ) -> dict[str, str | int | float | bool]:
         redacted = self.redaction_policy.redact_mapping(metadata)
         return {
@@ -138,39 +91,9 @@ class KnowledgeRetrievalService:
             if isinstance(value, str | int | float | bool)
         }
 
-    def _search_match(self, node: NodeWithScore) -> RagSearchMatch:
-        metadata = self._node_metadata(node.node)
-        return RagSearchMatch(
-            chunk_id=str(metadata["chunk_id"]),
-            document_id=str(metadata["document_id"]),
-            text=node.node.text or "",
-            score=float(node.score or 0.0),
-            metadata=metadata,
-        )
-
-    def _node_metadata(
-        self,
-        node: BaseNode,
-    ) -> dict[str, str | int | float | bool]:
-        metadata = {
-            key: value
-            for key, value in node.metadata.items()
-            if isinstance(value, str | int | float | bool)
-        }
-        metadata["chunk_id"] = node.node_id
-        metadata["document_id"] = str(
-            metadata.get("document_id") or node.ref_doc_id or ""
-        )
-        return metadata
-
     def _matches_filters(
         self,
         metadata: dict[str, Any],
         filters: dict[str, str | int | float | bool],
     ) -> bool:
         return all(metadata.get(key) == value for key, value in filters.items())
-
-    def _embedding_model_name(self) -> str:
-        return str(
-            getattr(self.embed_model, "model_name", type(self.embed_model).__name__)
-        )
