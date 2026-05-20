@@ -7,4 +7,5 @@ from app.core.config import Settings
 def build_api_router(settings: Settings) -> APIRouter:
     router = APIRouter()
     router.include_router(health_router)
+    router.include_router(health_router, prefix=settings.API_V1_PREFIX)
     return router
