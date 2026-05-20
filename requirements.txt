@@ -1,6 +1,7 @@
 aiofiles
 alembic
 asyncmy
+asyncpg
 bcrypt
 cachetools
 fastapi
@@ -16,5 +17,6 @@ pydantic-settings
 python-dotenv
 python-jose
 python-multipart
+redis
 sqlalchemy
 uvicorn

@@ -89,3 +89,7 @@ Key environment variables include:
 - `DATABASE_URL`: Database connection string
 - `SECRET_KEY`: Secret key for token signing
 - `ENVIRONMENT`: Development/staging/production
+
+## Secrets
+
+Copy `.env.example` to `.env` for local development. Keep real secrets in environment variables or your team's secret manager, not in Git. The template does not include Vault, cloud secret manager, or organization-specific secret workflows by default.
