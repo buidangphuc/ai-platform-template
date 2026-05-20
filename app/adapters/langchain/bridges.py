@@ -1,6 +1,12 @@
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from app.contracts.embeddings import EmbeddingRequest, EmbeddingResponse, EmbeddingUsage
 from app.contracts.llm import (
@@ -21,10 +27,16 @@ class LangChainLLMClient:
         response = await self.chat_model.ainvoke(
             [self._to_langchain_message(message) for message in request.messages]
         )
-        usage = response.usage_metadata or {}
-        response_metadata = response.response_metadata or {}
+        usage = getattr(response, "usage_metadata", None) or {}
+        response_metadata = getattr(response, "response_metadata", None) or {}
+        content = self._message_content(response)
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+        if total_tokens == 0 and input_tokens == 0 and output_tokens == 0:
+            output_tokens = self._count_tokens(content)
         return LLMResponse(
-            content=str(response.content),
+            content=content,
             model=str(
                 response_metadata.get("model_name")
                 or request.model
@@ -32,9 +44,9 @@ class LangChainLLMClient:
             ),
             finish_reason=response_metadata.get("finish_reason"),
             usage=TokenUsage(
-                input_tokens=int(usage.get("input_tokens", 0) or 0),
-                output_tokens=int(usage.get("output_tokens", 0) or 0),
-                total_tokens=int(usage.get("total_tokens", 0) or 0),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
             ),
             tool_calls=[
                 LLMToolCall(
@@ -59,6 +71,20 @@ class LangChainLLMClient:
                 name=message.name,
             )
         return HumanMessage(content=message.content, name=message.name)
+
+    def _message_content(self, message: BaseMessage) -> str:
+        content = message.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                str(item.get("text", item)) if isinstance(item, dict) else str(item)
+                for item in content
+            )
+        return str(content)
+
+    def _count_tokens(self, content: str) -> int:
+        return max(1, len(content.split())) if content else 0
 
 
 class LangChainEmbeddingClient:

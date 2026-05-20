@@ -193,6 +193,8 @@ class RagService:
         )
         if total_tokens and not input_tokens and not output_tokens:
             output_tokens = total_tokens
+        if not total_tokens and not input_tokens and not output_tokens:
+            output_tokens = self._count_tokens(self._message_content(message))
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -218,3 +220,6 @@ class RagService:
                     parts.append(str(item))
             return "".join(parts)
         return str(content)
+
+    def _count_tokens(self, content: str) -> int:
+        return max(1, len(content.split())) if content else 0

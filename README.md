@@ -104,10 +104,12 @@ Copy `.env.example` to `.env` for local development. Keep real secrets in enviro
 
 ## Adapter Defaults
 
-The template boots without cloud credentials. Default providers are fake/local:
+The template boots without cloud credentials. LangChain is the default AI runtime;
+when model names are blank, the app uses LangChain Core local fake chat and
+embedding classes for tests and smoke runs:
 
-- `LLM_PROVIDER=fake`
-- `EMBEDDING_PROVIDER=fake`
+- `CHAT_MODEL=`
+- `EMBEDDING_MODEL=`
 - `VECTOR_STORE=in_memory`
 - `STORAGE_BACKEND=local`
 - `JOB_BACKEND=in_process`
@@ -116,7 +118,11 @@ The template boots without cloud credentials. Default providers are fake/local:
 - `AGENT_RUNTIME=simple`
 - `EXPERIMENT_TRACKER_BACKEND=local`
 
-To use an OpenAI-compatible API, set `LLM_PROVIDER=openai_compatible` or `EMBEDDING_PROVIDER=openai_compatible`, then provide `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY` if that endpoint requires one, and the model setting. `OPENAI_API_KEY` and `OPENAI_BASE_URL` remain supported as OpenAI defaults. The LLM cache wrapper is always wired, but `LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy can be added later without changing call sites.
+To use a real model, install the relevant LangChain provider package, set the
+provider's standard environment variables in your runtime, then set
+`CHAT_MODEL` and `EMBEDDING_MODEL`. The LLM cache wrapper is always wired, but
+`LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy
+can be added later without changing call sites.
 
 The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. Set `OBSERVABILITY_BACKEND=otel_debug` and `OTEL_EXPORTER_OTLP_ENDPOINT` to emit OpenTelemetry-style debug records through the app adapter without coupling app code to Grafana, Datadog, Phoenix, or a custom collector.
 

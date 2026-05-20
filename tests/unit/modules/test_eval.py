@@ -1,11 +1,11 @@
 from typing import Any
 
+from langchain_core.embeddings.fake import DeterministicFakeEmbedding
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from app.adapters.langchain.chat_models import TemplateFakeChatModel
-from app.adapters.langchain.embeddings import TemplateFakeEmbeddings
 from app.adapters.observability.debug import DebugObservability
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.core.redaction import RedactionPolicy
@@ -44,9 +44,9 @@ class WrongAnswerChatModel(BaseChatModel):
 
 async def test_rag_eval_service_scores_keyword_hits_against_sources():
     rag = RagService(
-        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=8),
+        embeddings=DeterministicFakeEmbedding(size=8),
         vector_store=InMemoryVectorStore(),
-        chat_model=TemplateFakeChatModel(model_name="fake-chat"),
+        chat_model=ParrotFakeChatModel(),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),
         chunker=TextChunker(chunk_size=32, overlap=0),
         usage_tracker=InMemoryUsageTracker(),
@@ -84,7 +84,7 @@ async def test_rag_eval_service_scores_keyword_hits_against_sources():
 
 async def test_rag_eval_service_scores_generated_answer_not_only_sources():
     rag = RagService(
-        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=8),
+        embeddings=DeterministicFakeEmbedding(size=8),
         vector_store=InMemoryVectorStore(),
         chat_model=WrongAnswerChatModel(),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),

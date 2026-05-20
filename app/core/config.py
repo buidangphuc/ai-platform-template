@@ -37,17 +37,8 @@ class Settings(BaseSettings):
     OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
     TRACE_CONTENT: Literal["off", "redacted", "full"] = "redacted"
 
-    OPENAI_API_KEY: str = ""
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
-    OPENAI_COMPATIBLE_API_KEY: str = ""
-    OPENAI_COMPATIBLE_BASE_URL: str = ""
     CHAT_MODEL: str = ""
-    CHAT_MODEL_PROVIDER: str = ""
-    LLM_PROVIDER: Literal["fake", "openai_compatible", "langchain"] = "fake"
-    LLM_MODEL: str = "fake-chat"
-    EMBEDDING_PROVIDER: Literal["fake", "openai_compatible"] = "fake"
-    EMBEDDING_MODEL: str = "fake-embedding"
-    FAKE_EMBEDDING_DIMENSIONS: int = 16
+    EMBEDDING_MODEL: str = ""
     VECTOR_STORE: Literal["in_memory"] = "in_memory"
     STORAGE_BACKEND: Literal["local"] = "local"
     LOCAL_STORAGE_ROOT: str = ".local/storage"
@@ -68,13 +59,6 @@ class Settings(BaseSettings):
     def validate_default_rate_limit_per_minute(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("DEFAULT_RATE_LIMIT_PER_MINUTE must be positive")
-        return value
-
-    @field_validator("FAKE_EMBEDDING_DIMENSIONS")
-    @classmethod
-    def validate_fake_embedding_dimensions(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("FAKE_EMBEDDING_DIMENSIONS must be positive")
         return value
 
     @field_validator("RAG_CHUNK_SIZE")
@@ -106,8 +90,6 @@ class Settings(BaseSettings):
 
     def _redacted_value(self, key: str, value: object) -> object:
         visible_names = {
-            "LLM_PROVIDER",
-            "EMBEDDING_PROVIDER",
             "VECTOR_STORE",
             "STORAGE_BACKEND",
             "JOB_BACKEND",

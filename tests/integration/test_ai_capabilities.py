@@ -38,7 +38,7 @@ async def test_rag_index_search_and_answer_endpoints(client, auth_headers):
     assert search.status_code == 200
     assert search.json()["matches"][0]["document_id"] == "doc-1"
     assert answer.status_code == 200
-    assert answer.json()["answer"].startswith("fake-chat response:")
+    assert "What does phase three add?" in answer.json()["answer"]
 
 
 async def test_agent_and_eval_endpoints(client, auth_headers):

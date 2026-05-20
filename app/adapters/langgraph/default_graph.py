@@ -57,6 +57,8 @@ def _usage_metadata(message: BaseMessage) -> dict[str, int]:
     total_tokens = int(raw_usage.get("total_tokens") or input_tokens + output_tokens)
     if total_tokens and not input_tokens and not output_tokens:
         output_tokens = total_tokens
+    if not total_tokens and not input_tokens and not output_tokens:
+        output_tokens = _count_tokens(_message_content(message))
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -84,3 +86,7 @@ def _message_content(message: BaseMessage) -> str:
                 parts.append(str(item))
         return "".join(parts)
     return str(content)
+
+
+def _count_tokens(content: str) -> int:
+    return max(1, len(content.split())) if content else 0

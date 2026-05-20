@@ -1,7 +1,7 @@
+from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
 from langchain_core.runnables import Runnable
 
-from app.adapters.langchain.chat_models import TemplateFakeChatModel
-from app.adapters.langchain.embeddings import TemplateFakeEmbeddings
 from app.adapters.observability.debug import DebugObservability
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.core.redaction import RedactionPolicy
@@ -14,9 +14,9 @@ from app.modules.usage.tracker import InMemoryUsageTracker
 
 def build_rag_service() -> RagService:
     return RagService(
-        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=8),
+        embeddings=DeterministicFakeEmbedding(size=8),
         vector_store=InMemoryVectorStore(),
-        chat_model=TemplateFakeChatModel(model_name="fake-chat"),
+        chat_model=ParrotFakeChatModel(),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),
         chunker=TextChunker(chunk_size=8, overlap=2),
         usage_tracker=InMemoryUsageTracker(),
@@ -46,7 +46,7 @@ async def test_rag_service_indexes_searches_and_answers_with_fake_adapters():
 
     assert search.matches[0].document_id == "doc-1"
     assert "adapter contracts" in search.matches[0].text
-    assert answer.answer.startswith("fake-chat response:")
+    assert "What makes provider swaps safer?" in answer.answer
     assert answer.sources[0].document_id == "doc-1"
     assert answer.usage.total_tokens > 0
     assert service.usage_tracker.records

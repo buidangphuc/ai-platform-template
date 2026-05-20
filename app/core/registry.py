@@ -7,8 +7,11 @@ from app.adapters.agents.langgraph import LangGraphAgentRuntime
 from app.adapters.agents.simple import SimpleAgentRuntime
 from app.adapters.jobs.in_process import InProcessJobQueue
 from app.adapters.langchain.bridges import LangChainEmbeddingClient, LangChainLLMClient
-from app.adapters.langchain.chat_models import build_chat_model
-from app.adapters.langchain.embeddings import build_embeddings
+from app.adapters.langchain.chat_models import LOCAL_CHAT_MODEL_NAME, build_chat_model
+from app.adapters.langchain.embeddings import (
+    LOCAL_EMBEDDING_MODEL_NAME,
+    build_embeddings,
+)
 from app.adapters.llm.cached import CachedLLMClient
 from app.adapters.llm_cache.noop import NoOpLLMResponseCache
 from app.adapters.mlops.local_tracker import LocalExperimentTracker
@@ -53,14 +56,14 @@ def build_runtime_adapters(
     langchain_embeddings = _build_langchain_embeddings(settings)
     base_llm = LangChainLLMClient(
         chat_model=chat_model,
-        default_model=settings.CHAT_MODEL or settings.LLM_MODEL,
+        default_model=settings.CHAT_MODEL or LOCAL_CHAT_MODEL_NAME,
     )
     llm = CachedLLMClient(
-        provider=settings.LLM_PROVIDER,
+        provider="langchain",
         client=base_llm,
         cache=llm_cache,
         enabled=settings.LLM_CACHE_ENABLED,
-        default_model=settings.LLM_MODEL,
+        default_model=settings.CHAT_MODEL or LOCAL_CHAT_MODEL_NAME,
     )
     observability = _build_observability(settings)
     return RuntimeAdapters(
@@ -68,7 +71,7 @@ def build_runtime_adapters(
         chat_model=chat_model,
         embeddings=LangChainEmbeddingClient(
             embeddings=langchain_embeddings,
-            default_model=settings.EMBEDDING_MODEL,
+            default_model=settings.EMBEDDING_MODEL or LOCAL_EMBEDDING_MODEL_NAME,
         ),
         langchain_embeddings=langchain_embeddings,
         vector_store=_build_vector_store(settings),
@@ -87,22 +90,10 @@ def build_runtime_adapters(
 
 
 def _build_chat_model(settings: Settings) -> BaseChatModel:
-    if settings.LLM_PROVIDER == "openai_compatible":
-        _require_openai_compatible_api_key(
-            api_key=_openai_compatible_api_key(settings),
-            base_url=_openai_compatible_base_url(settings),
-            setting_name="LLM_PROVIDER",
-        )
     return build_chat_model(settings)
 
 
 def _build_langchain_embeddings(settings: Settings) -> Embeddings:
-    if settings.EMBEDDING_PROVIDER == "openai_compatible":
-        _require_openai_compatible_api_key(
-            api_key=_openai_compatible_api_key(settings),
-            base_url=_openai_compatible_base_url(settings),
-            setting_name="EMBEDDING_PROVIDER",
-        )
     return build_embeddings(settings)
 
 
@@ -170,28 +161,3 @@ def _build_experiment_tracker(settings: Settings) -> ExperimentTracker:
     raise ValueError(
         f"Unsupported EXPERIMENT_TRACKER_BACKEND: {settings.EXPERIMENT_TRACKER_BACKEND}"
     )
-
-
-def _openai_compatible_api_key(settings: Settings) -> str:
-    return settings.OPENAI_COMPATIBLE_API_KEY or settings.OPENAI_API_KEY
-
-
-def _openai_compatible_base_url(settings: Settings) -> str:
-    return settings.OPENAI_COMPATIBLE_BASE_URL or settings.OPENAI_BASE_URL
-
-
-def _require_openai_compatible_api_key(
-    *,
-    api_key: str,
-    base_url: str,
-    setting_name: str,
-) -> None:
-    if _is_openai_host(base_url) and not api_key:
-        raise ValueError(
-            f"OPENAI_API_KEY or OPENAI_COMPATIBLE_API_KEY is required when "
-            f"{setting_name}=openai_compatible against api.openai.com",
-        )
-
-
-def _is_openai_host(base_url: str) -> bool:
-    return "api.openai.com" in base_url

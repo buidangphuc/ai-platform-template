@@ -116,12 +116,12 @@ Provider configuration should use LangChain conventions where possible:
 
 ```env
 CHAT_MODEL=openai:gpt-4.1-mini
-CHAT_MODEL_PROVIDER=
 EMBEDDING_MODEL=openai:text-embedding-3-small
-EMBEDDING_MODEL_PROVIDER=
 ```
 
-Exact model/provider naming should follow LangChain's `init_chat_model` and provider package conventions. Provider-specific API keys stay in environment variables expected by the relevant provider package.
+Exact model naming should follow LangChain's `init_chat_model` and `init_embeddings`
+conventions. Provider-specific API keys stay in environment variables expected by
+the relevant provider package.
 
 ## 8. Prompt Convention
 

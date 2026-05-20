@@ -1,8 +1,8 @@
 import pytest
+from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
 
 from app.adapters.agents.langgraph import LangGraphAgentRuntime
 from app.adapters.agents.simple import SimpleAgentRuntime
-from app.adapters.langchain.chat_models import TemplateFakeChatModel
 from app.adapters.observability.debug import DebugObservability
 from app.contracts.agents import AgentRequest
 from app.core.redaction import RedactionPolicy
@@ -12,7 +12,7 @@ from app.modules.usage.tracker import InMemoryUsageTracker
 async def test_simple_agent_runtime_runs_task_with_llm_and_events():
     usage_tracker = InMemoryUsageTracker()
     runtime = SimpleAgentRuntime(
-        chat_model=TemplateFakeChatModel(model_name="fake-chat"),
+        chat_model=ParrotFakeChatModel(),
         observability=DebugObservability(),
         redaction_policy=RedactionPolicy(mode="redacted"),
         usage_tracker=usage_tracker,
@@ -26,7 +26,7 @@ async def test_simple_agent_runtime_runs_task_with_llm_and_events():
     )
 
     assert response.status == "completed"
-    assert response.output["content"].startswith("fake-chat response:")
+    assert "Summarize status" in response.output["content"]
     assert [event.name for event in response.events] == ["llm.request", "llm.response"]
     assert usage_tracker.records[0].operation == "agent.run"
     assert runtime.graph is not None

@@ -22,9 +22,8 @@ def test_settings_defaults_are_local_safe():
     assert settings.API_V1_PREFIX == "/api/v1"
     assert settings.POSTGRES_URL.startswith("postgresql+asyncpg://")
     assert settings.TRACE_CONTENT == "redacted"
-    assert settings.OPENAI_BASE_URL == "https://api.openai.com/v1"
-    assert settings.LLM_MODEL == "fake-chat"
-    assert settings.EMBEDDING_MODEL == "fake-embedding"
+    assert settings.CHAT_MODEL == ""
+    assert settings.EMBEDDING_MODEL == ""
     assert settings.LLM_CACHE_BACKEND == "noop"
     assert settings.LLM_CACHE_ENABLED is False
     assert settings.OBSERVABILITY_BACKEND == "debug"
@@ -50,7 +49,7 @@ def test_settings_redacts_secret_values():
         REDIS_DATABASE=0,
         API_KEY_PEPPER="pepper-secret",  # pragma: allowlist secret
         API_KEY_BOOTSTRAP_TOKEN="bootstrap-secret",  # pragma: allowlist secret
-        OPENAI_API_KEY="sk-test",  # pragma: allowlist secret
+        FUTURE_SERVICE_API_KEY="sk-test",  # pragma: allowlist secret
     )
 
     summary = settings.redacted_summary()
@@ -58,7 +57,6 @@ def test_settings_redacts_secret_values():
     assert summary["REDIS_PASSWORD"] == "***"
     assert summary["API_KEY_PEPPER"] == "***"
     assert summary["API_KEY_BOOTSTRAP_TOKEN"] == "***"
-    assert summary["OPENAI_API_KEY"] == "***"
     assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
 
@@ -86,7 +84,7 @@ def test_redacted_summary_redacts_secret_like_future_fields():
         )
         == "***"
     )
-    assert settings._redacted_value("LLM_PROVIDER", "fake") == "fake"
+    assert settings._redacted_value("VECTOR_STORE", "in_memory") == "in_memory"
 
 
 def test_default_rate_limit_per_minute_must_be_positive():
@@ -107,7 +105,7 @@ def test_default_rate_limit_per_minute_must_be_positive():
             )
 
 
-def test_settings_accepts_langchain_chat_model_provider():
+def test_settings_keeps_model_selection_minimal():
     settings = Settings(
         ENVIRONMENT="test",
         POSTGRES_HOST="localhost",
@@ -119,11 +117,13 @@ def test_settings_accepts_langchain_chat_model_provider():
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
         API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
-        LLM_PROVIDER="langchain",
         CHAT_MODEL="gpt-test",
-        CHAT_MODEL_PROVIDER="openai",
+        EMBEDDING_MODEL="text-embedding-test",
     )
 
-    assert settings.LLM_PROVIDER == "langchain"
     assert settings.CHAT_MODEL == "gpt-test"
-    assert settings.CHAT_MODEL_PROVIDER == "openai"
+    assert settings.EMBEDDING_MODEL == "text-embedding-test"
+    assert "LLM_PROVIDER" not in Settings.model_fields
+    assert "EMBEDDING_PROVIDER" not in Settings.model_fields
+    assert "CHAT_MODEL_PROVIDER" not in Settings.model_fields
+    assert "FAKE_EMBEDDING_DIMENSIONS" not in Settings.model_fields

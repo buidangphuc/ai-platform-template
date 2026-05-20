@@ -4,8 +4,9 @@ import json
 import sys
 from pathlib import Path
 
-from app.adapters.langchain.chat_models import TemplateFakeChatModel
-from app.adapters.langchain.embeddings import TemplateFakeEmbeddings
+from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+from langchain_core.language_models.fake_chat_models import ParrotFakeChatModel
+
 from app.adapters.mlops.local_tracker import LocalExperimentTracker
 from app.adapters.observability.debug import DebugObservability
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
@@ -36,9 +37,9 @@ async def run_smoke(
         if line.strip()
     ]
     rag_service = RagService(
-        embeddings=TemplateFakeEmbeddings(model="fake-embedding", dimensions=16),
+        embeddings=DeterministicFakeEmbedding(size=16),
         vector_store=InMemoryVectorStore(),
-        chat_model=TemplateFakeChatModel(model_name="fake-chat"),
+        chat_model=ParrotFakeChatModel(),
         prompt_registry=InMemoryPromptRegistry.with_defaults(),
         chunker=TextChunker(chunk_size=64, overlap=8),
         usage_tracker=InMemoryUsageTracker(),
