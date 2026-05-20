@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Header, Request, Response, status
 
+from app.core.errors import AppError
 from app.core.security import create_api_key, hash_api_key
 from app.modules.identity.auth import authenticate_api_key, validate_bootstrap_token
 from app.modules.identity.repository import ApiKeyRepository
@@ -47,4 +48,11 @@ async def me(request: Request):
         settings=request.app.state.settings,
         repository=_repository(request),
     )
+    rate_limit = await request.app.state.rate_limiter.check(principal.api_key_id)
+    if not rate_limit.allowed:
+        raise AppError(
+            code="rate_limit_exceeded",
+            message="Rate limit exceeded",
+            status_code=429,
+        )
     return principal

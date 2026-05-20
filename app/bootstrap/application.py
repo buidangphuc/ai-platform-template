@@ -7,6 +7,7 @@ from app.core.health import HealthService
 from app.core.logging import configure_logging
 from app.core.request_context import RequestIdMiddleware
 from app.modules.identity.repository import ApiKeyRepository
+from app.modules.rate_limit.service import InMemoryRateLimiter
 
 
 def create_app(
@@ -26,6 +27,9 @@ def create_app(
         check_external_dependencies=init_resources,
     )
     app.state.api_key_repository = ApiKeyRepository()
+    app.state.rate_limiter = InMemoryRateLimiter(
+        limit=resolved_settings.DEFAULT_RATE_LIMIT_PER_MINUTE,
+    )
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
     app.include_router(build_api_router(resolved_settings))
