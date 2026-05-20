@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     OBSERVABILITY_BACKEND: Literal["debug"] = "debug"
     LLM_CACHE_BACKEND: Literal["noop"] = "noop"
     LLM_CACHE_ENABLED: bool = False
+    AGENT_RUNTIME: Literal["simple", "langgraph"] = "simple"
+    RAG_CHUNK_SIZE: int = 512
+    RAG_CHUNK_OVERLAP: int = 64
 
     @field_validator("DEFAULT_RATE_LIMIT_PER_MINUTE")
     @classmethod
@@ -64,6 +67,20 @@ class Settings(BaseSettings):
     def validate_fake_embedding_dimensions(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("FAKE_EMBEDDING_DIMENSIONS must be positive")
+        return value
+
+    @field_validator("RAG_CHUNK_SIZE")
+    @classmethod
+    def validate_rag_chunk_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("RAG_CHUNK_SIZE must be positive")
+        return value
+
+    @field_validator("RAG_CHUNK_OVERLAP")
+    @classmethod
+    def validate_rag_chunk_overlap(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("RAG_CHUNK_OVERLAP must be non-negative")
         return value
 
     @computed_field
@@ -88,6 +105,7 @@ class Settings(BaseSettings):
             "JOB_BACKEND",
             "OBSERVABILITY_BACKEND",
             "LLM_CACHE_BACKEND",
+            "AGENT_RUNTIME",
         }
         if key in visible_names or not value:
             return value

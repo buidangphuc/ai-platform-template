@@ -15,6 +15,7 @@ This repository currently covers the local application foundation:
 - Feedback capture schema and endpoint.
 - Adapter contracts for LLM, embeddings, vector store, storage, jobs, observability, and LLM response caching.
 - Fake/local default adapters for local development and tests.
+- Prompt registry, RAG, RAG evaluation, usage tracking, redaction policy, and simple agent runtime.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
 
@@ -44,6 +45,11 @@ Useful endpoints:
 - `POST /api/v1/auth/api-keys`
 - `GET /api/v1/auth/me`
 - `POST /api/v1/feedback`
+- `POST /api/v1/rag/index`
+- `POST /api/v1/rag/search`
+- `POST /api/v1/rag/answer`
+- `POST /api/v1/evals/rag`
+- `POST /api/v1/agents/run`
 
 ## Docker
 
@@ -67,6 +73,10 @@ app/
   modules/
     feedback/           Feedback schema, model, and repository
     identity/           API key identity model, repository, auth dependency
+    prompts/            In-memory prompt registry and default RAG prompt
+    rag/                Chunking, ingestion, retrieval, answer generation
+    evals/              Local RAG evaluation service
+    usage/              In-memory usage/cost/latency records
     rate_limit/         Rate limit service contracts and implementations
 alembic/                Migration environment
 scripts/                Local helper scripts
@@ -97,10 +107,27 @@ The template boots without cloud credentials. Default providers are fake/local:
 - `JOB_BACKEND=in_process`
 - `OBSERVABILITY_BACKEND=debug`
 - `LLM_CACHE_BACKEND=noop`
+- `AGENT_RUNTIME=simple`
 
 To use an OpenAI-compatible API, set `LLM_PROVIDER=openai_compatible` or `EMBEDDING_PROVIDER=openai_compatible`, then provide `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and the model setting. The LLM cache wrapper is always wired, but `LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy can be added later without changing call sites.
 
 The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. It is a backend-neutral smoke profile for teams that want to validate telemetry before wiring Grafana, Datadog, Phoenix, or a custom collector.
+
+## AI Capability Smoke
+
+The Phase 3 app includes local-only AI capability endpoints backed by fake/local adapters:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/rag/index \
+  -H "Content-Type: application/json" \
+  -d '{"documents":[{"id":"doc-1","text":"Phase three adds RAG support."}]}'
+
+curl -X POST http://localhost:8000/api/v1/rag/answer \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What does phase three add?","top_k":1}'
+```
+
+`AGENT_RUNTIME=simple` uses the configured LLM adapter. `AGENT_RUNTIME=langgraph` is import-safe but intentionally requires a downstream project to provide a LangGraph runner.
 
 ## API Key Bootstrap
 

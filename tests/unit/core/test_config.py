@@ -29,6 +29,9 @@ def test_settings_defaults_are_local_safe():
     assert settings.LLM_CACHE_ENABLED is False
     assert settings.OBSERVABILITY_BACKEND == "debug"
     assert settings.LOCAL_STORAGE_ROOT == ".local/storage"
+    assert settings.AGENT_RUNTIME == "simple"
+    assert settings.RAG_CHUNK_SIZE == 512
+    assert settings.RAG_CHUNK_OVERLAP == 64
 
 
 def test_settings_redacts_secret_values():
