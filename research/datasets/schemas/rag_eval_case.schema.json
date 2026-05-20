@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RAG evaluation case",
+  "type": "object",
+  "required": ["id", "question", "documents", "expected_keywords"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1
+    },
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "text"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "expected_keywords": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

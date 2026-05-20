@@ -32,6 +32,9 @@ def test_settings_defaults_are_local_safe():
     assert settings.AGENT_RUNTIME == "simple"
     assert settings.RAG_CHUNK_SIZE == 512
     assert settings.RAG_CHUNK_OVERLAP == 64
+    assert settings.EXPERIMENT_TRACKER_BACKEND == "local"
+    assert settings.LOCAL_EXPERIMENT_TRACKER_ROOT == "research/experiments/local"
+    assert settings.MLFLOW_EXPERIMENT_NAME == "ai-platform-template"
 
 
 def test_settings_redacts_secret_values():

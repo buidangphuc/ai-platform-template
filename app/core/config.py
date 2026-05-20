@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     AGENT_RUNTIME: Literal["simple", "langgraph"] = "simple"
     RAG_CHUNK_SIZE: int = 512
     RAG_CHUNK_OVERLAP: int = 64
+    EXPERIMENT_TRACKER_BACKEND: Literal["local", "mlflow"] = "local"
+    LOCAL_EXPERIMENT_TRACKER_ROOT: str = "research/experiments/local"
+    MLFLOW_TRACKING_URI: str = "file:./research/experiments/mlruns"
+    MLFLOW_EXPERIMENT_NAME: str = "ai-platform-template"
 
     @field_validator("DEFAULT_RATE_LIMIT_PER_MINUTE")
     @classmethod
@@ -106,6 +110,7 @@ class Settings(BaseSettings):
             "OBSERVABILITY_BACKEND",
             "LLM_CACHE_BACKEND",
             "AGENT_RUNTIME",
+            "EXPERIMENT_TRACKER_BACKEND",
         }
         if key in visible_names or not value:
             return value

@@ -373,6 +373,7 @@ dev = [
     { name = "pyink" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 
@@ -410,6 +411,7 @@ dev = [
     { name = "pyink", specifier = ">=24.10.1,<25.0.0" },
     { name = "pytest", specifier = ">=8.3.5,<9.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.25.3,<0.26.0" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7.0.0" },
     { name = "ruff", specifier = ">=0.11.2,<0.12.0" },
 ]
 

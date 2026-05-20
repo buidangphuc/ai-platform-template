@@ -8,6 +8,7 @@ alembic/versions/
 static/media/
 .ruff_cache/
 .pytest_cache/
+.uv-cache/
 .python-version
 .local/
 
@@ -18,5 +19,11 @@ static/media/
 logs/
 
 data/
+
+research/experiments/local/
+research/experiments/mlruns/
+research/evaluation/reports/*
+!research/evaluation/reports/.gitkeep
+research/artifacts/sample_model_manifest.yaml
 
 fastapi_template

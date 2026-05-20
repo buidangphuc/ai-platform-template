@@ -3,6 +3,7 @@ import pytest
 from app.adapters.embeddings.fake import FakeEmbeddingClient
 from app.adapters.llm.cached import CachedLLMClient
 from app.adapters.llm_cache.noop import NoOpLLMResponseCache
+from app.adapters.mlops.local_tracker import LocalExperimentTracker
 from app.adapters.storage.local import LocalObjectStorage
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.bootstrap.application import create_app
@@ -18,6 +19,7 @@ def test_registry_builds_local_default_adapters(test_settings: Settings):
     assert isinstance(adapters.vector_store, InMemoryVectorStore)
     assert isinstance(adapters.storage, LocalObjectStorage)
     assert isinstance(adapters.llm_cache, NoOpLLMResponseCache)
+    assert isinstance(adapters.experiment_tracker, LocalExperimentTracker)
 
 
 def test_registry_fails_fast_for_unknown_provider(test_settings: Settings):

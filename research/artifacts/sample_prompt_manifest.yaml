@@ -1,0 +1,21 @@
+name: rag-answer-prompt
+version: 0.1.0
+type: prompt
+owner: ai-platform
+created_at: "2026-05-20T00:00:00+00:00"
+input_schema:
+  type: object
+  required:
+    - question
+    - context
+output_schema:
+  type: object
+  required:
+    - answer
+runtime_dependencies:
+  - app.modules.prompts.registry
+  - app.modules.rag.service
+eval_report: research/evaluation/reports/rag_smoke.json
+risk_notes:
+  - Uses keyword smoke metrics only; replace with task-specific evals before production.
+artifact_uri: app/modules/prompts/registry.py

@@ -1,13 +1,15 @@
 .PHONY: dev test eval-smoke docker-build docker-run hygiene
 
+UV_CACHE_DIR ?= .uv-cache
+
 dev:
-	uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 test:
-	uv run pytest -v
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest -v
 
 eval-smoke:
-	uv run pytest tests/integration/test_feedback.py -v
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m research.evaluation.run_rag_smoke
 
 docker-build:
 	docker build -t ai-platform-template:local .

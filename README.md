@@ -16,6 +16,7 @@ This repository currently covers the local application foundation:
 - Adapter contracts for LLM, embeddings, vector store, storage, jobs, observability, and LLM response caching.
 - Fake/local default adapters for local development and tests.
 - Prompt registry, RAG, RAG evaluation, usage tracking, redaction policy, and simple agent runtime.
+- Research workspace with sample datasets, artifact manifests, smoke evals, and local experiment tracking.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
 
@@ -79,6 +80,8 @@ app/
     usage/              In-memory usage/cost/latency records
     rate_limit/         Rate limit service contracts and implementations
 alembic/                Migration environment
+research/               Datasets, evals, training templates, artifact manifests
+ops/                    Local observability and MLOps profile examples
 scripts/                Local helper scripts
 tests/                  Unit and integration tests
 ```
@@ -88,7 +91,7 @@ tests/                  Unit and integration tests
 ```bash
 make dev          # run local API with uvicorn reload
 make test         # run full pytest suite
-make eval-smoke   # run feedback/evaluation smoke test
+make eval-smoke   # run local RAG evaluation smoke test
 make hygiene      # check stale template coupling
 ```
 
@@ -108,10 +111,32 @@ The template boots without cloud credentials. Default providers are fake/local:
 - `OBSERVABILITY_BACKEND=debug`
 - `LLM_CACHE_BACKEND=noop`
 - `AGENT_RUNTIME=simple`
+- `EXPERIMENT_TRACKER_BACKEND=local`
 
 To use an OpenAI-compatible API, set `LLM_PROVIDER=openai_compatible` or `EMBEDDING_PROVIDER=openai_compatible`, then provide `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and the model setting. The LLM cache wrapper is always wired, but `LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy can be added later without changing call sites.
 
 The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. It is a backend-neutral smoke profile for teams that want to validate telemetry before wiring Grafana, Datadog, Phoenix, or a custom collector.
+
+The default experiment tracker writes JSON records under `research/experiments/local`. The optional MLflow profile is documented in `ops/mlops/mlflow.local.env.example`; it is import-safe and only requires MLflow when a downstream project enables that adapter.
+
+## Research Workspace
+
+Phase 4 adds a local-first `research/` workspace:
+
+- `research/datasets/samples/rag_smoke.jsonl`
+- `research/datasets/schemas/rag_eval_case.schema.json`
+- `research/evaluation/run_rag_smoke.py`
+- `research/evaluation/metrics/keyword_hit_rate.py`
+- `research/training/train_template.py`
+- `research/artifacts/sample_prompt_manifest.yaml`
+
+Run the local smoke eval with:
+
+```bash
+make eval-smoke
+```
+
+The smoke command uses fake/local adapters, writes a report under `research/evaluation/reports/`, and logs a local experiment under `research/experiments/local/`. Generated reports and local tracker runs are ignored by Git.
 
 ## AI Capability Smoke
 

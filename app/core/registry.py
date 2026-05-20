@@ -9,11 +9,14 @@ from app.adapters.llm.cached import CachedLLMClient
 from app.adapters.llm.fake import FakeLLMClient
 from app.adapters.llm.openai_compatible import OpenAICompatibleLLMClient
 from app.adapters.llm_cache.noop import NoOpLLMResponseCache
+from app.adapters.mlops.local_tracker import LocalExperimentTracker
+from app.adapters.mlops.mlflow import MLflowExperimentTracker
 from app.adapters.observability.debug import DebugObservability
 from app.adapters.storage.local import LocalObjectStorage
 from app.adapters.vector_store.in_memory import InMemoryVectorStore
 from app.contracts.agents import AgentRuntime
 from app.contracts.embeddings import EmbeddingClient
+from app.contracts.experiment_tracker import ExperimentTracker
 from app.contracts.jobs import JobQueue
 from app.contracts.llm import LLMClient
 from app.contracts.llm_cache import LLMResponseCache
@@ -34,6 +37,7 @@ class RuntimeAdapters:
     observability: ObservabilityClient
     llm_cache: LLMResponseCache
     agent_runtime: AgentRuntime
+    experiment_tracker: ExperimentTracker
 
 
 def build_runtime_adapters(settings: Settings) -> RuntimeAdapters:
@@ -58,6 +62,7 @@ def build_runtime_adapters(settings: Settings) -> RuntimeAdapters:
         agent_runtime=_build_agent_runtime(
             settings, llm=llm, observability=observability
         ),
+        experiment_tracker=_build_experiment_tracker(settings),
     )
 
 
@@ -137,6 +142,19 @@ def _build_agent_runtime(
     if settings.AGENT_RUNTIME == "langgraph":
         return LangGraphAgentRuntime()
     raise ValueError(f"Unsupported AGENT_RUNTIME: {settings.AGENT_RUNTIME}")
+
+
+def _build_experiment_tracker(settings: Settings) -> ExperimentTracker:
+    if settings.EXPERIMENT_TRACKER_BACKEND == "local":
+        return LocalExperimentTracker(root=settings.LOCAL_EXPERIMENT_TRACKER_ROOT)
+    if settings.EXPERIMENT_TRACKER_BACKEND == "mlflow":
+        return MLflowExperimentTracker(
+            tracking_uri=settings.MLFLOW_TRACKING_URI,
+            experiment_name=settings.MLFLOW_EXPERIMENT_NAME,
+        )
+    raise ValueError(
+        f"Unsupported EXPERIMENT_TRACKER_BACKEND: {settings.EXPERIMENT_TRACKER_BACKEND}"
+    )
 
 
 def _require_openai_api_key(settings: Settings, *, setting_name: str) -> None:
