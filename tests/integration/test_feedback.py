@@ -39,6 +39,7 @@ async def test_create_feedback_returns_created_record(client):
         ("rating", "unsupported_rating"),
         ("labels", [""]),
         ("labels", ["x" * 65]),
+        ("comment", ""),
         ("comment", "x" * 2001),
     ],
 )

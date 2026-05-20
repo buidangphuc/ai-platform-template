@@ -7,7 +7,7 @@ FeedbackTargetType = Literal["llm_response", "rag_answer", "agent_run", "eval_ru
 FeedbackRating = Literal["positive", "negative", "neutral"]
 FeedbackIdentifier = Annotated[str, Field(min_length=1, max_length=128)]
 FeedbackLabel = Annotated[str, Field(min_length=1, max_length=64)]
-FeedbackComment = Annotated[str, Field(max_length=2000)]
+FeedbackComment = Annotated[str, Field(min_length=1, max_length=2000)]
 
 
 def new_feedback_id() -> str:
