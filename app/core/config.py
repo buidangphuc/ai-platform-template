@@ -56,6 +56,7 @@ class Settings(BaseSettings):
         values = self.model_dump(mode="json")
         secret_names = {
             "POSTGRES_PASSWORD",
+            "POSTGRES_URL",
             "REDIS_PASSWORD",
             "API_KEY_PEPPER",
             "OPENAI_API_KEY",

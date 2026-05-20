@@ -41,4 +41,5 @@ def test_settings_redacts_secret_values():
     assert summary["REDIS_PASSWORD"] == "***"
     assert summary["API_KEY_PEPPER"] == "***"
     assert summary["OPENAI_API_KEY"] == "***"
+    assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
