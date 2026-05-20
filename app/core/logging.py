@@ -10,10 +10,17 @@ class RequestIdFilter(logging.Filter):
 
 
 def configure_logging(level: str = "INFO") -> None:
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s [req=%(request_id)s] %(name)s - %(message)s",
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s [req=%(request_id)s] %(name)s - %(message)s"
     )
     root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    if not root_logger.handlers:
+        root_logger.addHandler(logging.StreamHandler())
+
     for handler in root_logger.handlers:
-        handler.addFilter(RequestIdFilter())
+        handler.setFormatter(formatter)
+        if not any(
+            isinstance(log_filter, RequestIdFilter) for log_filter in handler.filters
+        ):
+            handler.addFilter(RequestIdFilter())

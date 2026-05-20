@@ -1,4 +1,4 @@
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from uuid import uuid4
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -10,8 +10,32 @@ def get_request_id() -> str:
     return _request_id.get()
 
 
-def set_request_id(value: str) -> None:
-    _request_id.set(value)
+def set_request_id(value: str) -> Token[str]:
+    return _request_id.set(value)
+
+
+def reset_request_id(token: Token[str]) -> None:
+    _request_id.reset(token)
+
+
+def _first_header(headers: list[tuple[bytes, bytes]], name: bytes) -> bytes | None:
+    lowercase_name = name.lower()
+    for header_name, header_value in headers:
+        if header_name.lower() == lowercase_name:
+            return header_value
+    return None
+
+
+def _set_response_header(
+    headers: list[tuple[bytes, bytes]], name: bytes, value: bytes
+) -> None:
+    lowercase_name = name.lower()
+    headers[:] = [
+        (header_name, header_value)
+        for header_name, header_value in headers
+        if header_name.lower() != lowercase_name
+    ]
+    headers.append((name, value))
 
 
 class RequestIdMiddleware:
@@ -24,17 +48,21 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send)
             return
 
-        headers = dict(scope.get("headers") or [])
-        raw_request_id = headers.get(self.header_name.lower().encode())
+        header_name = self.header_name.encode()
+        headers = scope.get("headers") or []
+        raw_request_id = _first_header(headers, header_name)
         request_id = raw_request_id.decode() if raw_request_id else f"req_{uuid4().hex}"
-        set_request_id(request_id)
+        token = set_request_id(request_id)
 
         async def send_with_request_id(message):
             if message["type"] == "http.response.start":
                 message.setdefault("headers", [])
-                message["headers"].append(
-                    (self.header_name.encode(), request_id.encode())
+                _set_response_header(
+                    message["headers"], header_name, request_id.encode()
                 )
             await send(message)
 
-        await self.app(scope, receive, send_with_request_id)
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            reset_request_id(token)
