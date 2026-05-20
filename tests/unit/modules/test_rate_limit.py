@@ -40,21 +40,20 @@ class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, int] = {}
         self.expirations: dict[str, int] = {}
-        self.eval_calls: list[tuple[str, int, str, int, int]] = []
+        self.eval_calls: list[tuple[str, int, str, int]] = []
 
     async def eval(
         self,
         script: str,
         num_keys: int,
         key: str,
-        limit: int,
         window_seconds: int,
-    ) -> int:
-        self.eval_calls.append((script, num_keys, key, limit, window_seconds))
+    ) -> str:
+        self.eval_calls.append((script, num_keys, key, window_seconds))
         self.values[key] = self.values.get(key, 0) + 1
         if self.values[key] == 1:
             self.expirations[key] = window_seconds
-        return self.values[key]
+        return str(self.values[key])
 
 
 async def test_redis_rate_limiter_sets_window_on_first_hit():
@@ -66,10 +65,9 @@ async def test_redis_rate_limiter_sets_window_on_first_hit():
     assert result.allowed
     assert result.remaining == 1
     assert redis.expirations["rate-limit:api-key-1"] == 60
-    script, num_keys, key, limit, window_seconds = redis.eval_calls[0]
+    script, num_keys, key, window_seconds = redis.eval_calls[0]
     assert "INCR" in script
     assert "EXPIRE" in script
     assert num_keys == 1
     assert key == "rate-limit:api-key-1"
-    assert limit == 2
     assert window_seconds == 60

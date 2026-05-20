@@ -42,7 +42,7 @@ class RedisRateLimiter:
     _CHECK_SCRIPT = """
 local current = redis.call('INCR', KEYS[1])
 if current == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[2])
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
 end
 return current
 """
@@ -62,8 +62,8 @@ return current
             self._CHECK_SCRIPT,
             1,
             redis_key,
-            self.limit,
             self.window_seconds,
         )
+        count = int(count)
         remaining = max(self.limit - count, 0)
         return RateLimitResult(allowed=count <= self.limit, remaining=remaining)
