@@ -17,7 +17,7 @@ search_roots=(
   middleware
   scripts
   alembic
-  docker-compose.local.yaml
+  docker-compose*.yaml
   Dockerfile
   README.md
 )
