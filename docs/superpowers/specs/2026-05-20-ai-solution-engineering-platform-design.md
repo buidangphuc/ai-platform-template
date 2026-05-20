@@ -83,6 +83,19 @@ Core owns startup, configuration, lifecycle, health, errors, registry wiring, an
 
 Core owns contracts. Adapters own integrations. The registry wires selected capabilities at startup.
 
+### Contract Technology
+
+Adapter contracts should use Python `typing.Protocol`.
+
+Use Pydantic for API payloads, persisted configuration schemas, and validation models. Do not use Pydantic models as the primary adapter interface. Use abstract base classes only when a contract needs shared base behavior, not as the default pattern.
+
+Reasoning:
+
+- `Protocol` keeps adapters structurally typed and easy to fake in tests.
+- `Protocol` avoids forcing every adapter to inherit from a framework-owned base class.
+- Pydantic remains the right tool for request/response and manifest validation.
+- Choosing this upfront avoids rewriting adapters later.
+
 ### Registry Rule
 
 The registry must not become a global service locator. Application services should receive dependencies through constructors or dependency injection.
@@ -114,6 +127,7 @@ Adapters should exist for:
 - Agent runtime.
 - Experiment tracker.
 - Artifact/model registry.
+- LLM response cache.
 - Auth strategy when projects need different auth modes.
 
 Do not adapterize by default:
@@ -150,6 +164,7 @@ app/
       jobs/
       rag/
       evals/
+      feedback/
       health/
   core/
     config.py
@@ -170,6 +185,7 @@ app/
     agents.py
     experiment_tracker.py
     artifacts.py
+    llm_cache.py
   adapters/
     llm/
       fake.py
@@ -192,6 +208,8 @@ app/
     observability/
       otel.py
       debug.py
+    llm_cache/
+      noop.py
     agents/
       simple.py
       langgraph.py
@@ -207,6 +225,7 @@ app/
     jobs/
     rag/
     evals/
+    feedback/
   schemas/
   dependencies/
   bootstrap/
@@ -259,6 +278,7 @@ docs/
   llmops/
     tracing-guidelines.md
     prompt-registry.md
+    llm-response-caching.md
 ```
 
 ## 8. Default Local Stack
@@ -275,6 +295,7 @@ Default adapters:
 - Observability: OpenTelemetry debug exporter.
 - Agent runtime: simple runtime.
 - Experiment tracker: local tracker.
+- LLM response cache: no-op cache.
 
 Optional profiles:
 
@@ -311,14 +332,33 @@ Required capabilities:
 15. Health/readiness endpoints for API, Postgres, Redis, storage, queue, vector store, and LLM provider.
 16. Request ID, structured logs, standard error envelope, pagination, timeout, and CORS defaults.
 17. Secret redaction and safe config summary endpoints.
+18. Feedback capture schema and endpoint for AI response quality signals.
+19. Secret management workflow through `.env.example` and README guidance. No Vault or cloud secret manager adapter is required for the template.
 
-RAG endpoints should be generic:
+Core capability endpoints should be generic:
 
 - `POST /api/v1/files`
 - `POST /api/v1/rag/index`
 - `POST /api/v1/rag/search`
 - `POST /api/v1/rag/answer`
 - `GET /api/v1/jobs/{job_id}`
+- `POST /api/v1/feedback`
+
+The feedback endpoint should capture schema-compatible data only. It should not implement analytics, retraining, labeling queues, or feedback-to-eval pipelines in the template.
+
+Minimum feedback fields:
+
+```text
+request_id
+trace_id
+user_id or api_key_id
+target_type: llm_response | rag_answer | agent_run | eval_run
+target_id
+rating: positive | negative | neutral
+labels: list[str]
+comment: string | null
+created_at
+```
 
 The RAG module should include:
 
@@ -385,6 +425,17 @@ Required capabilities:
 8. Redaction default-on for prompts, inputs, outputs, tokens, API keys, and PII.
 9. Guardrails/hooks for max input tokens, max output tokens, timeout, and safety blocks.
 10. Regression suite for prompt/RAG/agent changes before promotion.
+11. LLM response caching contract as a cross-cutting capability across all LLM calls.
+
+The LLM response cache must be represented as a contract with a no-op default adapter. The template should not implement a concrete cache policy in the first rebuild.
+
+Cache contract requirements:
+
+- Accept a normalized cache key input that can include model, provider, prompt version, messages, tools, generation parameters, tenant/user scope, and safety-relevant settings.
+- Return cache hit metadata without exposing vendor-specific response types.
+- Allow callers to bypass caching per request.
+- Make caching opt-in by configuration and default to no-op.
+- Avoid caching streamed partial output unless a future adapter explicitly supports final-response materialization.
 
 Trace content mode:
 
@@ -647,9 +698,16 @@ Required docs:
 - `docs/mlops/promotion-guide.md`: research-to-runtime promotion.
 - `docs/mlops/eval-guidelines.md`: dataset, metrics, reports.
 - `docs/llmops/tracing-guidelines.md`: tracing, redaction, usage metadata.
+- `docs/llmops/llm-response-caching.md`: cache contract, no-op default, and cautions for streamed responses.
 - `docs/recipes/`: focused recipes for common integrations.
 
 Recipes should be preferred over building a platform UI.
+
+Secret handling requirement:
+
+- `.env.example` must list required variables with safe example values.
+- `README.md` must state that secrets are injected through environment variables and should not be committed.
+- No Vault, cloud secret manager, or organization-specific secret workflow is included by default.
 
 ## 20. Implementation Phases
 
@@ -663,13 +721,17 @@ Recipes should be preferred over building a platform UI.
 - Add health/readiness.
 - Add request ID, logging, error envelope.
 - Add API key auth and basic rate limit.
+- Add `.env.example` and README secret handling guidance.
+- Add feedback capture schema and endpoint.
 
 ### Phase 2: Contracts and Default Adapters
 
 - Add contracts.
 - Add registry and startup wiring.
 - Add fake/local adapters.
+- Define `typing.Protocol` as the adapter contract standard.
 - Add OpenAI-compatible LLM and embedding adapters.
+- Add LLM response cache contract with no-op default adapter.
 - Add local storage.
 - Add in-process job adapter.
 - Add debug OpenTelemetry adapter/profile.
@@ -717,7 +779,11 @@ The template is ready when:
 9. Eval smoke test works against sample data.
 10. OpenTelemetry debug profile emits trace/log information.
 11. Docs explain how to swap key adapters.
-12. No cloud vendor or observability vendor is required for the default path.
+12. LLM response cache contract exists and defaults to no-op.
+13. Feedback capture endpoint and schema exist without a downstream pipeline.
+14. `.env.example` and README document secret handling.
+15. Adapter contracts consistently use `typing.Protocol`.
+16. No cloud vendor or observability vendor is required for the default path.
 
 ## 22. Reference Sources
 
