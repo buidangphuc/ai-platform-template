@@ -94,6 +94,7 @@ Key environment variables include:
 - `REDIS_HOST`: Redis host name
 - `REDIS_PORT`: Redis port
 - `API_KEY_PEPPER`: Pepper used when hashing API keys
+- `API_KEY_BOOTSTRAP_TOKEN`: Bootstrap token required to create API keys
 - `TRACE_CONTENT`: Trace content mode, one of `off`, `redacted`, or `full`
 - `LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `VECTOR_STORE`, `STORAGE_BACKEND`, `JOB_BACKEND`: Local provider selectors for pluggable services
 

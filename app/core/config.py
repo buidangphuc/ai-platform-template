@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     REDIS_TIMEOUT_SECONDS: int = 5
 
     API_KEY_PEPPER: str
+    API_KEY_BOOTSTRAP_TOKEN: str = ""
     DEFAULT_RATE_LIMIT_PER_MINUTE: int = 60
 
     OTEL_EXPORTER_OTLP_ENDPOINT: str = ""

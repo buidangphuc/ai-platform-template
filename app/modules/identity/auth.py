@@ -1,3 +1,5 @@
+import hmac
+
 from fastapi import Header
 
 from app.core.config import Settings
@@ -5,6 +7,26 @@ from app.core.errors import AppError
 from app.core.security import hash_api_key
 from app.modules.identity.repository import ApiKeyRepository
 from app.modules.identity.schemas import AuthenticatedPrincipal
+
+
+def validate_bootstrap_token(
+    header_value: str | None,
+    *,
+    settings: Settings,
+) -> None:
+    if not settings.API_KEY_BOOTSTRAP_TOKEN:
+        raise AppError(
+            code="bootstrap_token_not_configured",
+            message="API key creation is not configured",
+            status_code=403,
+        )
+    if not header_value or not hmac.compare_digest(
+        header_value,
+        settings.API_KEY_BOOTSTRAP_TOKEN,
+    ):
+        raise AppError(
+            code="forbidden", message="Invalid bootstrap token", status_code=403
+        )
 
 
 async def authenticate_api_key(

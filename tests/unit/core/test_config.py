@@ -33,6 +33,7 @@ def test_settings_redacts_secret_values():
         REDIS_PASSWORD="redis-secret",  # pragma: allowlist secret
         REDIS_DATABASE=0,
         API_KEY_PEPPER="pepper-secret",  # pragma: allowlist secret
+        API_KEY_BOOTSTRAP_TOKEN="bootstrap-secret",  # pragma: allowlist secret
         OPENAI_API_KEY="sk-test",  # pragma: allowlist secret
     )
 
@@ -40,6 +41,7 @@ def test_settings_redacts_secret_values():
 
     assert summary["REDIS_PASSWORD"] == "***"
     assert summary["API_KEY_PEPPER"] == "***"
+    assert summary["API_KEY_BOOTSTRAP_TOKEN"] == "***"
     assert summary["OPENAI_API_KEY"] == "***"
     assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Header, Request, Response, status
 
 from app.core.security import create_api_key, hash_api_key
-from app.modules.identity.auth import authenticate_api_key
+from app.modules.identity.auth import authenticate_api_key, validate_bootstrap_token
 from app.modules.identity.repository import ApiKeyRepository
 from app.modules.identity.schemas import (
     AuthenticatedPrincipal,
@@ -9,7 +9,7 @@ from app.modules.identity.schemas import (
     CreateApiKeyResponse,
 )
 
-router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _repository(request: Request) -> ApiKeyRepository:
@@ -25,8 +25,10 @@ async def create_key(
     payload: CreateApiKeyRequest,
     request: Request,
     response: Response,
+    bootstrap_token: str | None = Header(default=None, alias="X-Bootstrap-Token"),
 ):
     settings = request.app.state.settings
+    validate_bootstrap_token(bootstrap_token, settings=settings)
     raw_key = create_api_key()
     key_hash = hash_api_key(raw_key, pepper=settings.API_KEY_PEPPER)
     api_key = await _repository(request).create(name=payload.name, key_hash=key_hash)
