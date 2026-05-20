@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.core.config import Settings
 
 
@@ -71,3 +74,20 @@ def test_redacted_summary_redacts_secret_like_future_fields():
         == "***"
     )
     assert settings._redacted_value("LLM_PROVIDER", "fake") == "fake"
+
+
+def test_default_rate_limit_per_minute_must_be_positive():
+    with pytest.raises(ValidationError):
+        Settings(
+            ENVIRONMENT="test",
+            POSTGRES_HOST="localhost",
+            POSTGRES_USER="postgres",
+            POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
+            POSTGRES_DB="ai_platform",
+            REDIS_HOST="localhost",
+            REDIS_PORT=6379,
+            REDIS_PASSWORD="",  # pragma: allowlist secret
+            REDIS_DATABASE=0,
+            API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+            DEFAULT_RATE_LIMIT_PER_MINUTE=0,
+        )
