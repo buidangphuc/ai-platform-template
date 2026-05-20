@@ -45,7 +45,7 @@ cd <repository-directory>
 
 2. Start the development environment:
 ```bash
-docker-compose -f docker-compose.local.yml up -d
+docker-compose -f docker-compose.local.yaml up -d
 ```
 
 This will start all necessary services (API, database, etc.) in development mode with hot reloading enabled.
@@ -57,7 +57,7 @@ This will start all necessary services (API, database, etc.) in development mode
 
 4. Stop the services:
 ```bash
-docker-compose -f docker-compose.local.yml down
+docker-compose -f docker-compose.local.yaml down
 ```
 
 ### Manual Setup
@@ -86,9 +86,16 @@ uv run ./scripts/start_dev.sh
 
 Key environment variables include:
 
-- `DATABASE_URL`: Database connection string
-- `SECRET_KEY`: Secret key for token signing
-- `ENVIRONMENT`: Development/staging/production
+- `ENVIRONMENT`: Runtime environment name
+- `POSTGRES_HOST`: PostgreSQL host name
+- `POSTGRES_USER`: PostgreSQL user name
+- `POSTGRES_PASSWORD`: PostgreSQL password
+- `POSTGRES_DB`: PostgreSQL database name
+- `REDIS_HOST`: Redis host name
+- `REDIS_PORT`: Redis port
+- `API_KEY_PEPPER`: Pepper used when hashing API keys
+- `TRACE_CONTENT`: Trace content mode, one of `off`, `redacted`, or `full`
+- `LLM_PROVIDER`, `EMBEDDING_PROVIDER`, `VECTOR_STORE`, `STORAGE_BACKEND`, `JOB_BACKEND`: Local provider selectors for pluggable services
 
 ## Secrets
 

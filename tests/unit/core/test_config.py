@@ -43,3 +43,29 @@ def test_settings_redacts_secret_values():
     assert summary["OPENAI_API_KEY"] == "***"
     assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
+
+
+def test_redacted_summary_redacts_secret_like_future_fields():
+    settings = Settings(
+        ENVIRONMENT="test",
+        POSTGRES_HOST="localhost",
+        POSTGRES_USER="postgres",
+        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
+        POSTGRES_DB="ai_platform",
+        REDIS_HOST="localhost",
+        REDIS_PORT=6379,
+        REDIS_PASSWORD="",  # pragma: allowlist secret
+        REDIS_DATABASE=0,
+        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+    )
+
+    assert settings._redacted_value("FUTURE_SERVICE_TOKEN", "token-value") == "***"
+    assert settings._redacted_value("FUTURE_SIGNING_SECRET", "secret-value") == "***"
+    assert (
+        settings._redacted_value(
+            "FUTURE_DATABASE_URL",
+            "postgresql+asyncpg://user:password@localhost/db",  # pragma: allowlist secret
+        )
+        == "***"
+    )
+    assert settings._redacted_value("LLM_PROVIDER", "fake") == "fake"

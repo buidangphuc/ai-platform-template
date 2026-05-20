@@ -54,17 +54,33 @@ class Settings(BaseSettings):
 
     def redacted_summary(self) -> dict[str, object]:
         values = self.model_dump(mode="json")
-        secret_names = {
-            "POSTGRES_PASSWORD",
-            "POSTGRES_URL",
-            "REDIS_PASSWORD",
-            "API_KEY_PEPPER",
-            "OPENAI_API_KEY",
+        return {key: self._redacted_value(key, value) for key, value in values.items()}
+
+    def _redacted_value(self, key: str, value: object) -> object:
+        visible_names = {
+            "LLM_PROVIDER",
+            "EMBEDDING_PROVIDER",
+            "VECTOR_STORE",
+            "STORAGE_BACKEND",
+            "JOB_BACKEND",
         }
-        return {
-            key: "***" if key in secret_names and values.get(key) else value
-            for key, value in values.items()
-        }
+        if key in visible_names or not value:
+            return value
+
+        key_upper = key.upper()
+        secret_markers = ("PASSWORD", "SECRET", "TOKEN", "KEY", "PEPPER")
+        if any(marker in key_upper for marker in secret_markers):
+            return "***"
+
+        if (
+            key_upper.endswith("_URL")
+            and isinstance(value, str)
+            and "://" in value
+            and "@" in value
+        ):
+            return "***"
+
+        return value
 
 
 @lru_cache
