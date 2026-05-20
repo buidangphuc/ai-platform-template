@@ -22,6 +22,13 @@ def test_settings_defaults_are_local_safe():
     assert settings.API_V1_PREFIX == "/api/v1"
     assert settings.POSTGRES_URL.startswith("postgresql+asyncpg://")
     assert settings.TRACE_CONTENT == "redacted"
+    assert settings.OPENAI_BASE_URL == "https://api.openai.com/v1"
+    assert settings.LLM_MODEL == "fake-chat"
+    assert settings.EMBEDDING_MODEL == "fake-embedding"
+    assert settings.LLM_CACHE_BACKEND == "noop"
+    assert settings.LLM_CACHE_ENABLED is False
+    assert settings.OBSERVABILITY_BACKEND == "debug"
+    assert settings.LOCAL_STORAGE_ROOT == ".local/storage"
 
 
 def test_settings_redacts_secret_values():

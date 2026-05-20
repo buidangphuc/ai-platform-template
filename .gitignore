@@ -9,6 +9,7 @@ static/media/
 .ruff_cache/
 .pytest_cache/
 .python-version
+.local/
 
 # vscode
 .vscode/

@@ -13,6 +13,8 @@ This repository currently covers the local application foundation:
 - API key bootstrap and authentication.
 - Fixed-window rate limiting foundation.
 - Feedback capture schema and endpoint.
+- Adapter contracts for LLM, embeddings, vector store, storage, jobs, observability, and LLM response caching.
+- Fake/local default adapters for local development and tests.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
 
@@ -58,7 +60,9 @@ The Docker path is a local golden path only. It builds the API image and runs th
 ```text
 app/
   api/                  Versioned FastAPI routers
+  adapters/             Fake/local and provider adapter implementations
   bootstrap/            App factory and service wiring
+  contracts/            typing.Protocol adapter contracts and payload models
   core/                 Settings, database, Redis, errors, logging, health
   modules/
     feedback/           Feedback schema, model, and repository
@@ -81,6 +85,22 @@ make hygiene      # check stale template coupling
 ## Secrets
 
 Copy `.env.example` to `.env` for local development. Keep real secrets in environment variables or your team's secret manager, not in Git.
+
+## Adapter Defaults
+
+The template boots without cloud credentials. Default providers are fake/local:
+
+- `LLM_PROVIDER=fake`
+- `EMBEDDING_PROVIDER=fake`
+- `VECTOR_STORE=in_memory`
+- `STORAGE_BACKEND=local`
+- `JOB_BACKEND=in_process`
+- `OBSERVABILITY_BACKEND=debug`
+- `LLM_CACHE_BACKEND=noop`
+
+To use an OpenAI-compatible API, set `LLM_PROVIDER=openai_compatible` or `EMBEDDING_PROVIDER=openai_compatible`, then provide `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and the model setting. The LLM cache wrapper is always wired, but `LLM_CACHE_ENABLED=false` and `LLM_CACHE_BACKEND=noop` by default so cache policy can be added later without changing call sites.
+
+The local OpenTelemetry collector debug profile lives at `ops/observability/otel-collector.debug.yaml`. It is a backend-neutral smoke profile for teams that want to validate telemetry before wiring Grafana, Datadog, Phoenix, or a custom collector.
 
 ## API Key Bootstrap
 

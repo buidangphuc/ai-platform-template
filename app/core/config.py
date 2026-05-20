@@ -38,17 +38,32 @@ class Settings(BaseSettings):
     TRACE_CONTENT: Literal["off", "redacted", "full"] = "redacted"
 
     OPENAI_API_KEY: str = ""
-    LLM_PROVIDER: str = "fake"
-    EMBEDDING_PROVIDER: str = "fake"
-    VECTOR_STORE: str = "in_memory"
-    STORAGE_BACKEND: str = "local"
-    JOB_BACKEND: str = "in_process"
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    LLM_PROVIDER: Literal["fake", "openai_compatible"] = "fake"
+    LLM_MODEL: str = "fake-chat"
+    EMBEDDING_PROVIDER: Literal["fake", "openai_compatible"] = "fake"
+    EMBEDDING_MODEL: str = "fake-embedding"
+    FAKE_EMBEDDING_DIMENSIONS: int = 16
+    VECTOR_STORE: Literal["in_memory"] = "in_memory"
+    STORAGE_BACKEND: Literal["local"] = "local"
+    LOCAL_STORAGE_ROOT: str = ".local/storage"
+    JOB_BACKEND: Literal["in_process"] = "in_process"
+    OBSERVABILITY_BACKEND: Literal["debug"] = "debug"
+    LLM_CACHE_BACKEND: Literal["noop"] = "noop"
+    LLM_CACHE_ENABLED: bool = False
 
     @field_validator("DEFAULT_RATE_LIMIT_PER_MINUTE")
     @classmethod
     def validate_default_rate_limit_per_minute(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("DEFAULT_RATE_LIMIT_PER_MINUTE must be positive")
+        return value
+
+    @field_validator("FAKE_EMBEDDING_DIMENSIONS")
+    @classmethod
+    def validate_fake_embedding_dimensions(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("FAKE_EMBEDDING_DIMENSIONS must be positive")
         return value
 
     @computed_field
@@ -71,6 +86,8 @@ class Settings(BaseSettings):
             "VECTOR_STORE",
             "STORAGE_BACKEND",
             "JOB_BACKEND",
+            "OBSERVABILITY_BACKEND",
+            "LLM_CACHE_BACKEND",
         }
         if key in visible_names or not value:
             return value

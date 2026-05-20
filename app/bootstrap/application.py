@@ -5,6 +5,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.health import HealthService
 from app.core.logging import configure_logging
+from app.core.registry import build_runtime_adapters
 from app.core.request_context import RequestIdMiddleware
 from app.modules.feedback.repository import FeedbackRepository
 from app.modules.identity.repository import ApiKeyRepository
@@ -24,6 +25,7 @@ def create_app(
         description=resolved_settings.DESCRIPTION,
     )
     app.state.settings = resolved_settings
+    app.state.adapters = build_runtime_adapters(resolved_settings)
     app.state.health_service = HealthService(
         check_external_dependencies=init_resources,
     )
