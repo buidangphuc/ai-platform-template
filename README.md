@@ -6,7 +6,7 @@ This repository contains a template for building backend services using FastAPI.
 
 - Docker and Docker Compose
 - Python 3.12+
-- Poetry (Python dependency management tool)
+- uv (Python dependency management tool)
 
 ## Repository Structure
 
@@ -62,14 +62,14 @@ docker-compose -f docker-compose.local.yml down
 
 ### Manual Setup
 
-1. Install Poetry:
+1. Install uv:
 ```bash
-pip install poetry
+pip install uv
 ```
 
 2. Install dependencies:
 ```bash
-poetry install
+uv sync --dev
 ```
 
 3. Set up environment variables:
@@ -79,7 +79,7 @@ cp .env.example .env
 
 4. Run the application:
 ```bash
-poetry run ./scripts/start_dev.sh
+uv run ./scripts/start_dev.sh
 ```
 
 ### Environment Variables
