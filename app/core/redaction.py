@@ -30,7 +30,7 @@ class RedactionPolicy:
         if self.mode == "full":
             return dict(payload)
         if self.mode == "off":
-            return {key: "[redacted]" for key in payload}
+            return dict.fromkeys(payload, "[redacted]")
 
         redacted: dict[str, object] = {}
         for key, value in payload.items():

@@ -10,14 +10,15 @@ This repository currently covers the local application foundation:
 - Pydantic settings and `.env` workflow.
 - Health/readiness endpoints.
 - Request ID middleware, logging context, and standard error envelope.
-- API key bootstrap and authentication.
+- Static Bearer token authentication.
+- Lean product primitives: service context, explicit DB transactions,
+  pagination schemas, audit events, and idempotency persistence.
 - Fixed-window rate limiting foundation.
 - Native LangChain chat model wiring with per-instance Langfuse tracker.
 - LlamaIndex advanced retrieval support code using native `Document` and
   `NodeWithScore` primitives, retrieval smoke checks, and redaction policy.
 - Self-hosted Langfuse local stack via Docker Compose for tracing, prompt
   management, and eval scores.
-- Research workspace with sample datasets, artifact manifests, and smoke evals.
 - PostgreSQL model metadata with Alembic.
 - Local Docker build/run path.
 
@@ -42,13 +43,19 @@ The API starts on `http://localhost:8000`.
 
 Useful endpoints:
 
-- `GET /health`
-- `GET /ready`
-- `POST /api/v1/auth/api-keys`
+- `GET /healthz` — liveness probe (always 200 while process is alive)
+- `GET /readyz` — readiness probe (503 when Postgres/Redis are unreachable)
 - `GET /api/v1/auth/me`
+- `POST /api/v1/completions`
+- `POST /api/v1/completions/stream`
 
-All `/api/v1/*` platform endpoints except health and API-key bootstrap require
-`Authorization: Bearer <api-key>`.
+All `/api/v1/*` platform endpoints except health checks require
+`Authorization: Bearer <AUTH_BEARER_TOKEN>`.
+
+The completions endpoints are intentionally thin transport skeletons. They
+accept chat messages, call an injected `CompletionHandler`, and return either
+one JSON completion or server-sent stream deltas. They do not know prompt
+templates, model selection, caching, retrieval, or product workflow logic.
 
 ## Docker
 
@@ -81,12 +88,13 @@ app/
   bootstrap/            App factory and service wiring
   core/                 Settings, database, Redis, errors, logging, health
   modules/
-    identity/           API key identity model, repository, auth dependency
+    identity/           Static Bearer principal and auth dependency
+    audit/              Product audit events for actor/resource/action history
+    idempotency/        Concrete idempotency-key persistence helpers
     llm/                LangChain chat model factory and per-instance Langfuse tracker
     rag/                LlamaIndex-backed knowledge retrieval and tool builders
     rate_limit/         Rate limit service contracts and implementations
 alembic/                Migration environment
-research/               Datasets, evals, training templates, artifact manifests
 scripts/                Local helper scripts (including Langfuse smoke runners)
 tests/                  Unit and integration tests
 ```
@@ -96,7 +104,6 @@ tests/                  Unit and integration tests
 ```bash
 make dev                    # run local API with uvicorn reload
 make test                   # run full pytest suite
-make eval-smoke             # run local RAG evaluation smoke test
 make smoke-langfuse         # exercise the Langfuse callback against the local stack
 make smoke-langfuse-prompt  # exercise the Langfuse prompt-management flow
 make hygiene                # check stale template coupling
@@ -110,11 +117,16 @@ Copy `.env.example` to `.env` for local development. Keep real secrets in enviro
 
 The template boots without cloud credentials. The app factory does not create AI
 runtime services by default; project business logic can wire LangChain or
-LlamaIndex services where it actually needs them. Local research smoke tests
-still use fake/mock AI primitives outside the API app.
+LlamaIndex services where it actually needs them.
 
-- `CHAT_PROVIDER=`
-- `CHAT_MODEL_NAME=`
+- `CHAT_MODEL=`
+- `AUTH_BEARER_TOKEN=change-me-local-bearer-token`
+- `AUTH_SUBJECT=local-user`
+- `AUTH_ROLES=admin`
+- `IDEMPOTENCY_ENABLED=false`
+- `CORS_ALLOW_ORIGINS=*`
+- `TRUSTED_HOSTS=*`
+- `MAX_REQUEST_BODY_BYTES=10485760`
 - `LANGFUSE_ENABLED=true`
 - `LANGFUSE_PUBLIC_KEY=lf_pk_local_ai_platform`
 - `LANGFUSE_SECRET_KEY=lf_sk_local_ai_platform`
@@ -122,11 +134,49 @@ still use fake/mock AI primitives outside the API app.
 
 To use a real model, install the relevant LangChain provider package, set the
 provider's standard environment variables in your runtime, then set
-`CHAT_PROVIDER` and `CHAT_MODEL_NAME` to a supported pair (see
-`app/core/config.py`). Knowledge retrieval integrations should pass LlamaIndex
-`Document` objects into `KnowledgeRetrievalService` and consume retrieved
-`NodeWithScore` values instead of adding template-owned RAG schemas, rerankers,
-or vector-store adapters.
+`CHAT_MODEL` to a native LangChain target such as `openai:gpt-4.1-mini` or
+`anthropic:claude-sonnet-4-5`. Knowledge retrieval integrations should pass
+LlamaIndex `Document` objects into `KnowledgeRetrievalService` and consume
+retrieved `NodeWithScore` values instead of adding template-owned RAG schemas,
+rerankers, or vector-store adapters.
+
+HTTP middleware provides CORS, trusted-host enforcement, a request body limit,
+standard error envelopes for FastAPI/Starlette HTTP errors, and access logs with
+method, path, status, duration, request id, and authenticated principal when
+available.
+
+Business endpoints should depend on `app.core.context.ServiceContextDep` when
+they need the request boundary. The context is intentionally small:
+`request_id`, authenticated `principal`, optional `idempotency_key`, and DB
+session. `idempotency_key` is only parsed when `IDEMPOTENCY_ENABLED=true`; with
+the default `false`, incoming `Idempotency-Key` headers are ignored. The context
+does not carry Redis, object storage clients, feature flags, or AI runtimes; add
+those directly at the business module boundary when a project actually needs
+them.
+
+Database access uses a session-per-request dependency. The dependency rolls
+back on unhandled exceptions and always closes the session, but it does not
+auto-commit. Business services own explicit `commit()` calls.
+
+List endpoints can reuse `app.core.pagination.PaginationParams` and
+`build_list_response(...)` for offset-based responses:
+`{"items": [...], "pagination": {"limit": 50, "offset": 0, "total": 123}}`.
+The template intentionally does not ship a generic query builder.
+
+`app.modules.audit.record_audit_event(...)` records product audit events for
+"who did what to which resource". Audit metadata is guarded against raw prompt,
+message, payload, input, output, and generated text keys; store IDs, counts,
+status, duration, error codes, and `langfuse_trace_id` instead. Langfuse remains
+the place for AI trace details.
+
+When `IDEMPOTENCY_ENABLED=true`,
+`app.core.idempotency.get_idempotency_key` validates the optional
+`Idempotency-Key` header. `app.modules.idempotency` adds concrete persistence
+with an `idempotency_keys` table. Request hashes include method, path, body, and
+principal id. Reusing the same key with a different request returns
+`409 idempotency_key_conflict`; reusing an in-progress key returns
+`409 idempotency_key_in_progress`. Streaming responses are intentionally outside
+this contract.
 
 App observability, experiment tracking, LLM response caching, object storage,
 and job queues are intentionally not wrapped by template adapters in this phase.
@@ -141,46 +191,55 @@ per-instance Langfuse tracker. Pass `instance.trace_config(...)` into LangChain
 calls to keep parallel LLM services separated by instance, service, session,
 user, and request metadata.
 
+To use the completions transport, inject business logic at app construction:
+
+```python
+from collections.abc import AsyncIterator
+
+from app.api.v1.completions.schemas import (
+    CompletionRequest,
+    CompletionResult,
+    CompletionStreamChunk,
+)
+from app.bootstrap.application import create_app
+
+
+class MyCompletionHandler:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        return CompletionResult(content="...")
+
+    async def stream(
+        self,
+        request: CompletionRequest,
+    ) -> AsyncIterator[CompletionStreamChunk]:
+        yield CompletionStreamChunk(delta="...")
+
+
+app = create_app(MyCompletionHandler())
+```
+
+Without an injected handler, `/api/v1/completions` and
+`/api/v1/completions/stream` return `501 completion_handler_not_configured`.
+
 The app factory registers a FastAPI lifespan that calls
 `langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and
 `init_resources=True`, so any buffered traces from per-instance trackers are
-drained before the process exits. Tests construct the app with
-`init_resources=False`, which skips the flush hook.
+drained before the process exits. The app factory also owns shared runtime
+resources on `app.state.engine`, `app.state.sessionmaker`, and
+`app.state.redis`; readiness checks and DB dependencies reuse those handles,
+and the lifespan closes Redis plus disposes the SQLAlchemy engine on shutdown.
+Tests construct the app with `init_resources=False`, which skips external
+readiness checks.
 
-## Research Workspace
+## Bearer Auth
 
-Phase 4 adds a local-first `research/` workspace:
-
-- `research/datasets/samples/rag_smoke.jsonl`
-- `research/datasets/schemas/rag_eval_case.schema.json`
-- `research/evaluation/run_rag_smoke.py`
-- `research/evaluation/metrics/keyword_hit_rate.py`
-- `research/training/train_template.py`
-- `research/artifacts/sample_prompt_manifest.yaml`
-
-Run the local smoke eval with:
-
-```bash
-make eval-smoke
-```
-
-The smoke command uses local fake/mock primitives and writes a report under
-`research/evaluation/reports/`. Generated reports are ignored by Git.
-
-## API Key Bootstrap
-
-Set `API_KEY_BOOTSTRAP_TOKEN` in `.env`, then create an API key:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/auth/api-keys \
-  -H "Content-Type: application/json" \
-  -H "X-Bootstrap-Token: $API_KEY_BOOTSTRAP_TOKEN" \
-  -d '{"name":"local"}'
-```
-
-Use the returned key with:
+Set `AUTH_BEARER_TOKEN` in `.env`, then call protected endpoints with:
 
 ```bash
 curl http://localhost:8000/api/v1/auth/me \
-  -H "Authorization: Bearer <api-key>"
+  -H "Authorization: Bearer $AUTH_BEARER_TOKEN"
 ```
+
+The template intentionally does not create users, passwords, sessions, or API
+key tables. `AUTH_SUBJECT` and `AUTH_ROLES` define the local principal returned
+by `/api/v1/auth/me` as `{"id": "...", "type": "service", "scopes": [...]}`.

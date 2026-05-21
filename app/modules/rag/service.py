@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 from typing import Any
 
@@ -43,8 +44,11 @@ class KnowledgeRetrievalService:
         for document in documents:
             self._documents[document.id_] = document
 
-        chunks = self.node_parser.get_nodes_from_documents(documents)
-        self.index_store = VectorStoreIndex.from_documents(
+        chunks = await asyncio.to_thread(
+            self.node_parser.get_nodes_from_documents, documents
+        )
+        self.index_store = await asyncio.to_thread(
+            VectorStoreIndex.from_documents,
             list(self._documents.values()),
             transformations=[self.node_parser],
             embed_model=self.embed_model,

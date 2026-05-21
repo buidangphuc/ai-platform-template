@@ -14,9 +14,5 @@ def build_redis_client(settings: Settings) -> Redis:
     )
 
 
-async def check_redis_connection(settings: Settings) -> None:
-    client = build_redis_client(settings)
-    try:
-        await client.ping()
-    finally:
-        await client.aclose()
+async def check_redis_connection(redis: Redis) -> None:
+    await redis.ping()

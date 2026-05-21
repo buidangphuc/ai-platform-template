@@ -22,9 +22,9 @@ class LLMInstance:
 
 
 def build_chat_model(settings: Settings) -> BaseChatModel:
-    if not settings.CHAT_PROVIDER:
+    if not settings.CHAT_MODEL:
         return FakeListChatModel(responses=["fake response"])
-    return _init_chat_model(f"{settings.CHAT_PROVIDER}:{settings.CHAT_MODEL_NAME}")
+    return _init_chat_model(settings.CHAT_MODEL)
 
 
 def build_llm_instance(

@@ -1,26 +1,87 @@
 import logging
+import sys
+from typing import Any
+
+from loguru import logger
 
 from app.core.request_context import get_request_id
 
+_NOISY_LOGGERS: tuple[str, ...] = (
+    "sqlalchemy.engine",
+    "sqlalchemy.pool",
+    "httpx",
+    "httpcore",
+    "uvicorn.access",
+)
 
-class RequestIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.request_id = get_request_id()
-        return True
+
+class InterceptHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
 
 
-def configure_logging(level: str = "INFO") -> None:
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s [req=%(request_id)s] %(name)s - %(message)s"
-    )
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    if not root_logger.handlers:
-        root_logger.addHandler(logging.StreamHandler())
+def _inject_request_id(record: dict[str, Any]) -> None:
+    record["extra"].setdefault("request_id", get_request_id())
 
-    for handler in root_logger.handlers:
-        handler.setFormatter(formatter)
-        if not any(
-            isinstance(log_filter, RequestIdFilter) for log_filter in handler.filters
-        ):
-            handler.addFilter(RequestIdFilter())
+
+def configure_logging(
+    *,
+    level: str = "INFO",
+    json_mode: bool = False,
+    noisy_loggers: tuple[str, ...] = _NOISY_LOGGERS,
+    enqueue: bool = False,
+) -> None:
+    logger.remove()
+    logger.configure(patcher=_inject_request_id)
+
+    resolved_level = level.upper()
+    if json_mode:
+        logger.add(
+            sys.stdout,
+            level=resolved_level,
+            serialize=True,
+            enqueue=enqueue,
+            backtrace=False,
+            diagnose=False,
+        )
+    else:
+        fmt = (
+            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> "
+            "<level>{level: <8}</level> "
+            "<cyan>{name}</cyan>:<cyan>{line}</cyan> "
+            "[req={extra[request_id]}] - <level>{message}</level>"
+        )
+        logger.add(
+            sys.stdout,
+            level=resolved_level,
+            format=fmt,
+            enqueue=enqueue,
+            backtrace=False,
+            diagnose=False,
+        )
+
+    logging.root.handlers = [
+        handler
+        for handler in logging.root.handlers
+        if not isinstance(handler, InterceptHandler)
+    ]
+    logging.root.addHandler(InterceptHandler())
+    logging.root.setLevel(logging.NOTSET)
+
+    for name in noisy_loggers:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+log = logger

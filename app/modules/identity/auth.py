@@ -1,73 +1,52 @@
 import hmac
 
-from fastapi import Header, Request
+from fastapi import Request
+from fastapi.security.utils import get_authorization_scheme_param
 
 from app.core.config import Settings
-from app.core.errors import AppError
-from app.core.security import hash_api_key
-from app.modules.identity.repository import ApiKeyRepository
-from app.modules.identity.schemas import AuthenticatedPrincipal
+from app.core.errors import ForbiddenError, RateLimitError, UnauthorizedError
+from app.modules.identity.schemas import Principal
 
 
-def validate_bootstrap_token(
-    header_value: str | None,
-    *,
-    settings: Settings,
-) -> None:
-    if not settings.API_KEY_BOOTSTRAP_TOKEN:
-        raise AppError(
-            code="bootstrap_token_not_configured",
-            message="API key creation is not configured",
-            status_code=403,
-        )
-    if not header_value or not hmac.compare_digest(
-        header_value,
-        settings.API_KEY_BOOTSTRAP_TOKEN,
-    ):
-        raise AppError(
-            code="forbidden", message="Invalid bootstrap token", status_code=403
-        )
-
-
-async def authenticate_api_key(
+async def authenticate_bearer_token(
     authorization: str | None,
     *,
     settings: Settings,
-    repository: ApiKeyRepository,
-) -> AuthenticatedPrincipal:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise AppError(code="unauthorized", message="Missing API key", status_code=401)
+) -> Principal:
+    if not settings.AUTH_BEARER_TOKEN:
+        raise ForbiddenError(
+            "Bearer token authentication is not configured",
+            code="auth_not_configured",
+        )
 
-    raw_api_key = authorization.removeprefix("Bearer ").strip()
-    key_hash = hash_api_key(raw_api_key, pepper=settings.API_KEY_PEPPER)
-    api_key = await repository.get_active_by_hash(key_hash)
-    if api_key is None:
-        raise AppError(code="unauthorized", message="Invalid API key", status_code=401)
+    scheme, token = get_authorization_scheme_param(authorization)
+    if not authorization or scheme.lower() != "bearer":
+        raise UnauthorizedError("Missing bearer token")
 
-    return AuthenticatedPrincipal(
-        auth_type="api_key",
-        api_key_id=api_key.id,
-        name=api_key.name,
+    if not hmac.compare_digest(token, settings.AUTH_BEARER_TOKEN):
+        raise UnauthorizedError("Invalid bearer token")
+
+    return Principal(
+        id=settings.AUTH_SUBJECT,
+        type="service",
+        scopes=tuple(settings.auth_roles),
     )
 
 
-def authorization_header(
-    authorization: str | None = Header(default=None, alias="Authorization"),
-) -> str | None:
-    return authorization
+async def _enforce_rate_limit(request: Request, principal: Principal) -> None:
+    rate_limiter = getattr(request.app.state, "rate_limiter", None)
+    if rate_limiter is None:
+        return
+    rate_limit = await rate_limiter.check(principal.id)
+    if not rate_limit.allowed:
+        raise RateLimitError()
 
 
-async def require_authenticated_request(request: Request) -> AuthenticatedPrincipal:
-    principal = await authenticate_api_key(
+async def require_principal(request: Request) -> Principal:
+    principal = await authenticate_bearer_token(
         request.headers.get("Authorization"),
         settings=request.app.state.settings,
-        repository=request.app.state.api_key_repository,
     )
-    rate_limit = await request.app.state.rate_limiter.check(principal.api_key_id)
-    if not rate_limit.allowed:
-        raise AppError(
-            code="rate_limit_exceeded",
-            message="Rate limit exceeded",
-            status_code=429,
-        )
+    request.state.principal = principal
+    await _enforce_rate_limit(request, principal)
     return principal

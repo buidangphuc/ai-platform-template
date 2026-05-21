@@ -40,7 +40,7 @@ async def run_smoke(
     )
 
     template = (
-        "You are smoke-testing the Langfuse prompt registry. " "Subject: {{subject}}."
+        "You are smoke-testing the Langfuse prompt registry. Subject: {{subject}}."
     )
     created = tracker.client.create_prompt(
         name=prompt_name,

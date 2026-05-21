@@ -1,42 +1,61 @@
 import logging
 
-from app.core.logging import RequestIdFilter, configure_logging
+from loguru import logger
+
+from app.core.logging import InterceptHandler, configure_logging
 from app.core.request_context import reset_request_id, set_request_id
 
 
-def test_request_id_filter_adds_request_id():
-    token = set_request_id("req-log")
+def test_configure_logging_installs_intercept_handler_once():
+    configure_logging()
+    configure_logging()
+
+    intercept_handlers = [
+        handler
+        for handler in logging.root.handlers
+        if isinstance(handler, InterceptHandler)
+    ]
+    assert len(intercept_handlers) == 1
+
+
+def test_configure_logging_silences_noisy_loggers():
+    configure_logging(noisy_loggers=("sqlalchemy.engine", "httpx"))
+
+    assert logging.getLogger("sqlalchemy.engine").level == logging.WARNING
+    assert logging.getLogger("httpx").level == logging.WARNING
+
+
+def test_loguru_record_contains_request_id():
+    captured: list[str] = []
+
+    configure_logging()
+    sink_id = logger.add(
+        lambda msg: captured.append(str(msg)),
+        format="{extra[request_id]}|{message}",
+    )
+
+    token = set_request_id("req-loguru")
     try:
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname=__file__,
-            lineno=1,
-            msg="message",
-            args=(),
-            exc_info=None,
-        )
-
-        RequestIdFilter().filter(record)
-
-        assert record.request_id == "req-log"
+        logger.info("hello")
     finally:
         reset_request_id(token)
+        logger.remove(sink_id)
+
+    assert any("req-loguru|hello" in entry for entry in captured)
 
 
-def test_configure_logging_does_not_add_duplicate_request_id_filters():
-    root_logger = logging.getLogger()
-    handler = logging.StreamHandler()
-    root_logger.addHandler(handler)
+def test_stdlib_logger_routes_through_loguru():
+    captured: list[str] = []
+
+    configure_logging()
+    sink_id = logger.add(
+        lambda msg: captured.append(str(msg)),
+        format="{message}",
+    )
+
     try:
-        configure_logging()
-        configure_logging()
-
-        request_id_filters = [
-            log_filter
-            for log_filter in handler.filters
-            if isinstance(log_filter, RequestIdFilter)
-        ]
-        assert len(request_id_filters) == 1
+        logging.getLogger("legacy.module").error("stdlib message")
     finally:
-        root_logger.removeHandler(handler)
+        logger.remove(sink_id)
+
+    assert any("stdlib message" in entry for entry in captured)

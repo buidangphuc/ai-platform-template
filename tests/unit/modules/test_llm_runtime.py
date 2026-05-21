@@ -33,8 +33,7 @@ async def test_build_chat_model_delegates_provider_and_model_to_init_chat_model(
     )
     settings = test_settings.model_copy(
         update={
-            "CHAT_PROVIDER": "openai",
-            "CHAT_MODEL_NAME": "gpt-4.1-mini",
+            "CHAT_MODEL": "openai:gpt-4.1-mini",
         }
     )
 

@@ -10,14 +10,11 @@ def _health_service(request: Request) -> HealthService:
     return request.app.state.health_service
 
 
-@router.get("/health")
-async def health(request: Request):
-    result = await _health_service(request).health()
-    return {"status": result.status}
+async def _liveness() -> dict[str, str]:
+    return {"status": "ok"}
 
 
-@router.get("/ready")
-async def readiness(request: Request):
+async def _readiness(request: Request) -> JSONResponse | dict[str, object]:
     result = await _health_service(request).readiness()
     payload = {
         "status": result.status,
@@ -28,3 +25,9 @@ async def readiness(request: Request):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=payload
         )
     return payload
+
+
+router.add_api_route("/healthz", _liveness, methods=["GET"], name="liveness")
+router.add_api_route(
+    "/readyz", _readiness, methods=["GET"], name="readiness", response_model=None
+)

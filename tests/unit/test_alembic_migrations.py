@@ -8,11 +8,13 @@ def test_alembic_tracks_foundation_schema_revision():
     revision_text = "\n".join(
         revision.read_text(encoding="utf-8") for revision in revisions
     )
-    assert "op.create_table(" in revision_text
-    assert '"api_keys"' in revision_text
+    assert '"api_keys"' not in revision_text
     assert '"feedback"' not in revision_text
     assert "feedbacks" not in revision_text
     assert "platform" not in revision_text
+    assert "audit_events" in revision_text
+    assert "idempotency_keys" in revision_text
+    assert "tasks" in revision_text
 
 
 def test_gitignore_does_not_hide_alembic_revisions():

@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
@@ -23,8 +23,20 @@ _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
-def build_sessionmaker(settings: Settings) -> async_sessionmaker[AsyncSession]:
-    engine = create_async_engine(settings.POSTGRES_URL, pool_pre_ping=True)
+def build_engine(settings: Settings) -> AsyncEngine:
+    return create_async_engine(
+        settings.POSTGRES_URL,
+        pool_pre_ping=True,
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+        pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
+    )
+
+
+def build_sessionmaker(
+    engine: AsyncEngine,
+) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -35,11 +47,8 @@ def get_sessionmaker(
 
     if _sessionmaker is None:
         resolved_settings = settings or get_settings()
-        _engine = create_async_engine(
-            resolved_settings.POSTGRES_URL,
-            pool_pre_ping=True,
-        )
-        _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
+        _engine = build_engine(resolved_settings)
+        _sessionmaker = build_sessionmaker(_engine)
     return _sessionmaker
 
 
@@ -52,19 +61,21 @@ async def dispose_engine() -> None:
     _sessionmaker = None
 
 
-async def check_postgres_connection(settings: Settings) -> None:
-    engine = create_async_engine(settings.POSTGRES_URL, pool_pre_ping=True)
-    try:
-        async with engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
-    finally:
-        await engine.dispose()
-
-
-async def get_db() -> AsyncIterator[AsyncSession]:
-    sessionmaker = get_sessionmaker()
+async def check_postgres_connection(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
     async with sessionmaker() as session:
-        yield session
+        await session.execute(text("SELECT 1"))
+
+
+async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+    sessionmaker = request.app.state.sessionmaker
+    async with sessionmaker() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
 
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]

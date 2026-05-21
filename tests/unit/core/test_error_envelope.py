@@ -18,7 +18,7 @@ def _settings() -> Settings:
         REDIS_PORT=6379,
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
-        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
     )
 
 
@@ -146,3 +146,48 @@ async def test_request_id_replaces_existing_response_header():
         value for name, value in response.headers.raw if name.lower() == b"x-request-id"
     ]
     assert request_id_headers == [b"req-middleware"]
+
+
+async def test_404_uses_standard_error_envelope():
+    app = create_app(settings=_settings(), init_resources=False)
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/missing", headers={"X-Request-ID": "req-404"})
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "not_found",
+            "message": "Not Found",
+            "request_id": "req-404",
+        }
+    }
+
+
+async def test_405_uses_standard_error_envelope():
+    router = APIRouter()
+
+    @router.get("/only-get")
+    async def only_get():
+        return {"ok": True}
+
+    app = create_app(settings=_settings(), init_resources=False)
+    app.include_router(router)
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/only-get",
+            headers={"X-Request-ID": "req-405"},
+        )
+
+    assert response.status_code == 405
+    assert response.json()["error"]["code"] == "method_not_allowed"
+    assert response.json()["error"]["request_id"] == "req-405"

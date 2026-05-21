@@ -18,19 +18,23 @@ def test_settings_defaults_are_local_safe():
         REDIS_PORT=6379,
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
-        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
     )
 
     assert settings.PROJECT_NAME == "AI Solution Engineering Platform"
     assert settings.API_V1_PREFIX == "/api/v1"
     assert settings.POSTGRES_URL.startswith("postgresql+asyncpg://")
-    assert settings.CHAT_PROVIDER == ""
-    assert settings.CHAT_MODEL_NAME == ""
+    assert settings.CHAT_MODEL == ""
     assert settings.LANGFUSE_ENABLED is False
     assert settings.LANGFUSE_PUBLIC_KEY == ""
     assert settings.LANGFUSE_SECRET_KEY == ""
     assert settings.LANGFUSE_BASE_URL == "https://cloud.langfuse.com"
     assert settings.LANGFUSE_PROMPT_CACHE_TTL_SECONDS == 60
+    assert settings.IDEMPOTENCY_ENABLED is False
+    assert settings.AUTH_SUBJECT == "local-user"
+    assert settings.auth_roles == ["admin"]
+    assert "API_KEY_PEPPER" not in Settings.model_fields
+    assert "API_KEY_BOOTSTRAP_TOKEN" not in Settings.model_fields
 
 
 def test_settings_redacts_secret_values():
@@ -45,17 +49,14 @@ def test_settings_redacts_secret_values():
         REDIS_PORT=6379,
         REDIS_PASSWORD="redis-secret",  # pragma: allowlist secret
         REDIS_DATABASE=0,
-        API_KEY_PEPPER="pepper-secret",  # pragma: allowlist secret
-        API_KEY_BOOTSTRAP_TOKEN="bootstrap-secret",  # pragma: allowlist secret
+        AUTH_BEARER_TOKEN="bearer-secret",  # pragma: allowlist secret
         LANGFUSE_SECRET_KEY="langfuse-secret",  # pragma: allowlist secret
-        FUTURE_SERVICE_API_KEY="sk-test",  # pragma: allowlist secret
     )
 
     summary = settings.redacted_summary()
 
     assert summary["REDIS_PASSWORD"] == "***"
-    assert summary["API_KEY_PEPPER"] == "***"
-    assert summary["API_KEY_BOOTSTRAP_TOKEN"] == "***"
+    assert summary["AUTH_BEARER_TOKEN"] == "***"
     assert summary["LANGFUSE_SECRET_KEY"] == "***"
     assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
@@ -73,7 +74,7 @@ def test_redacted_summary_redacts_secret_like_future_fields():
         REDIS_PORT=6379,
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
-        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
     )
 
     assert settings._redacted_value("FUTURE_SERVICE_TOKEN", "token-value") == "***"
@@ -102,7 +103,7 @@ def test_default_rate_limit_per_minute_must_be_positive():
                 REDIS_PORT=6379,
                 REDIS_PASSWORD="",  # pragma: allowlist secret
                 REDIS_DATABASE=0,
-                API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
+                AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
                 DEFAULT_RATE_LIMIT_PER_MINUTE=rate_limit,
             )
 
@@ -119,14 +120,13 @@ def test_settings_keeps_model_selection_minimal():
         REDIS_PORT=6379,
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
-        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
-        CHAT_PROVIDER="openai",
-        CHAT_MODEL_NAME="gpt-4.1-mini",
+        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
+        CHAT_MODEL="openai:gpt-4.1-mini",
     )
 
-    assert settings.CHAT_PROVIDER == "openai"
-    assert settings.CHAT_MODEL_NAME == "gpt-4.1-mini"
-    assert "CHAT_MODEL" not in Settings.model_fields
+    assert settings.CHAT_MODEL == "openai:gpt-4.1-mini"
+    assert "CHAT_PROVIDER" not in Settings.model_fields
+    assert "CHAT_MODEL_NAME" not in Settings.model_fields
     assert "LLM_PROVIDER" not in Settings.model_fields
     assert "EMBEDDING_PROVIDER" not in Settings.model_fields
     assert "FAKE_EMBEDDING_DIMENSIONS" not in Settings.model_fields
@@ -156,45 +156,59 @@ def _base_settings_kwargs(**overrides: object) -> dict[str, object]:
         "REDIS_PORT": 6379,
         "REDIS_PASSWORD": "",  # pragma: allowlist secret
         "REDIS_DATABASE": 0,
-        "API_KEY_PEPPER": "test-pepper",  # pragma: allowlist secret
+        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
     }
     base.update(overrides)
     return base
 
 
-def test_chat_provider_rejects_unknown_value():
-    with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(CHAT_PROVIDER="bedrock"))
+def test_chat_model_accepts_langchain_provider_model_targets_without_allowlist():
+    settings = Settings(
+        **_base_settings_kwargs(CHAT_MODEL="bedrock:anthropic.claude-3-5-sonnet")
+    )
+
+    assert settings.CHAT_MODEL == "bedrock:anthropic.claude-3-5-sonnet"
 
 
-def test_chat_model_name_rejects_unknown_value():
+def test_chat_model_rejects_blank_values():
     with pytest.raises(ValidationError):
-        Settings(
-            **_base_settings_kwargs(
-                CHAT_PROVIDER="openai",
-                CHAT_MODEL_NAME="gpt-9000",
-            )
+        Settings(**_base_settings_kwargs(CHAT_MODEL="   "))
+
+
+def test_auth_bearer_token_is_required_outside_dev_and_test():
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(ENVIRONMENT="prod", AUTH_BEARER_TOKEN=""))
+
+
+def test_auth_roles_are_parsed_from_comma_separated_string():
+    settings = Settings(
+        **_base_settings_kwargs(AUTH_ROLES="admin, developer, , viewer")
+    )
+
+    assert settings.auth_roles == ["admin", "developer", "viewer"]
+
+
+def test_cors_and_trusted_hosts_are_parsed_from_comma_separated_strings():
+    settings = Settings(
+        **_base_settings_kwargs(
+            CORS_ALLOW_ORIGINS="https://app.example.com, http://localhost:3000",
+            TRUSTED_HOSTS="api.example.com, localhost",
         )
+    )
+
+    assert settings.cors_allow_origins == [
+        "https://app.example.com",
+        "http://localhost:3000",
+    ]
+    assert settings.trusted_hosts == ["api.example.com", "localhost"]
 
 
-def test_chat_provider_and_model_name_must_both_be_set():
+def test_max_request_body_bytes_must_be_positive():
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(CHAT_PROVIDER="openai"))
-    with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(CHAT_MODEL_NAME="gpt-4.1-mini"))
+        Settings(**_base_settings_kwargs(MAX_REQUEST_BODY_BYTES=0))
 
 
-def test_chat_provider_and_model_name_must_match():
-    with pytest.raises(ValidationError):
-        Settings(
-            **_base_settings_kwargs(
-                CHAT_PROVIDER="anthropic",
-                CHAT_MODEL_NAME="gpt-4.1-mini",
-            )
-        )
-
-
-def test_env_example_includes_local_langfuse_stack_defaults():
+def test_env_example_includes_app_settings_defaults():
     env_example = Path(".env.example").read_text(encoding="utf-8")
 
     public_key_line = (
@@ -203,13 +217,26 @@ def test_env_example_includes_local_langfuse_stack_defaults():
     secret_key_line = (
         "LANGFUSE_SECRET_KEY=lf_sk_local_ai_platform"  # pragma: allowlist secret
     )
-    project_id_line = (
-        "LANGFUSE_INIT_PROJECT_ID=local-ai-platform"  # pragma: allowlist secret
-    )
 
     assert "LANGFUSE_ENABLED=true" in env_example
     assert public_key_line in env_example
     assert secret_key_line in env_example
     assert "LANGFUSE_BASE_URL=http://localhost:3000" in env_example
-    assert "LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000" in env_example
-    assert project_id_line in env_example
+    assert "AUTH_BEARER_TOKEN=change-me-local-bearer-token" in env_example
+    assert "AUTH_SUBJECT=local-user" in env_example
+    assert "CHAT_MODEL=" in env_example
+    assert "CORS_ALLOW_ORIGINS=*" in env_example
+    assert "TRUSTED_HOSTS=*" in env_example
+    assert "MAX_REQUEST_BODY_BYTES=10485760" in env_example
+    assert "IDEMPOTENCY_ENABLED=false" in env_example
+
+
+def test_env_langfuse_example_carries_compose_only_overrides():
+    langfuse_example = Path(".env.langfuse.example").read_text(encoding="utf-8")
+    project_id_line = (
+        "LANGFUSE_INIT_PROJECT_ID=local-ai-platform"  # pragma: allowlist secret
+    )
+
+    assert "LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000" in langfuse_example
+    assert project_id_line in langfuse_example
+    assert "LANGFUSE_NEXTAUTH_URL=http://localhost:3000" in langfuse_example

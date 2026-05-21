@@ -100,7 +100,7 @@ async def test_run_smoke_creates_then_fetches_prompt_and_compiles_variables(
     assert result["created_version"] == 1
     assert result["fetched_version"] == 1
     assert result["compiled"] == (
-        "You are smoke-testing the Langfuse prompt registry. " "Subject: hello world."
+        "You are smoke-testing the Langfuse prompt registry. Subject: hello world."
     )
 
 

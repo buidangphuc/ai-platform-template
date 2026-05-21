@@ -52,6 +52,7 @@ class RequestIdMiddleware:
         headers = scope.get("headers") or []
         raw_request_id = _first_header(headers, header_name)
         request_id = raw_request_id.decode() if raw_request_id else f"req_{uuid4().hex}"
+        scope.setdefault("state", {})["request_id"] = request_id
         token = set_request_id(request_id)
 
         async def send_with_request_id(message):

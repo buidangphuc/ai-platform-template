@@ -22,9 +22,6 @@ class HealthService:
         self.postgres_check = postgres_check
         self.redis_check = redis_check
 
-    async def health(self) -> HealthResult:
-        return HealthResult(status="ok", dependencies={"api": "ok"})
-
     async def readiness(self) -> HealthResult:
         dependencies = {"api": "ok"}
         if not self.check_external_dependencies:

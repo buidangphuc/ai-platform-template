@@ -170,8 +170,8 @@ def test_build_langfuse_tracker_uses_local_env_credentials(
     expected_secret_key = "lf_sk_local_ai_platform"  # pragma: allowlist secret
 
     def fake_build_langfuse_client(settings):
-        assert settings.LANGFUSE_PUBLIC_KEY == expected_public_key
-        assert settings.LANGFUSE_SECRET_KEY == expected_secret_key
+        assert expected_public_key == settings.LANGFUSE_PUBLIC_KEY
+        assert expected_secret_key == settings.LANGFUSE_SECRET_KEY
         assert settings.LANGFUSE_BASE_URL == "http://localhost:3000"
         return client
 

@@ -3,48 +3,54 @@ from httpx import ASGITransport, AsyncClient
 from app.bootstrap.application import create_app
 from app.core.config import Settings
 
-BOOTSTRAP_HEADERS = {"X-Bootstrap-Token": "test-bootstrap-token"}
 
-
-async def test_create_api_key_returns_secret_once(client):
-    response = await client.post(
-        "/api/v1/auth/api-keys",
-        headers=BOOTSTRAP_HEADERS,
-        json={"name": "local-test"},
-    )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["name"] == "local-test"
-    assert body["api_key"].startswith("ak_")
-    assert body["api_key_id"]
-
-
-async def test_create_api_key_requires_bootstrap_token(client):
-    response = await client.post(
-        "/api/v1/auth/api-keys",
-        json={"name": "local-test"},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "forbidden"
-
-
-async def test_authenticated_endpoint_accepts_api_key(client):
-    created = await client.post(
-        "/api/v1/auth/api-keys",
-        headers=BOOTSTRAP_HEADERS,
-        json={"name": "local-test"},
-    )
-    api_key = created.json()["api_key"]
-
+async def test_authenticated_endpoint_accepts_bearer_token(client):
     response = await client.get(
         "/api/v1/auth/me",
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={"Authorization": "Bearer test-token"},
     )
 
     assert response.status_code == 200
-    assert response.json()["auth_type"] == "api_key"
+    assert response.json() == {
+        "id": "test-user",
+        "type": "service",
+        "scopes": ["admin", "developer"],
+    }
+
+
+async def test_authenticated_endpoint_rejects_missing_bearer_token(client):
+    response = await client.get("/api/v1/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_authenticated_endpoint_rejects_invalid_bearer_token(client):
+    response = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_authenticated_endpoint_reports_unconfigured_auth(test_settings):
+    app = create_app(
+        settings=test_settings.model_copy(update={"AUTH_BEARER_TOKEN": ""}),
+        init_resources=False,
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as test_client:
+        response = await test_client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "auth_not_configured"
 
 
 async def test_authenticated_endpoint_returns_429_when_rate_limited():
@@ -59,8 +65,9 @@ async def test_authenticated_endpoint_returns_429_when_rate_limited():
         REDIS_PORT=6379,
         REDIS_PASSWORD="",  # pragma: allowlist secret
         REDIS_DATABASE=0,
-        API_KEY_PEPPER="test-pepper",  # pragma: allowlist secret
-        API_KEY_BOOTSTRAP_TOKEN="test-bootstrap-token",  # pragma: allowlist secret
+        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
+        AUTH_SUBJECT="rate-limited-user",
+        AUTH_ROLES="admin",
         DEFAULT_RATE_LIMIT_PER_MINUTE=1,
     )
     app = create_app(settings=settings, init_resources=False)
@@ -68,20 +75,13 @@ async def test_authenticated_endpoint_returns_429_when_rate_limited():
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as test_client:
-        created = await test_client.post(
-            "/api/v1/auth/api-keys",
-            headers=BOOTSTRAP_HEADERS,
-            json={"name": "local-test"},
-        )
-        api_key = created.json()["api_key"]
-
         first = await test_client.get(
             "/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": "Bearer test-token"},
         )
         second = await test_client.get(
             "/api/v1/auth/me",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": "Bearer test-token"},
         )
 
     assert first.status_code == 200

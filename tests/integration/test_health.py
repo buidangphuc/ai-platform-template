@@ -1,28 +1,17 @@
-async def test_health_returns_api_status(client):
-    response = await client.get("/health")
+import pytest
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/api/v1/healthz"])
+async def test_liveness_always_returns_ok(client, path):
+    response = await client.get(path)
 
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.json() == {"status": "ok"}
 
 
-async def test_readiness_returns_dependency_statuses(client):
-    response = await client.get("/ready")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["dependencies"]["api"] == "ok"
-
-
-async def test_api_prefix_health_returns_api_status(client):
-    response = await client.get("/api/v1/health")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-
-
-async def test_api_prefix_readiness_returns_dependency_statuses(client):
-    response = await client.get("/api/v1/ready")
+@pytest.mark.parametrize("path", ["/readyz", "/api/v1/readyz"])
+async def test_readiness_returns_dependency_statuses(client, path):
+    response = await client.get(path)
 
     assert response.status_code == 200
     body = response.json()
@@ -45,8 +34,18 @@ async def test_readiness_returns_503_when_dependency_is_down(client):
         redis_check=up,
     )
 
-    response = await client.get("/ready")
+    response = await client.get("/readyz")
 
     assert response.status_code == 503
     assert response.json()["status"] == "error"
     assert response.json()["dependencies"]["postgres"] == "error"
+
+
+async def test_liveness_does_not_depend_on_health_service(client):
+    # Liveness must stay 200 even if dependencies (and the service) are broken.
+    client._transport.app.state.health_service = None
+
+    response = await client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
