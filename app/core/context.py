@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bootstrap.state import get_app_settings
 from app.core.database import DbSession
 from app.core.idempotency import get_idempotency_key
 from app.core.request_context import get_request_id
@@ -45,7 +46,7 @@ async def get_service_context(
         request_id=get_request_id(),
         principal=principal,
         db=db,
-        idempotency_enabled=request.app.state.settings.IDEMPOTENCY_ENABLED,
+        idempotency_enabled=get_app_settings(request.app).IDEMPOTENCY_ENABLED,
     )
 
 

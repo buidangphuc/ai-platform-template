@@ -47,7 +47,14 @@ end
 return current
 """
 
-    def __init__(self, *, redis, limit: int, window_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        redis,
+        limit: int,
+        window_seconds: int = 60,
+        prefix: str = "rate-limit",
+    ) -> None:
         if limit <= 0:
             raise ValueError("limit must be positive")
         if window_seconds <= 0:
@@ -55,9 +62,10 @@ return current
         self.redis = redis
         self.limit = limit
         self.window_seconds = window_seconds
+        self.prefix = prefix
 
     async def check(self, key: str) -> RateLimitResult:
-        redis_key = f"rate-limit:{key}"
+        redis_key = f"{self.prefix}:{key}"
         count = await self.redis.eval(
             self._CHECK_SCRIPT,
             1,

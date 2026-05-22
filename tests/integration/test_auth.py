@@ -71,18 +71,19 @@ async def test_authenticated_endpoint_returns_429_when_rate_limited():
         DEFAULT_RATE_LIMIT_PER_MINUTE=1,
     )
     app = create_app(settings=settings, init_resources=False)
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as test_client:
-        first = await test_client.get(
-            "/api/v1/auth/me",
-            headers={"Authorization": "Bearer test-token"},
-        )
-        second = await test_client.get(
-            "/api/v1/auth/me",
-            headers={"Authorization": "Bearer test-token"},
-        )
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as test_client:
+            first = await test_client.get(
+                "/api/v1/auth/me",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            second = await test_client.get(
+                "/api/v1/auth/me",
+                headers={"Authorization": "Bearer test-token"},
+            )
 
     assert first.status_code == 200
     assert second.status_code == 429

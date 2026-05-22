@@ -2,7 +2,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core.config import Settings
 from app.core.errors import AppError
+from app.modules.idempotency.adapters import PostgresIdempotencyStore
+from app.modules.idempotency.factory import IdempotencyAddon, build_idempotency_store
 from app.modules.idempotency.models import IdempotencyKey
 from app.modules.idempotency.service import (
     IdempotencyCachedResponse,
@@ -10,6 +13,7 @@ from app.modules.idempotency.service import (
     check_or_store_idempotency_key,
     store_idempotency_response,
 )
+from app.modules.idempotency.store import IdempotencyStore
 
 
 class _FakeSession:
@@ -160,3 +164,45 @@ async def test_store_idempotency_response_marks_record_completed():
     assert record.response_status_code == 201
     assert record.response_body == {"id": "created"}
     assert session.flushed is True
+
+
+def _settings(**overrides: object) -> Settings:
+    base: dict[str, object] = {
+        "_env_file": None,
+        "ENVIRONMENT": "test",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
+        "POSTGRES_DB": "ai_platform",
+        "REDIS_HOST": "localhost",
+        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
+def test_postgres_idempotency_store_matches_protocol():
+    store = PostgresIdempotencyStore(sessionmaker=object())
+
+    assert isinstance(store, IdempotencyStore)
+
+
+def test_build_idempotency_store_requires_sessionmaker_for_postgres():
+    with pytest.raises(RuntimeError, match="sessionmaker"):
+        build_idempotency_store(_settings(IDEMPOTENCY_ENABLED=True))
+
+
+def test_build_idempotency_store_uses_postgres_adapter():
+    store = build_idempotency_store(
+        _settings(IDEMPOTENCY_ENABLED=True),
+        sessionmaker=object(),
+    )
+
+    assert isinstance(store, PostgresIdempotencyStore)
+
+
+def test_idempotency_addon_respects_enabled_flag():
+    addon = IdempotencyAddon()
+
+    assert addon.is_enabled(_settings(IDEMPOTENCY_ENABLED=True)) is True
+    assert addon.is_enabled(_settings(IDEMPOTENCY_ENABLED=False)) is False

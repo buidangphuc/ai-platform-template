@@ -11,7 +11,8 @@
     "scripts",
     "docs",
     "app/modules/queue/adapters/sqs.py",
-    "app/modules/queue/adapters/rabbitmq.py"
+    "app/modules/queue/adapters/rabbitmq.py",
+    "app/modules/objects/adapters/s3.py"
   ],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",

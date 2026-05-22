@@ -31,6 +31,20 @@ def test_settings_defaults_are_local_safe():
     assert settings.LANGFUSE_BASE_URL == "https://cloud.langfuse.com"
     assert settings.LANGFUSE_PROMPT_CACHE_TTL_SECONDS == 60
     assert settings.IDEMPOTENCY_ENABLED is False
+    assert settings.DATABASE_ENABLED is True
+    assert settings.REDIS_ENABLED is True
+    assert settings.QUEUE_ENABLED is True
+    assert settings.TASKS_ENABLED is True
+    assert settings.CACHE_ENABLED is False
+    assert settings.CACHE_BACKEND == "memory"
+    assert settings.WEBHOOKS_ENABLED is False
+    assert settings.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS == 300
+    assert settings.WEBHOOK_TIMEOUT_SECONDS == 10
+    assert settings.SECURITY_HEADERS_ENABLED is False
+    assert settings.SECURITY_HSTS_ENABLED is False
+    assert settings.SECURITY_HSTS_MAX_AGE_SECONDS == 31536000
+    assert settings.CHAT_FALLBACK_MODELS == ""
+    assert settings.JUDGE_CHAT_MODEL == ""
     assert settings.AUTH_SUBJECT == "local-user"
     assert settings.auth_roles == ["admin"]
     assert "API_KEY_PEPPER" not in Settings.model_fields
@@ -175,9 +189,86 @@ def test_chat_model_rejects_blank_values():
         Settings(**_base_settings_kwargs(CHAT_MODEL="   "))
 
 
+def test_worker_and_sqs_tuning_values_are_validated():
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(WORKER_MAX_ATTEMPTS=0))
+
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(SQS_VISIBILITY_TIMEOUT_SECONDS=-1))
+
+
+def test_cache_and_webhook_settings_are_validated():
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(CACHE_BACKEND="disk"))
+
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(CACHE_DEFAULT_TTL_SECONDS=0))
+
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=0))
+
+    with pytest.raises(ValidationError):
+        Settings(**_base_settings_kwargs(WEBHOOK_TIMEOUT_SECONDS=0))
+
+
 def test_auth_bearer_token_is_required_outside_dev_and_test():
     with pytest.raises(ValidationError):
         Settings(**_base_settings_kwargs(ENVIRONMENT="prod", AUTH_BEARER_TOKEN=""))
+
+
+def test_production_rejects_openapi_docs():
+    with pytest.raises(ValidationError, match="DOCS_ENABLED must be false"):
+        Settings(
+            **_base_settings_kwargs(
+                ENVIRONMENT="prod",
+                AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
+                DOCS_ENABLED=True,
+                CORS_ALLOW_ORIGINS="https://app.example.com",
+                TRUSTED_HOSTS="api.example.com",
+            )
+        )
+
+
+def test_production_rejects_wildcard_cors_and_trusted_hosts():
+    for field in ("CORS_ALLOW_ORIGINS", "TRUSTED_HOSTS"):
+        values = {
+            "ENVIRONMENT": "prod",
+            "AUTH_BEARER_TOKEN": "prod-token-with-enough-entropy",
+            "DOCS_ENABLED": False,
+            "CORS_ALLOW_ORIGINS": "https://app.example.com",
+            "TRUSTED_HOSTS": "api.example.com",
+            field: "*",
+        }
+        with pytest.raises(ValidationError, match=f"{field} must not contain"):
+            Settings(**_base_settings_kwargs(**values))
+
+
+def test_production_rejects_default_or_weak_auth_tokens():
+    for token in ("change-me-local-bearer-token", "short-token"):
+        with pytest.raises(ValidationError, match="AUTH_BEARER_TOKEN"):
+            Settings(
+                **_base_settings_kwargs(
+                    ENVIRONMENT="prod",
+                    AUTH_BEARER_TOKEN=token,  # pragma: allowlist secret
+                    DOCS_ENABLED=False,
+                    CORS_ALLOW_ORIGINS="https://app.example.com",
+                    TRUSTED_HOSTS="api.example.com",
+                )
+            )
+
+
+def test_production_accepts_locked_down_runtime_settings():
+    settings = Settings(
+        **_base_settings_kwargs(
+            ENVIRONMENT="production",
+            AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
+            DOCS_ENABLED=False,
+            CORS_ALLOW_ORIGINS="https://app.example.com",
+            TRUSTED_HOSTS="api.example.com",
+        )
+    )
+
+    assert settings.ENVIRONMENT == "production"
 
 
 def test_auth_roles_are_parsed_from_comma_separated_string():
@@ -229,6 +320,26 @@ def test_env_example_includes_app_settings_defaults():
     assert "TRUSTED_HOSTS=*" in env_example
     assert "MAX_REQUEST_BODY_BYTES=10485760" in env_example
     assert "IDEMPOTENCY_ENABLED=false" in env_example
+    assert "DATABASE_ENABLED=true" in env_example
+    assert "REDIS_ENABLED=true" in env_example
+    assert "QUEUE_ENABLED=true" in env_example
+    assert "TASKS_ENABLED=true" in env_example
+    assert "SQS_ENDPOINT_URL=" in env_example
+    assert "SQS_VISIBILITY_TIMEOUT_SECONDS=0" in env_example
+    assert "WORKER_MAX_ATTEMPTS=3" in env_example
+    assert "CACHE_ENABLED=false" in env_example
+    assert "CACHE_BACKEND=memory" in env_example
+    assert "CACHE_PREFIX=app" in env_example
+    assert "CACHE_DEFAULT_TTL_SECONDS=300" in env_example
+    assert "WEBHOOKS_ENABLED=false" in env_example
+    assert "WEBHOOK_SIGNING_SECRET=" in env_example
+    assert "WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=300" in env_example
+    assert "WEBHOOK_TIMEOUT_SECONDS=10" in env_example
+    assert "SECURITY_HEADERS_ENABLED=false" in env_example
+    assert "SECURITY_HSTS_ENABLED=false" in env_example
+    assert "SECURITY_HSTS_MAX_AGE_SECONDS=31536000" in env_example
+    assert "CHAT_FALLBACK_MODELS=" in env_example
+    assert "JUDGE_CHAT_MODEL=" in env_example
 
 
 def test_env_langfuse_example_carries_compose_only_overrides():

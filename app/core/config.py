@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     DESCRIPTION: str = "Reusable FastAPI foundation for AI solution engineering"
     API_V1_PREFIX: str = "/api/v1"
 
+    DATABASE_ENABLED: bool = True
     POSTGRES_HOST: str
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str
@@ -27,6 +28,7 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT_SECONDS: int = 30
     DB_POOL_RECYCLE_SECONDS: int = 1800
 
+    REDIS_ENABLED: bool = True
     REDIS_HOST: str
     REDIS_PORT: int = 6379
     REDIS_PASSWORD: str = ""
@@ -36,10 +38,17 @@ class Settings(BaseSettings):
     AUTH_BEARER_TOKEN: str = ""
     AUTH_SUBJECT: str = "local-user"
     AUTH_ROLES: str = "admin"
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_BACKEND: str = "memory"
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_REDIS_PREFIX: str = "rate-limit"
     DEFAULT_RATE_LIMIT_PER_MINUTE: int = 60
     IDEMPOTENCY_ENABLED: bool = False
+    IDEMPOTENCY_BACKEND: str = "postgres"
 
     CHAT_MODEL: str = ""
+    CHAT_FALLBACK_MODELS: str = ""
+    JUDGE_CHAT_MODEL: str = ""
 
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PUBLIC_KEY: str = ""
@@ -47,10 +56,34 @@ class Settings(BaseSettings):
     LANGFUSE_BASE_URL: str = "https://cloud.langfuse.com"
     LANGFUSE_PROMPT_CACHE_TTL_SECONDS: int = 60
 
+    CACHE_ENABLED: bool = False
+    CACHE_BACKEND: str = "memory"
+    CACHE_PREFIX: str = "app"
+    CACHE_DEFAULT_TTL_SECONDS: float = 300
+
+    WEBHOOKS_ENABLED: bool = False
+    WEBHOOK_SIGNING_SECRET: str = ""
+    WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: int = 300
+    WEBHOOK_TIMEOUT_SECONDS: float = 10
+
+    OBJECTS_ENABLED: bool = False
+    OBJECT_BACKEND: str = "memory"
+    OBJECT_PREFIX: str = "app"
+    OBJECT_S3_BUCKET: str = ""
+    OBJECT_S3_REGION: str = "ap-southeast-1"
+    OBJECT_S3_ENDPOINT_URL: str = ""
+
+    OUTBOX_ENABLED: bool = False
+    OUTBOX_BACKEND: str = "postgres"
+
     CORS_ALLOW_ORIGINS: str = "*"
     CORS_ALLOW_CREDENTIALS: bool = False
     TRUSTED_HOSTS: str = "*"
     MAX_REQUEST_BODY_BYTES: int = 10 * 1024 * 1024
+
+    SECURITY_HEADERS_ENABLED: bool = False
+    SECURITY_HSTS_ENABLED: bool = False
+    SECURITY_HSTS_MAX_AGE_SECONDS: int = 31536000
 
     GZIP_ENABLED: bool = False
     GZIP_MIN_SIZE: int = 1024
@@ -63,17 +96,22 @@ class Settings(BaseSettings):
     GRACEFUL_SHUTDOWN_ENABLED: bool = False
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: int = 30
 
+    QUEUE_ENABLED: bool = True
     QUEUE_BACKEND: str = "memory"
     QUEUE_NAME: str = "completions"
     SQS_QUEUE_URL: str = ""
     SQS_REGION: str = "ap-southeast-1"
+    SQS_ENDPOINT_URL: str = ""
+    SQS_VISIBILITY_TIMEOUT_SECONDS: int = 0
     RABBITMQ_URL: str = ""
 
+    TASKS_ENABLED: bool = True
     TASK_STORE_BACKEND: str = "memory"
     TASK_REDIS_PREFIX: str = "tasks"
     TASK_TTL_SECONDS: int = 86400
 
     WORKER_MAX_CONCURRENT: int = 10
+    WORKER_MAX_ATTEMPTS: int = 3
     WORKER_POLL_INTERVAL_SECONDS: float = 0.5
     WORKER_RECEIVE_BATCH_SIZE: int = 10
     WORKER_RECEIVE_WAIT_SECONDS: float = 1.0
@@ -89,6 +127,29 @@ class Settings(BaseSettings):
     def validate_default_rate_limit_per_minute(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("DEFAULT_RATE_LIMIT_PER_MINUTE must be positive")
+        return value
+
+    @field_validator("RATE_LIMIT_BACKEND")
+    @classmethod
+    def validate_rate_limit_backend(cls, value: str) -> str:
+        allowed = {"memory", "redis"}
+        if value not in allowed:
+            raise ValueError(f"RATE_LIMIT_BACKEND must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("RATE_LIMIT_WINDOW_SECONDS")
+    @classmethod
+    def validate_rate_limit_window_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("RATE_LIMIT_WINDOW_SECONDS must be positive")
+        return value
+
+    @field_validator("IDEMPOTENCY_BACKEND")
+    @classmethod
+    def validate_idempotency_backend(cls, value: str) -> str:
+        allowed = {"postgres"}
+        if value not in allowed:
+            raise ValueError(f"IDEMPOTENCY_BACKEND must be one of {sorted(allowed)}")
         return value
 
     @field_validator(
@@ -114,11 +175,63 @@ class Settings(BaseSettings):
             raise ValueError("LANGFUSE_PROMPT_CACHE_TTL_SECONDS must not be negative")
         return value
 
+    @field_validator("CACHE_BACKEND")
+    @classmethod
+    def validate_cache_backend(cls, value: str) -> str:
+        allowed = {"memory", "redis"}
+        if value not in allowed:
+            raise ValueError(f"CACHE_BACKEND must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("CACHE_DEFAULT_TTL_SECONDS")
+    @classmethod
+    def validate_cache_default_ttl_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("CACHE_DEFAULT_TTL_SECONDS must be positive")
+        return value
+
+    @field_validator("WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS")
+    @classmethod
+    def validate_webhook_timestamp_tolerance_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS must be positive")
+        return value
+
+    @field_validator("WEBHOOK_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_webhook_timeout_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("WEBHOOK_TIMEOUT_SECONDS must be positive")
+        return value
+
+    @field_validator("OBJECT_BACKEND")
+    @classmethod
+    def validate_object_backend(cls, value: str) -> str:
+        allowed = {"memory", "s3"}
+        if value not in allowed:
+            raise ValueError(f"OBJECT_BACKEND must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("OUTBOX_BACKEND")
+    @classmethod
+    def validate_outbox_backend(cls, value: str) -> str:
+        allowed = {"postgres"}
+        if value not in allowed:
+            raise ValueError(f"OUTBOX_BACKEND must be one of {sorted(allowed)}")
+        return value
+
     @field_validator("MAX_REQUEST_BODY_BYTES")
     @classmethod
     def validate_max_request_body_bytes(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("MAX_REQUEST_BODY_BYTES must be positive")
+        return value
+
+    @field_validator("SECURITY_HSTS_MAX_AGE_SECONDS")
+    @classmethod
+    def validate_security_hsts_max_age_seconds(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("SECURITY_HSTS_MAX_AGE_SECONDS must not be negative")
         return value
 
     @field_validator("GZIP_MIN_SIZE")
@@ -172,11 +285,20 @@ class Settings(BaseSettings):
             raise ValueError("TASK_TTL_SECONDS must be positive")
         return value
 
-    @field_validator("WORKER_MAX_CONCURRENT", "WORKER_RECEIVE_BATCH_SIZE")
+    @field_validator(
+        "WORKER_MAX_CONCURRENT", "WORKER_MAX_ATTEMPTS", "WORKER_RECEIVE_BATCH_SIZE"
+    )
     @classmethod
     def validate_worker_positive_int(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Worker concurrency values must be positive")
+        return value
+
+    @field_validator("SQS_VISIBILITY_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_sqs_visibility_timeout_seconds(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("SQS_VISIBILITY_TIMEOUT_SECONDS must not be negative")
         return value
 
     @field_validator("WORKER_POLL_INTERVAL_SECONDS", "WORKER_RECEIVE_WAIT_SECONDS")
@@ -194,12 +316,34 @@ class Settings(BaseSettings):
         return value.strip()
 
     @model_validator(mode="after")
-    def validate_auth_token_for_non_local_runtime(self) -> "Settings":
+    def validate_runtime_safety(self) -> "Settings":
         if (
             self.ENVIRONMENT.lower() not in {"dev", "local", "test"}
             and not self.AUTH_BEARER_TOKEN
         ):
             raise ValueError("AUTH_BEARER_TOKEN is required outside dev/local/test")
+        if not self._is_production_environment():
+            return self
+
+        if self.DOCS_ENABLED:
+            raise ValueError("DOCS_ENABLED must be false in production")
+        for field_name, raw_value in (
+            ("CORS_ALLOW_ORIGINS", self.CORS_ALLOW_ORIGINS),
+            ("TRUSTED_HOSTS", self.TRUSTED_HOSTS),
+        ):
+            if "*" in self._split_csv(raw_value):
+                raise ValueError(f"{field_name} must not contain '*' in production")
+        if (
+            self.AUTH_BEARER_TOKEN
+            in {
+                "change-me-local-bearer-token",
+                "test-token",
+                "local-token",
+                "dev-token",
+            }
+            or len(self.AUTH_BEARER_TOKEN) < 24
+        ):
+            raise ValueError("AUTH_BEARER_TOKEN is too weak for production")
         return self
 
     @computed_field
@@ -257,7 +401,10 @@ class Settings(BaseSettings):
     def _split_csv(self, value: str) -> list[str]:
         return [item.strip() for item in value.split(",") if item.strip()]
 
+    def _is_production_environment(self) -> bool:
+        return self.ENVIRONMENT.lower() in {"prod", "production"}
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # pyright: ignore[reportCallIssue]

@@ -1,5 +1,9 @@
 import pytest
+from fastapi import FastAPI
 
+from app.bootstrap.resources import ApplicationResources
+from app.core.config import Settings
+from app.modules.rate_limit.factory import RateLimitAddon, build_rate_limiter
 from app.modules.rate_limit.service import InMemoryRateLimiter, RedisRateLimiter
 
 
@@ -71,3 +75,54 @@ async def test_redis_rate_limiter_sets_window_on_first_hit():
     assert num_keys == 1
     assert key == "rate-limit:api-key-1"
     assert window_seconds == 60
+
+
+def _settings(**overrides: object) -> Settings:
+    base: dict[str, object] = {
+        "_env_file": None,
+        "ENVIRONMENT": "test",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
+        "POSTGRES_DB": "ai_platform",
+        "REDIS_HOST": "localhost",
+        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
+    }
+    base.update(overrides)
+    return Settings(**base)
+
+
+def test_build_rate_limiter_defaults_to_memory():
+    limiter = build_rate_limiter(_settings(DEFAULT_RATE_LIMIT_PER_MINUTE=5))
+
+    assert isinstance(limiter, InMemoryRateLimiter)
+    assert limiter.limit == 5
+
+
+def test_build_rate_limiter_uses_redis_backend():
+    redis = FakeRedis()
+    limiter = build_rate_limiter(_settings(RATE_LIMIT_BACKEND="redis"), redis=redis)
+
+    assert isinstance(limiter, RedisRateLimiter)
+
+
+def test_redis_rate_limiter_requires_redis_client():
+    with pytest.raises(RuntimeError, match="redis client"):
+        build_rate_limiter(_settings(RATE_LIMIT_BACKEND="redis"))
+
+
+async def test_rate_limit_addon_attaches_limiter_when_enabled():
+    app = FastAPI()
+    resources = ApplicationResources(redis=FakeRedis())
+    addon = RateLimitAddon()
+
+    await addon.open(app, resources, _settings(RATE_LIMIT_BACKEND="redis"))
+
+    assert isinstance(app.state.rate_limiter, RedisRateLimiter)
+
+
+def test_rate_limit_addon_respects_enabled_flag():
+    addon = RateLimitAddon()
+
+    assert addon.is_enabled(_settings(RATE_LIMIT_ENABLED=True)) is True
+    assert addon.is_enabled(_settings(RATE_LIMIT_ENABLED=False)) is False

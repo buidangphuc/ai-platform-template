@@ -1,5 +1,4 @@
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
@@ -9,12 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.modules.idempotency.models import IdempotencyKey
-
-
-@dataclass(frozen=True, slots=True)
-class IdempotencyCachedResponse:
-    status_code: int
-    body: dict[str, Any]
+from app.modules.idempotency.store import IdempotencyCachedResponse
 
 
 def build_request_hash(

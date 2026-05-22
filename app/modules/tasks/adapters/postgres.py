@@ -54,7 +54,7 @@ class PostgresTaskStore:
         async with self.sessionmaker() as session, session.begin():
             stmt = delete(Task).where(Task.expires_at <= before)
             result = await session.execute(stmt)
-            return result.rowcount or 0
+            return int(getattr(result, "rowcount", 0) or 0)
 
     async def close(self) -> None:
         return None
@@ -79,7 +79,7 @@ class PostgresTaskStore:
         async with self.sessionmaker() as session, session.begin():
             stmt = update(Task).where(Task.id == task_id).values(**values)
             outcome = await session.execute(stmt)
-            if outcome.rowcount == 0:
+            if getattr(outcome, "rowcount", 0) == 0:
                 raise KeyError(task_id)
 
 

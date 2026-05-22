@@ -5,6 +5,12 @@ from app.core.config import Settings
 def test_app_wiring_bootstraps_basic_runtime_only(test_settings: Settings):
     app = create_app(settings=test_settings, init_resources=False)
 
+    assert not hasattr(app.state, "engine")
+    assert not hasattr(app.state, "sessionmaker")
+    assert not hasattr(app.state, "redis")
+    assert not hasattr(app.state, "queue_gateway")
+    assert not hasattr(app.state, "task_store")
+    assert not hasattr(app.state, "task_service")
     assert not hasattr(app.state, "adapters")
     assert not hasattr(app.state, "observability")
     assert not hasattr(app.state, "chat_model")
@@ -16,8 +22,8 @@ def test_app_wiring_bootstraps_basic_runtime_only(test_settings: Settings):
     assert not hasattr(app.state, "agent_runner")
     assert not hasattr(app.state, "feedback_repository")
     assert not hasattr(app.state, "api_key_repository")
+    assert not hasattr(app.state, "rate_limiter")
     assert app.state.health_service is not None
-    assert app.state.rate_limiter is not None
 
 
 def test_app_accepts_completion_handler_as_business_boundary(

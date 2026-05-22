@@ -48,3 +48,24 @@ async def test_readiness_reports_down_dependencies():
         "postgres": "error",
         "redis": "ok",
     }
+
+
+async def test_readiness_only_reports_configured_dependency_checks():
+    calls: list[str] = []
+
+    async def check_redis() -> None:
+        calls.append("redis")
+
+    service = HealthService(
+        check_external_dependencies=True,
+        redis_check=check_redis,
+    )
+
+    result = await service.readiness()
+
+    assert result.status == "ok"
+    assert result.dependencies == {
+        "api": "ok",
+        "redis": "ok",
+    }
+    assert calls == ["redis"]

@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.database import Base
 from app.modules.audit import models as audit_models  # noqa: F401
 from app.modules.idempotency import models as idempotency_models  # noqa: F401
+from app.modules.outbox import models as outbox_models  # noqa: F401
 from app.modules.tasks import models as tasks_models  # noqa: F401
 
 config = context.config

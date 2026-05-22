@@ -1,6 +1,6 @@
 import re
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, cast
 
 TraceContentMode = Literal["off", "redacted", "full"]
 
@@ -12,7 +12,7 @@ class RedactionPolicy:
     @classmethod
     def from_trace_content(cls, trace_content: str) -> "RedactionPolicy":
         if trace_content in {"off", "redacted", "full"}:
-            return cls(mode=trace_content)
+            return cls(mode=cast(TraceContentMode, trace_content))
         return cls(mode="redacted")
 
     def redact_text(self, value: str) -> str:

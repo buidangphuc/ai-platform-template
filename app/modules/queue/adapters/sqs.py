@@ -27,6 +27,7 @@ class SQSQueueGateway:
         *,
         queue_url: str,
         region_name: str = "ap-southeast-1",
+        endpoint_url: str | None = None,
         visibility_timeout: int | None = None,
     ) -> None:
         _require_aioboto3()
@@ -34,6 +35,7 @@ class SQSQueueGateway:
             raise ValueError("queue_url is required for SQS gateway")
         self.queue_url = queue_url
         self.region_name = region_name
+        self.endpoint_url = endpoint_url
         self.visibility_timeout = visibility_timeout
         self._session = aioboto3.Session()
         self._client_cm = None
@@ -41,7 +43,10 @@ class SQSQueueGateway:
 
     async def _get_client(self):
         if self._client is None:
-            self._client_cm = self._session.client("sqs", region_name=self.region_name)
+            kwargs: dict[str, Any] = {"region_name": self.region_name}
+            if self.endpoint_url:
+                kwargs["endpoint_url"] = self.endpoint_url
+            self._client_cm = self._session.client("sqs", **kwargs)
             self._client = await self._client_cm.__aenter__()
         return self._client
 
@@ -64,6 +69,7 @@ class SQSQueueGateway:
             "QueueUrl": self.queue_url,
             "MaxNumberOfMessages": min(max_messages, 10),
             "WaitTimeSeconds": min(int(wait_seconds), 20),
+            "AttributeNames": ["ApproximateReceiveCount"],
         }
         if self.visibility_timeout is not None:
             kwargs["VisibilityTimeout"] = self.visibility_timeout

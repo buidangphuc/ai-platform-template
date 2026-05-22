@@ -7,6 +7,8 @@ should raise a clear ``RuntimeError`` rather than ``ImportError``.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 import app.modules.queue.adapters.rabbitmq as rabbitmq_mod
@@ -41,3 +43,75 @@ def test_rabbitmq_gateway_requires_url():
         pytest.skip("aio_pika not installed")
     with pytest.raises(ValueError, match="url"):
         RabbitMQQueueGateway(url="", queue_name="q")
+
+
+async def test_sqs_gateway_passes_endpoint_and_receive_attributes(monkeypatch):
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.receive_kwargs: list[dict] = []
+
+        async def receive_message(self, **kwargs):
+            self.receive_kwargs.append(kwargs)
+            return {
+                "Messages": [
+                    {
+                        "MessageId": "msg-1",
+                        "Body": '{"hello": "world"}',
+                        "ReceiptHandle": "receipt-1",
+                        "Attributes": {"ApproximateReceiveCount": "4"},
+                    }
+                ]
+            }
+
+    class _FakeClientContext:
+        def __init__(self, client: _FakeClient) -> None:
+            self.client = client
+
+        async def __aenter__(self) -> _FakeClient:
+            return self.client
+
+        async def __aexit__(self, *_exc_info) -> None:
+            return None
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.client_kwargs: list[dict] = []
+            self.client_instance = _FakeClient()
+
+        def client(self, service_name: str, **kwargs):
+            self.client_kwargs.append({"service_name": service_name, **kwargs})
+            return _FakeClientContext(self.client_instance)
+
+    session = _FakeSession()
+    monkeypatch.setattr(
+        sqs_mod,
+        "aioboto3",
+        SimpleNamespace(Session=lambda: session),
+    )
+
+    gateway = SQSQueueGateway(
+        queue_url="https://sqs.test/queue",
+        region_name="us-test-1",
+        endpoint_url="http://localhost:4566",
+        visibility_timeout=30,
+    )
+
+    messages = await gateway.receive(max_messages=10, wait_seconds=21.5)
+
+    assert session.client_kwargs == [
+        {
+            "service_name": "sqs",
+            "region_name": "us-test-1",
+            "endpoint_url": "http://localhost:4566",
+        }
+    ]
+    assert session.client_instance.receive_kwargs == [
+        {
+            "QueueUrl": "https://sqs.test/queue",
+            "MaxNumberOfMessages": 10,
+            "WaitTimeSeconds": 20,
+            "AttributeNames": ["ApproximateReceiveCount"],
+            "VisibilityTimeout": 30,
+        }
+    ]
+    assert messages[0].receive_count == 4

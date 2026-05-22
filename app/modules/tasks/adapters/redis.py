@@ -109,7 +109,7 @@ def _deserialize(raw: str) -> TaskRecord:
         error=data.get("error"),
         attempts=data.get("attempts", 0),
         locked_until=_parse_dt(data.get("locked_until")),
-        expires_at=_parse_dt(data["expires_at"]),
+        expires_at=_parse_required_dt(data["expires_at"]),
         created_at=_parse_dt(data.get("created_at")),
         updated_at=_parse_dt(data.get("updated_at")),
     )
@@ -118,6 +118,10 @@ def _deserialize(raw: str) -> TaskRecord:
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
+    return datetime.fromisoformat(value)
+
+
+def _parse_required_dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 

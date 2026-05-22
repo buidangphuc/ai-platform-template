@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, Request
 
 from app.api.v1.completions.schemas import CompletionRequest
-from app.core.errors import AppError
+from app.bootstrap.state import require_app_resource
 from app.modules.identity.auth import require_principal
 from app.modules.tasks.schemas import TaskResponse, TaskSubmitResponse
 from app.modules.tasks.service import TaskService
@@ -18,14 +18,12 @@ TASK_TYPE = "completion"
 
 
 def get_task_service(request: Request) -> TaskService:
-    service = getattr(request.app.state, "task_service", None)
-    if service is None:
-        raise AppError(
-            code="task_service_not_configured",
-            message="Async task service is not configured",
-            status_code=501,
-        )
-    return service
+    return require_app_resource(
+        request.app,
+        "task_service",
+        code="task_service_not_configured",
+        message="Async task service is disabled or lifespan has not opened it",
+    )
 
 
 @router.post("", response_model=TaskSubmitResponse, status_code=202)

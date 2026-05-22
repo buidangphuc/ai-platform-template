@@ -15,8 +15,6 @@ blocked_patterns=(
   "propertyguru"
   "celery"
   "Celery"
-  "rabbitmq"
-  "RabbitMQ"
 )
 
 search_roots=(
@@ -66,6 +64,12 @@ if [[ "$rg_status" -eq 0 ]]; then
 fi
 
 if [[ "$rg_status" -eq 1 ]]; then
+  tracked_artifacts="$(git ls-files app tests scripts alembic | rg '(^|/)(__pycache__|\.DS_Store$|.*\.py[cod]$)' || true)"
+  if [[ -n "$tracked_artifacts" ]]; then
+    echo "Template hygiene check failed: tracked local artifacts found" >&2
+    echo "$tracked_artifacts" >&2
+    exit 1
+  fi
   echo "Template hygiene check passed"
   exit 0
 fi

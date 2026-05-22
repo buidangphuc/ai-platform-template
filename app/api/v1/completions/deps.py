@@ -1,11 +1,12 @@
 from fastapi import Request
 
 from app.api.v1.completions.handler import CompletionHandler
+from app.bootstrap.state import optional_app_resource
 from app.core.errors import AppError
 
 
 def get_completion_handler(request: Request) -> CompletionHandler:
-    handler = getattr(request.app.state, "completion_handler", None)
+    handler = optional_app_resource(request.app, "completion_handler")
     if handler is None:
         raise AppError(
             code="completion_handler_not_configured",

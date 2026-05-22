@@ -63,7 +63,17 @@ class QueueGatewayConformance:
 
         second = await gateway.receive(max_messages=1, wait_seconds=1.0)
         assert len(second) == 1
-        assert second[0].body == {"k": "v"}
+        assert second[0].body["k"] == "v"
+
+    async def test_nack_without_requeue_removes_message(self, gateway: QueueGateway):
+        await gateway.send({"drop": True})
+
+        first = await gateway.receive(max_messages=1, wait_seconds=1.0)
+        assert len(first) == 1
+        await gateway.nack(first[0], requeue=False)
+
+        second = await gateway.receive(max_messages=1, wait_seconds=0.1)
+        assert second == []
 
     async def test_receive_returns_up_to_max_messages(self, gateway: QueueGateway):
         for index in range(3):

@@ -69,9 +69,11 @@ class RedisStreamQueueGateway:
     async def nack(self, message: QueueMessage, *, requeue: bool = True) -> None:
         await self.redis.xack(self.stream, self.consumer_group, message.id)
         if requeue:
+            body = dict(message.body)
+            body.setdefault("original_message_id", message.id)
             await self.redis.xadd(
                 self.stream,
-                {"body": json.dumps(message.body)},
+                {"body": json.dumps(body)},
             )
 
     async def close(self) -> None:

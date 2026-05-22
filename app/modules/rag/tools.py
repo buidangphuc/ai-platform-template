@@ -47,7 +47,7 @@ def _to_tool_match(match: NodeWithScore) -> dict[str, object]:
     return {
         "chunk_id": metadata["chunk_id"],
         "document_id": metadata["document_id"],
-        "text": match.node.text or "",
+        "text": match.node.get_content() or "",
         "score": float(match.score or 0.0),
         "metadata": metadata,
     }

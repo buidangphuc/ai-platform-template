@@ -1,10 +1,10 @@
-.PHONY: help dev test lint format check ci hooks-install \
+.PHONY: help dev test lint format typecheck check ci hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse hygiene
 
 UV_CACHE_DIR ?= .uv-cache
-UV := UV_CACHE_DIR=$(UV_CACHE_DIR) uv
+UV := PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -34,7 +34,10 @@ check: ## Ruff lint + format check (no auto-fix)
 check-env: ## Verify .env.example matches Settings fields
 	$(UV) run python -m scripts.check_env_example
 
-ci: check check-env test ## Full CI suite locally
+typecheck: ## Pyright type check
+	$(UV) run pyright
+
+ci: check check-env typecheck hygiene test ## Full CI suite locally
 
 hooks-install: ## Install pre-commit hooks
 	$(UV) run pre-commit install --install-hooks

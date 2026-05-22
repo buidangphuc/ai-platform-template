@@ -4,6 +4,33 @@ import pytest
 
 from app.core.worker import AsyncPollingWorker
 from app.modules.queue.adapters.memory import InMemoryQueueGateway
+from app.modules.queue.gateway import QueueMessage
+
+
+class _RecordingGateway:
+    def __init__(self) -> None:
+        self.acked: list[QueueMessage] = []
+        self.nacked: list[tuple[QueueMessage, bool]] = []
+
+    async def send(self, payload: dict) -> str:
+        return "unused"
+
+    async def receive(
+        self,
+        *,
+        max_messages: int = 10,
+        wait_seconds: float = 0.0,
+    ) -> list[QueueMessage]:
+        return []
+
+    async def ack(self, message: QueueMessage) -> None:
+        self.acked.append(message)
+
+    async def nack(self, message: QueueMessage, *, requeue: bool = True) -> None:
+        self.nacked.append((message, requeue))
+
+    async def close(self) -> None:
+        return None
 
 
 async def test_worker_processes_messages_and_acks_them():
@@ -73,6 +100,44 @@ async def test_worker_nacks_message_on_handler_exception():
     assert call_count >= 2  # original + at least one requeue
 
 
+async def test_worker_requeues_failed_message_before_max_attempts():
+    gateway = _RecordingGateway()
+
+    async def fail(_message):
+        raise RuntimeError("boom")
+
+    worker = AsyncPollingWorker(
+        gateway=gateway,
+        handler=fail,
+        max_attempts=3,
+    )
+
+    message = QueueMessage(id="msg-1", body={"value": 1}, receive_count=2)
+    await worker._dispatch(message)
+
+    assert gateway.acked == []
+    assert gateway.nacked == [(message, True)]
+
+
+async def test_worker_drops_failed_message_at_max_attempts():
+    gateway = _RecordingGateway()
+
+    async def fail(_message):
+        raise RuntimeError("boom")
+
+    worker = AsyncPollingWorker(
+        gateway=gateway,
+        handler=fail,
+        max_attempts=3,
+    )
+
+    message = QueueMessage(id="msg-1", body={"value": 1}, receive_count=3)
+    await worker._dispatch(message)
+
+    assert gateway.acked == []
+    assert gateway.nacked == [(message, False)]
+
+
 async def test_worker_rejects_invalid_concurrency():
     gateway = InMemoryQueueGateway()
 
@@ -84,3 +149,6 @@ async def test_worker_rejects_invalid_concurrency():
 
     with pytest.raises(ValueError):
         AsyncPollingWorker(gateway=gateway, handler=noop, poll_interval_seconds=-1)
+
+    with pytest.raises(ValueError):
+        AsyncPollingWorker(gateway=gateway, handler=noop, max_attempts=0)

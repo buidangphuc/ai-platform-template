@@ -15,6 +15,7 @@ def test_alembic_tracks_foundation_schema_revision():
     assert "audit_events" in revision_text
     assert "idempotency_keys" in revision_text
     assert "tasks" in revision_text
+    assert "outbox_events" in revision_text
 
 
 def test_gitignore_does_not_hide_alembic_revisions():

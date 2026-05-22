@@ -36,6 +36,12 @@ def build_queue_gateway(
         return SQSQueueGateway(
             queue_url=settings.SQS_QUEUE_URL,
             region_name=settings.SQS_REGION,
+            endpoint_url=settings.SQS_ENDPOINT_URL or None,
+            visibility_timeout=(
+                settings.SQS_VISIBILITY_TIMEOUT_SECONDS
+                if settings.SQS_VISIBILITY_TIMEOUT_SECONDS > 0
+                else None
+            ),
         )
 
     if backend == "rabbitmq":

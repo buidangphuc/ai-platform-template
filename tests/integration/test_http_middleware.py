@@ -152,3 +152,58 @@ async def test_access_log_records_request_context(caplog):
     assert any("status=200" in message for message in messages)
     assert any("request_id=req-log" in message for message in messages)
     assert any("principal=local-user" in message for message in messages)
+
+
+async def test_security_headers_are_disabled_by_default():
+    app = create_app(settings=_settings(), init_resources=False)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/healthz")
+
+    assert "x-content-type-options" not in response.headers
+    assert "strict-transport-security" not in response.headers
+
+
+async def test_security_headers_can_be_enabled_without_hsts():
+    app = create_app(
+        settings=_settings(SECURITY_HEADERS_ENABLED=True),
+        init_resources=False,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/healthz")
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["permissions-policy"] == (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    assert "strict-transport-security" not in response.headers
+
+
+async def test_security_headers_can_enable_hsts():
+    app = create_app(
+        settings=_settings(
+            SECURITY_HEADERS_ENABLED=True,
+            SECURITY_HSTS_ENABLED=True,
+            SECURITY_HSTS_MAX_AGE_SECONDS=123,
+        ),
+        init_resources=False,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/healthz")
+
+    assert response.headers["strict-transport-security"] == (
+        "max-age=123; includeSubDomains"
+    )

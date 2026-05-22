@@ -28,8 +28,12 @@ class HealthService:
             return HealthResult(status="ok", dependencies=dependencies)
 
         checks = {
-            "postgres": self.postgres_check,
-            "redis": self.redis_check,
+            name: check
+            for name, check in {
+                "postgres": self.postgres_check,
+                "redis": self.redis_check,
+            }.items()
+            if check is not None
         }
         for name, check in checks.items():
             dependencies[name] = await self._check_dependency(check)

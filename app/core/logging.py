@@ -1,10 +1,13 @@
 import logging
 import sys
-from typing import Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from app.core.request_context import get_request_id
+
+if TYPE_CHECKING:
+    from loguru import Record
 
 _NOISY_LOGGERS: tuple[str, ...] = (
     "sqlalchemy.engine",
@@ -32,7 +35,7 @@ class InterceptHandler(logging.Handler):
         )
 
 
-def _inject_request_id(record: dict[str, Any]) -> None:
+def _inject_request_id(record: "Record") -> None:
     record["extra"].setdefault("request_id", get_request_id())
 
 

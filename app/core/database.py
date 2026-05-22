@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from app.bootstrap.state import require_app_resource
 from app.core.config import Settings, get_settings
 
 
@@ -69,7 +70,12 @@ async def check_postgres_connection(
 
 
 async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    sessionmaker = request.app.state.sessionmaker
+    sessionmaker = require_app_resource(
+        request.app,
+        "sessionmaker",
+        code="database_not_configured",
+        message="Database session is disabled or lifespan has not opened it",
+    )
     async with sessionmaker() as session:
         try:
             yield session

@@ -4,6 +4,7 @@ import logging
 from time import perf_counter
 from uuid import uuid4
 
+from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.request_context import get_request_id
@@ -143,6 +144,45 @@ def _content_length(scope: Scope) -> int | None:
 
 class RequestBodyTooLarge(Exception):
     pass
+
+
+class SecurityHeadersMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        hsts_enabled: bool = False,
+        hsts_max_age_seconds: int = 31536000,
+    ) -> None:
+        if hsts_max_age_seconds < 0:
+            raise ValueError("hsts_max_age_seconds must not be negative")
+        self.app = app
+        self.hsts_enabled = hsts_enabled
+        self.hsts_max_age_seconds = hsts_max_age_seconds
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.setdefault("x-content-type-options", "nosniff")
+                headers.setdefault("x-frame-options", "DENY")
+                headers.setdefault("referrer-policy", "no-referrer")
+                headers.setdefault(
+                    "permissions-policy",
+                    "camera=(), microphone=(), geolocation=()",
+                )
+                if self.hsts_enabled:
+                    headers.setdefault(
+                        "strict-transport-security",
+                        (f"max-age={self.hsts_max_age_seconds}; includeSubDomains"),
+                    )
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 class InFlightTracker:

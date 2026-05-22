@@ -8,6 +8,11 @@ scale independently of the API replicas.
 from __future__ import annotations
 
 import asyncio
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -17,15 +22,22 @@ from app.api.v1.completions.schemas import (
     CompletionResult,
     CompletionStreamChunk,
 )
+from app.bootstrap.worker import (
+    WorkerResources,
+    build_worker_resources,
+    close_worker_resources,
+    validate_worker_runtime_settings,
+)
 from app.core.config import Settings, get_settings
-from app.core.database import build_engine, build_sessionmaker
 from app.core.logging import configure_logging
-from app.core.redis import build_redis_client
 from app.core.worker import AsyncPollingWorker
-from app.modules.queue.factory import build_queue_gateway
-from app.modules.queue.gateway import QueueMessage
-from app.modules.tasks.factory import build_task_store
+from app.modules.queue.gateway import QueueGateway, QueueMessage
 from app.modules.tasks.service import TaskService
+from app.modules.tasks.store import TaskStore
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 
 class _EchoCompletionHandler:
@@ -43,24 +55,27 @@ def _build_completion_handler(settings: Settings) -> CompletionHandler:
     return _EchoCompletionHandler()
 
 
-async def _run() -> None:
-    settings = get_settings()
-    configure_logging(level=settings.LOG_LEVEL, json_mode=settings.LOG_JSON)
-    logger.info(
-        "worker_entry queue_backend={} task_store_backend={}",
-        settings.QUEUE_BACKEND,
-        settings.TASK_STORE_BACKEND,
-    )
+@dataclass
+class WorkerContext:
+    settings: Settings
+    worker: AsyncPollingWorker
+    service: TaskService
+    handler: CompletionHandler
+    queue: QueueGateway
+    store: TaskStore
+    resources: WorkerResources
+    engine: AsyncEngine | None
+    redis: Redis | None
 
-    engine = build_engine(settings)
-    sessionmaker = build_sessionmaker(engine)
-    redis = build_redis_client(settings)
-    queue = build_queue_gateway(settings, redis=redis)
-    store = build_task_store(settings, sessionmaker=sessionmaker, redis=redis)
-    service = TaskService(
-        store=store, queue=queue, ttl_seconds=settings.TASK_TTL_SECONDS
-    )
-    handler = _build_completion_handler(settings)
+
+def build_worker_context(
+    settings: Settings | None = None,
+    *,
+    handler: CompletionHandler | None = None,
+) -> WorkerContext:
+    resolved = settings or get_settings()
+    resources = build_worker_resources(resolved)
+    resolved_handler = handler or _build_completion_handler(resolved)
 
     async def process_message(message: QueueMessage) -> None:
         task_id = message.body.get("task_id")
@@ -69,16 +84,16 @@ async def _run() -> None:
             return
 
         try:
-            task = await service.require(task_id)
+            task = await resources.service.require(task_id)
         except Exception:
             logger.exception("worker.task_lookup_failed task_id={}", task_id)
             raise
 
-        await service.mark_processing(task_id)
+        await resources.service.mark_processing(task_id)
         try:
             payload = CompletionRequest(**task.payload)
-            result = await handler.complete(payload)
-            await service.mark_completed(
+            result = await resolved_handler.complete(payload)
+            await resources.service.mark_completed(
                 task_id,
                 {
                     "content": result.content,
@@ -89,26 +104,72 @@ async def _run() -> None:
             logger.info("worker.task_completed task_id={}", task_id)
         except Exception as exc:
             logger.exception("worker.task_failed task_id={}", task_id)
-            await service.mark_failed(task_id, str(exc))
+            await resources.service.mark_failed(task_id, str(exc))
             raise
 
     worker = AsyncPollingWorker(
-        gateway=queue,
+        gateway=resources.queue,
         handler=process_message,
-        max_concurrent=settings.WORKER_MAX_CONCURRENT,
-        poll_interval_seconds=settings.WORKER_POLL_INTERVAL_SECONDS,
-        receive_batch_size=settings.WORKER_RECEIVE_BATCH_SIZE,
-        receive_wait_seconds=settings.WORKER_RECEIVE_WAIT_SECONDS,
+        max_concurrent=resolved.WORKER_MAX_CONCURRENT,
+        max_attempts=resolved.WORKER_MAX_ATTEMPTS,
+        poll_interval_seconds=resolved.WORKER_POLL_INTERVAL_SECONDS,
+        receive_batch_size=resolved.WORKER_RECEIVE_BATCH_SIZE,
+        receive_wait_seconds=resolved.WORKER_RECEIVE_WAIT_SECONDS,
     )
 
+    return WorkerContext(
+        settings=resolved,
+        worker=worker,
+        service=resources.service,
+        handler=resolved_handler,
+        queue=resources.queue,
+        store=resources.store,
+        resources=resources,
+        engine=resources.engine,
+        redis=resources.redis,
+    )
+
+
+@asynccontextmanager
+async def worker_context(
+    settings: Settings | None = None,
+    *,
+    handler: CompletionHandler | None = None,
+) -> AsyncIterator[WorkerContext]:
+    ctx = build_worker_context(settings, handler=handler)
     try:
-        await worker.run()
+        yield ctx
     finally:
-        await redis.aclose()
-        await engine.dispose()
+        await close_worker_resources(ctx.resources)
 
 
-def main() -> None:
+def check_worker_configuration(settings: Settings | None = None) -> None:
+    validate_worker_runtime_settings(settings or get_settings())
+
+
+async def _run() -> None:
+    settings = get_settings()
+    configure_logging(level=settings.LOG_LEVEL, json_mode=settings.LOG_JSON)
+    logger.info(
+        "worker_entry queue_backend={} task_store_backend={}",
+        settings.QUEUE_BACKEND,
+        settings.TASK_STORE_BACKEND,
+    )
+    async with worker_context(settings) as ctx:
+        await ctx.worker.run()
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    if args == ["--check"]:
+        try:
+            check_worker_configuration()
+        except Exception as exc:
+            print(f"worker configuration invalid: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        return
+    if args:
+        raise SystemExit(f"unknown arguments: {' '.join(args)}")
     asyncio.run(_run())
 
 

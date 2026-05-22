@@ -30,18 +30,22 @@ class AsyncPollingWorker:
         gateway: QueueGateway,
         handler: MessageHandler,
         max_concurrent: int = 10,
+        max_attempts: int = 3,
         poll_interval_seconds: float = 0.5,
         receive_batch_size: int = 10,
         receive_wait_seconds: float = 1.0,
     ) -> None:
         if max_concurrent <= 0:
             raise ValueError("max_concurrent must be positive")
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be positive")
         if poll_interval_seconds < 0:
             raise ValueError("poll_interval_seconds must not be negative")
 
         self.gateway = gateway
         self.handler = handler
         self.max_concurrent = max_concurrent
+        self.max_attempts = max_attempts
         self.poll_interval_seconds = poll_interval_seconds
         self.receive_batch_size = receive_batch_size
         self.receive_wait_seconds = receive_wait_seconds
@@ -99,11 +103,15 @@ class AsyncPollingWorker:
                 await self.gateway.ack(message)
             except Exception as exc:
                 logger.exception(
-                    "worker.handler_error message_id={} error={}",
+                    "worker.handler_error message_id={} error={} requeue={}",
                     message.id,
                     exc,
+                    message.receive_count < self.max_attempts,
                 )
-                await self.gateway.nack(message, requeue=True)
+                await self.gateway.nack(
+                    message,
+                    requeue=message.receive_count < self.max_attempts,
+                )
 
     async def _drain_active_tasks(self) -> None:
         if not self._active:
