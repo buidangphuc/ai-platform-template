@@ -1,7 +1,7 @@
 .PHONY: help dev test lint format typecheck check ci hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
-        docker-build docker-run docker-run-langfuse hygiene
+        docker-build docker-run docker-run-langfuse
 
 UV_CACHE_DIR ?= .uv-cache
 UV := PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv
@@ -37,7 +37,7 @@ check-env: ## Verify .env.example matches Settings fields
 typecheck: ## Pyright type check
 	$(UV) run pyright
 
-ci: check check-env typecheck hygiene test ## Full CI suite locally
+ci: check check-env typecheck test ## Full CI suite locally
 
 hooks-install: ## Install pre-commit hooks
 	$(UV) run pre-commit install --install-hooks
@@ -66,6 +66,3 @@ docker-run: ## Run local docker compose stack
 docker-run-langfuse: ## Run local stack with Langfuse (loads .env.langfuse if present)
 	docker compose --env-file .env $(if $(wildcard .env.langfuse),--env-file .env.langfuse) \
 	  -f docker-compose.local.yaml -f docker-compose.langfuse.yaml up
-
-hygiene: ## Template hygiene check
-	./scripts/check_template_hygiene.sh

@@ -2,7 +2,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
 
-from app.modules.llm.runtime import build_chat_model
+from app.modules.ai.llm.runtime import build_chat_model
 
 
 async def test_build_chat_model_defaults_to_langchain_core_local_model(
@@ -28,7 +28,7 @@ async def test_build_chat_model_delegates_provider_and_model_to_init_chat_model(
         return FakeListChatModel(responses=["provider-chat response"])
 
     monkeypatch.setattr(
-        "app.modules.llm.runtime._init_chat_model",
+        "app.modules.ai.llm.router.init_chat_model",
         fake_init_chat_model,
     )
     settings = test_settings.model_copy(

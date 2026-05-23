@@ -67,7 +67,7 @@ async def test_run_smoke_creates_then_fetches_prompt_and_compiles_variables(
         lambda: prompt_smoke_settings,
     )
     monkeypatch.setattr(
-        "app.modules.llm.langfuse._build_langfuse_client",
+        "app.modules.ai.llm.langfuse._build_langfuse_client",
         lambda settings: fake_client,
     )
 

@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.tasks.models import TaskStatus
-from app.modules.tasks.store import TaskRecord, TaskStore
+from app.modules.messaging.tasks.models import TaskStatus
+from app.modules.messaging.tasks.store import TaskRecord, TaskStore
 
 StoreFactory = Callable[[], Awaitable[TaskStore]]
 
@@ -54,12 +54,30 @@ class TaskStoreConformance:
     ):
         task = _make_task()
         await store.create(task)
-        await store.mark_processing(task.id)
+        await store.mark_processing(task.id, lease_seconds=60)
 
         fetched = await store.get(task.id)
         assert fetched is not None
         assert fetched.status == TaskStatus.PROCESSING
         assert fetched.attempts == 1
+        assert fetched.locked_until is not None
+
+    async def test_reclaim_stale_processing_releases_expired_leases(
+        self, store: TaskStore
+    ):
+        task = _make_task()
+        await store.create(task)
+        await store.mark_processing(task.id, lease_seconds=1)
+
+        # Forward "now" past the lease window
+        future_now = datetime.now(UTC) + timedelta(seconds=120)
+        reclaimed = await store.reclaim_stale_processing(now=future_now)
+
+        assert reclaimed >= 1
+        fetched = await store.get(task.id)
+        assert fetched is not None
+        assert fetched.status == TaskStatus.QUEUED
+        assert fetched.locked_until is None
 
     async def test_mark_completed_persists_result(self, store: TaskStore):
         task = _make_task()

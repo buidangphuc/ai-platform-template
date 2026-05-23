@@ -1,57 +1,37 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
-from fastapi import FastAPI
-
-from app.core.config import Settings
 from app.core.errors import ServiceUnavailableError
 
 if TYPE_CHECKING:
+    from fastapi import FastAPI
+
     from app.bootstrap.resources import ApplicationResources
+    from app.core.config import Settings
+    from app.core.health import HealthService
+    from app.core.middleware import InFlightTracker
 
 T = TypeVar("T")
 
 
 def get_app_settings(app: FastAPI) -> Settings:
-    settings = getattr(app.state, "settings", None)
-    if not isinstance(settings, Settings):
-        raise RuntimeError("app.state.settings is not configured")
-    return settings
+    return app.state.settings
 
 
-def optional_app_resource(app: FastAPI, name: str) -> Any | None:
-    return getattr(app.state, name, None)
+def get_app_resources(app: FastAPI) -> ApplicationResources:
+    return app.state.resources
 
 
-def require_app_resource(
-    app: FastAPI,
-    name: str,
-    *,
-    code: str,
-    message: str,
-) -> Any:
-    resource = optional_app_resource(app, name)
-    if resource is None:
-        raise ServiceUnavailableError(message=message, code=code)
-    return resource
+def get_health_service(app: FastAPI) -> HealthService:
+    return app.state.health_service
 
 
-def typed_app_resource(value: Any, expected_type: type[T]) -> T:
-    return cast(T, value)
+def get_in_flight_tracker(app: FastAPI) -> InFlightTracker | None:
+    return app.state.in_flight_tracker
 
 
-def attach_app_resource(
-    app: FastAPI,
-    resources: ApplicationResources,
-    name: str,
-    value: Any,
-) -> None:
-    setattr(app.state, name, value)
-    if name not in resources.state_keys:
-        resources.state_keys.append(name)
-
-
-def clear_app_resource(app: FastAPI, name: str) -> None:
-    if hasattr(app.state, name):
-        delattr(app.state, name)
+def require(value: T | None, *, code: str, message: str) -> T:
+    if value is None:
+        raise ServiceUnavailableError(code=code, message=message)
+    return value

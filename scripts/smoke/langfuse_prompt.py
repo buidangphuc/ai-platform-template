@@ -12,7 +12,7 @@ import json
 import sys
 
 from app.core.config import get_settings
-from app.modules.llm.langfuse import build_langfuse_tracker
+from app.modules.ai.llm.langfuse import build_langfuse_tracker
 
 
 async def run_smoke(

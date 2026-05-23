@@ -3,30 +3,19 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.config import Settings
-from app.core.resilience import TimeoutPolicy
-from app.modules.webhooks.dispatcher import (
+from app.core.resilience import RetryPolicy, TimeoutPolicy
+from app.modules.messaging.webhooks.dispatcher import (
+    DEFAULT_WEBHOOK_RETRY_POLICY,
     HttpWebhookDispatcher,
-    WebhookDeliveryResult,
-    WebhookRetryPolicy,
 )
-from app.modules.webhooks.envelope import WebhookEnvelope
-from app.modules.webhooks.factory import WebhookAddon
-from app.modules.webhooks.signing import WebhookSigner
+from app.modules.messaging.webhooks.envelope import WebhookEnvelope
+from app.modules.messaging.webhooks.factory import WebhookAddon
+from app.modules.messaging.webhooks.signing import WebhookSigner
+from tests.factories import build_test_settings
 
 
 def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return Settings(**base)
+    return build_test_settings(**overrides)
 
 
 def test_webhook_signer_verifies_valid_payload_and_rejects_tampering():
@@ -79,12 +68,22 @@ def test_webhook_envelope_serializes_generic_event_shape():
 
 
 def test_webhook_retry_policy_retries_transient_statuses_only():
-    policy = WebhookRetryPolicy(max_attempts=3, backoff_seconds=(1.0, 2.0, 4.0))
+    policy = RetryPolicy(
+        max_attempts=3,
+        retry_status_codes=(408, 429, 500, 502, 503, 504),
+        retry_exceptions=True,
+        backoff_seconds=(1.0, 2.0, 4.0),
+    )
 
-    assert policy.should_retry(WebhookDeliveryResult(status_code=503), attempt=1)
-    assert not policy.should_retry(WebhookDeliveryResult(status_code=400), attempt=1)
-    assert not policy.should_retry(WebhookDeliveryResult(status_code=503), attempt=3)
-    assert policy.next_delay(attempt=2) == 2.0
+    assert policy.decision(attempt=1, status_code=503).should_retry
+    assert not policy.decision(attempt=1, status_code=400).should_retry
+    assert not policy.decision(attempt=3, status_code=503).should_retry
+    assert policy.decision(attempt=2, status_code=503).next_delay_seconds == 2.0
+
+
+def test_default_webhook_retry_policy_has_sensible_backoff():
+    assert DEFAULT_WEBHOOK_RETRY_POLICY.max_attempts == 3
+    assert DEFAULT_WEBHOOK_RETRY_POLICY.backoff_seconds == (1.0, 5.0, 30.0)
 
 
 async def test_http_webhook_dispatcher_uses_injected_post_callable():

@@ -1,0 +1,182 @@
+"""Generic async polling worker.
+
+Pulls messages from any ``QueueGateway`` and dispatches them to a handler with
+bounded concurrency, backpressure, and a SIGTERM-safe shutdown.  Wraps the
+common production pattern of "claim N messages, fan out as tasks, ack on
+success / nack on failure" so business code only writes the per-message
+handler.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import signal
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
+
+from loguru import logger
+
+if TYPE_CHECKING:
+    from app.modules.messaging.queue.gateway import QueueGateway, QueueMessage
+
+
+MessageHandler = Callable[["QueueMessage"], Awaitable[None]]
+
+
+class TypedMessageDispatcher:
+    """Routes ``QueueMessage`` to a handler keyed by ``body['type']``.
+
+    Conforms to ``MessageHandler`` so it can be passed straight to
+    ``AsyncPollingWorker(handler=...)``. Use when one queue carries multiple
+    event kinds (e.g. completion tasks + eval tasks on the same worker pool).
+
+    Example::
+
+        dispatcher = TypedMessageDispatcher(
+            handlers={
+                "completion": handle_completion_task,
+                "eval.completion": handle_eval_task,
+            }
+        )
+        worker = AsyncPollingWorker(gateway=queue, handler=dispatcher)
+    """
+
+    def __init__(
+        self,
+        handlers: dict[str, MessageHandler],
+        *,
+        type_field: str = "type",
+        unknown_type: MessageHandler | None = None,
+    ) -> None:
+        if not handlers:
+            raise ValueError("handlers must not be empty")
+        self.handlers = dict(handlers)
+        self.type_field = type_field
+        self.unknown_type = unknown_type
+
+    async def __call__(self, message: QueueMessage) -> None:
+        message_type = message.body.get(self.type_field)
+        if message_type is None:
+            raise ValueError(f"message {message.id} missing {self.type_field!r} field")
+        handler = self.handlers.get(message_type)
+        if handler is None:
+            if self.unknown_type is None:
+                raise ValueError(f"no handler registered for type {message_type!r}")
+            await self.unknown_type(message)
+            return
+        await handler(message)
+
+
+class AsyncPollingWorker:
+    def __init__(
+        self,
+        *,
+        gateway: QueueGateway,
+        handler: MessageHandler,
+        max_concurrent: int = 10,
+        max_attempts: int = 3,
+        poll_interval_seconds: float = 0.5,
+        receive_batch_size: int = 10,
+        receive_wait_seconds: float = 1.0,
+    ) -> None:
+        if max_concurrent <= 0:
+            raise ValueError("max_concurrent must be positive")
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be positive")
+        if poll_interval_seconds < 0:
+            raise ValueError("poll_interval_seconds must not be negative")
+
+        self.gateway = gateway
+        self.handler = handler
+        self.max_concurrent = max_concurrent
+        self.max_attempts = max_attempts
+        self.poll_interval_seconds = poll_interval_seconds
+        self.receive_batch_size = receive_batch_size
+        self.receive_wait_seconds = receive_wait_seconds
+
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._active: set[asyncio.Task[None]] = set()
+        self._shutdown = asyncio.Event()
+
+    def request_shutdown(self) -> None:
+        self._shutdown.set()
+
+    async def run(self) -> None:
+        self._install_signal_handlers()
+        logger.info(
+            "worker.start max_concurrent={} poll_interval={}",
+            self.max_concurrent,
+            self.poll_interval_seconds,
+        )
+
+        try:
+            while not self._shutdown.is_set():
+                await self._tick()
+        finally:
+            await self._drain_active_tasks()
+            # Gateway lifecycle is owned by the caller (bootstrap). The worker
+            # only drains its own in-flight tasks; closing here would tear down
+            # a shared client (e.g. Redis) still used by other modules.
+            logger.info("worker.stopped")
+
+    async def _tick(self) -> None:
+        if len(self._active) >= self.max_concurrent * 2:
+            await asyncio.sleep(self.poll_interval_seconds)
+            return
+
+        try:
+            messages = await self.gateway.receive(
+                max_messages=self.receive_batch_size,
+                wait_seconds=self.receive_wait_seconds,
+            )
+        except Exception as exc:
+            logger.exception("worker.receive_error: {}", exc)
+            await asyncio.sleep(self.poll_interval_seconds)
+            return
+
+        for message in messages:
+            task = asyncio.create_task(self._dispatch(message))
+            self._active.add(task)
+            task.add_done_callback(self._active.discard)
+
+        if not messages:
+            await asyncio.sleep(self.poll_interval_seconds)
+
+    async def _dispatch(self, message: QueueMessage) -> None:
+        async with self._semaphore:
+            try:
+                await self.handler(message)
+                await self.gateway.ack(message)
+            except Exception as exc:
+                logger.exception(
+                    "worker.handler_error message_id={} error={} requeue={}",
+                    message.id,
+                    exc,
+                    message.receive_count < self.max_attempts,
+                )
+                await self.gateway.nack(
+                    message,
+                    requeue=message.receive_count < self.max_attempts,
+                )
+
+    async def _drain_active_tasks(self) -> None:
+        if not self._active:
+            return
+        logger.info("worker.draining active_tasks={}", len(self._active))
+        await asyncio.gather(*list(self._active), return_exceptions=True)
+
+    def _install_signal_handlers(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _on_signal() -> None:
+            logger.info("worker.signal_received")
+            self._shutdown.set()
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, _on_signal)
+            except (NotImplementedError, RuntimeError):
+                signal.signal(sig, lambda *_: self._shutdown.set())

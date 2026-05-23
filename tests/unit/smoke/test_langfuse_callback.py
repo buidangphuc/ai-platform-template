@@ -37,7 +37,7 @@ async def test_run_smoke_flushes_tracker_and_returns_observable_metadata(
         lambda: smoke_settings,
     )
     monkeypatch.setattr(
-        "app.modules.llm.langfuse._build_langfuse_client",
+        "app.modules.ai.llm.langfuse._build_langfuse_client",
         lambda settings: fake_client,
     )
 
@@ -53,7 +53,7 @@ async def test_run_smoke_flushes_tracker_and_returns_observable_metadata(
             callback_invocations.append("on_llm_end")
 
     monkeypatch.setattr(
-        "app.modules.llm.langfuse.LangfuseLLMTracker._new_callback_handler",
+        "app.modules.ai.llm.langfuse.LangfuseLLMTracker._new_callback_handler",
         lambda self: _SpyHandler(),
     )
 

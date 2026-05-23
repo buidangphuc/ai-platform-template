@@ -2,9 +2,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.modules.audit.models import AuditEvent
-from app.modules.audit.service import record_audit_event, validate_audit_metadata
-from app.modules.identity.schemas import Principal
+from app.modules.platform.audit.models import AuditEvent
+from app.modules.platform.audit.service import (
+    record_audit_event,
+    validate_audit_metadata,
+)
 
 
 class _FakeSession:
@@ -13,12 +15,6 @@ class _FakeSession:
 
     def add(self, value):
         self.added.append(value)
-
-
-class _Context:
-    request_id = "req-1"
-    principal = Principal(id="svc-local", type="service", scopes=("admin",))
-    db = _FakeSession()
 
 
 def test_audit_event_model_uses_safe_metadata_column_name():
@@ -34,12 +30,15 @@ def test_validate_audit_metadata_rejects_raw_ai_content_keys():
         validate_audit_metadata({"nested": {"messages": ["raw"]}})
 
 
-async def test_record_audit_event_uses_service_context_and_safe_metadata():
-    context = _Context()
+async def test_record_audit_event_persists_event_with_explicit_params():
+    db = _FakeSession()
 
     event = await record_audit_event(
-        context,
+        db,  # type: ignore[arg-type]
         event_type="document.indexed",
+        actor_id="svc-local",
+        actor_type="service",
+        request_id="req-1",
         resource_type="document",
         resource_id="doc-1",
         status="succeeded",
@@ -51,7 +50,7 @@ async def test_record_audit_event_uses_service_context_and_safe_metadata():
         now=lambda: datetime(2026, 5, 21, tzinfo=UTC),
     )
 
-    assert context.db.added == [event]
+    assert db.added == [event]
     assert event.actor_id == "svc-local"
     assert event.actor_type == "service"
     assert event.request_id == "req-1"

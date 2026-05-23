@@ -30,8 +30,7 @@ async def test_readiness_returns_503_when_dependency_is_down(client):
 
     client._transport.app.state.health_service = HealthService(
         check_external_dependencies=True,
-        postgres_check=down,
-        redis_check=up,
+        checks=(("postgres", down), ("redis", up)),
     )
 
     response = await client.get("/readyz")

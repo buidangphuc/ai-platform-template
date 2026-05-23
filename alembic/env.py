@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import get_settings
 from app.core.database import Base
-from app.modules.audit import models as audit_models  # noqa: F401
-from app.modules.idempotency import models as idempotency_models  # noqa: F401
-from app.modules.outbox import models as outbox_models  # noqa: F401
-from app.modules.tasks import models as tasks_models  # noqa: F401
+from app.modules.messaging.outbox import models as outbox_models  # noqa: F401
+from app.modules.messaging.tasks import models as tasks_models  # noqa: F401
+from app.modules.platform.audit import models as audit_models  # noqa: F401
+from app.modules.platform.idempotency import models as idempotency_models  # noqa: F401
 
 config = context.config
 

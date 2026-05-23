@@ -1,7 +1,7 @@
 import pytest
 
-from app.modules.cache.adapters.memory import MemoryCacheGateway
-from app.modules.cache.gateway import CacheGateway
+from app.modules.platform.cache.adapters.memory import MemoryCacheGateway
+from app.modules.platform.cache.gateway import CacheGateway
 
 from .conformance import CacheGatewayConformance
 

@@ -1,11 +1,11 @@
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.modules.llm.langfuse import (
+from app.modules.ai.llm.langfuse import (
     LangfuseLLMTracker,
     LLMTraceContext,
     build_langfuse_tracker,
 )
-from app.modules.llm.runtime import build_llm_instance
+from app.modules.ai.llm.runtime import build_llm_instance
 
 
 class FakeLangfuseClient:
@@ -176,7 +176,7 @@ def test_build_langfuse_tracker_uses_local_env_credentials(
         return client
 
     monkeypatch.setattr(
-        "app.modules.llm.langfuse._build_langfuse_client",
+        "app.modules.ai.llm.langfuse._build_langfuse_client",
         fake_build_langfuse_client,
     )
     settings = test_settings.model_copy(
@@ -206,7 +206,7 @@ def test_build_llm_instance_keeps_chat_model_native_and_tracker_separate(
         return FakeListChatModel(responses=["ok"])
 
     monkeypatch.setattr(
-        "app.modules.llm.runtime.build_chat_model",
+        "app.modules.ai.llm.runtime.build_chat_model",
         fake_build_chat_model,
     )
 

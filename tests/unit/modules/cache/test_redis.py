@@ -1,8 +1,8 @@
 import pytest
 from fakeredis import aioredis
 
-from app.modules.cache.adapters.redis import RedisCacheGateway
-from app.modules.cache.gateway import CacheGateway
+from app.modules.platform.cache.adapters.redis import RedisCacheGateway
+from app.modules.platform.cache.gateway import CacheGateway
 
 from .conformance import CacheGatewayConformance
 

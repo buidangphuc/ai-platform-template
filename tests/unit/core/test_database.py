@@ -5,27 +5,13 @@ from typing import get_args, get_origin
 from fastapi.params import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import Settings
+from app.bootstrap.resources import ApplicationResources
 from app.core.database import DbSession, build_engine, get_db
-
-
-def _settings(**overrides) -> Settings:
-    defaults = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    defaults.update(overrides)
-    return Settings(**defaults)
+from tests.factories import build_test_settings
 
 
 def test_build_engine_applies_pool_settings():
-    settings = _settings(
+    settings = build_test_settings(
         DB_POOL_SIZE=7,
         DB_MAX_OVERFLOW=14,
         DB_POOL_TIMEOUT_SECONDS=42,
@@ -68,7 +54,9 @@ async def test_get_db_uses_app_state_sessionmaker():
     context = _FakeSessionContext(session)
     request = SimpleNamespace(
         app=SimpleNamespace(
-            state=SimpleNamespace(sessionmaker=lambda: context),
+            state=SimpleNamespace(
+                resources=ApplicationResources(sessionmaker=lambda: context),
+            ),
         )
     )
 
@@ -93,7 +81,9 @@ async def test_get_db_rolls_back_on_unhandled_exception():
     context = _FakeSessionContext(session)
     request = SimpleNamespace(
         app=SimpleNamespace(
-            state=SimpleNamespace(sessionmaker=lambda: context),
+            state=SimpleNamespace(
+                resources=ApplicationResources(sessionmaker=lambda: context),
+            ),
         )
     )
 

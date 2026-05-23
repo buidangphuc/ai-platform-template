@@ -1,4 +1,4 @@
-from app.modules.objects.adapters.s3 import S3ObjectGateway
+from app.modules.platform.objects.adapters.s3 import S3ObjectGateway
 
 
 class _Body:

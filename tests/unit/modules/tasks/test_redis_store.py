@@ -1,8 +1,8 @@
 import pytest
 from fakeredis import aioredis
 
-from app.modules.tasks.adapters.redis import RedisTaskStore
-from app.modules.tasks.store import TaskStore
+from app.modules.messaging.tasks.adapters.redis import RedisTaskStore
+from app.modules.messaging.tasks.store import TaskStore
 
 from .conformance import TaskStoreConformance
 

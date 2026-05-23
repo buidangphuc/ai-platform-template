@@ -11,10 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.modules.queue.adapters.rabbitmq as rabbitmq_mod
-import app.modules.queue.adapters.sqs as sqs_mod
-from app.modules.queue.adapters.rabbitmq import RabbitMQQueueGateway
-from app.modules.queue.adapters.sqs import SQSQueueGateway
+import app.modules.messaging.queue.adapters.rabbitmq as rabbitmq_mod
+import app.modules.messaging.queue.adapters.sqs as sqs_mod
+from app.modules.messaging.queue.adapters.rabbitmq import RabbitMQQueueGateway
+from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
 
 
 def test_sqs_gateway_raises_friendly_error_when_aioboto3_missing(monkeypatch):

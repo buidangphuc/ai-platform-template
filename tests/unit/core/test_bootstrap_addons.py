@@ -19,9 +19,6 @@ class _RecordingAddon:
     def is_enabled(self, settings: Settings) -> bool:
         return self.enabled
 
-    def required_resources(self, settings: Settings) -> tuple[str, ...]:
-        return ()
-
     async def open(
         self,
         app: FastAPI,
@@ -50,8 +47,10 @@ async def test_resource_addon_opens_only_inside_lifespan(test_settings: Settings
         assert addon.opened is True
         assert addon.closed is False
         assert app.state.addon_resource == "recording"
+        assert addon in app.state.resources.addons
 
     assert addon.closed is True
+    assert app.state.resources.addons == []
 
 
 async def test_disabled_resource_addon_is_skipped(test_settings: Settings):
@@ -64,6 +63,7 @@ async def test_disabled_resource_addon_is_skipped(test_settings: Settings):
 
     async with app.router.lifespan_context(app):
         assert addon.opened is False
+        assert addon not in app.state.resources.addons
 
     assert addon.closed is False
 
@@ -74,13 +74,20 @@ def test_bootstrap_addon_protocol_accepts_recording_addon():
     assert isinstance(addon, BootstrapAddon)
 
 
-async def test_enabled_resource_addon_fails_fast_when_required_core_resource_disabled(
+async def test_addon_self_validates_required_resources_in_open(
     test_settings: Settings,
 ):
     @dataclass
     class _NeedsDatabaseAddon(_RecordingAddon):
-        def required_resources(self, settings: Settings) -> tuple[str, ...]:
-            return ("database",)
+        async def open(
+            self,
+            app: FastAPI,
+            resources: ApplicationResources,
+            settings: Settings,
+        ) -> None:
+            if not settings.DATABASE_ENABLED:
+                raise RuntimeError("NeedsDatabaseAddon requires DATABASE_ENABLED")
+            await super().open(app, resources, settings)
 
     addon = _NeedsDatabaseAddon(name="needs-db")
     settings = test_settings.model_copy(update={"DATABASE_ENABLED": False})
@@ -90,20 +97,29 @@ async def test_enabled_resource_addon_fails_fast_when_required_core_resource_dis
         resource_addons=(addon,),
     )
 
-    with pytest.raises(RuntimeError, match="Addon 'needs-db' requires database"):
+    with pytest.raises(
+        RuntimeError, match="NeedsDatabaseAddon requires DATABASE_ENABLED"
+    ):
         async with app.router.lifespan_context(app):
             pass
 
     assert addon.opened is False
 
 
-async def test_disabled_resource_addon_does_not_validate_requirements(
+async def test_disabled_addon_skips_self_validation(
     test_settings: Settings,
 ):
     @dataclass
     class _DisabledNeedsDatabaseAddon(_RecordingAddon):
-        def required_resources(self, settings: Settings) -> tuple[str, ...]:
-            return ("database",)
+        async def open(
+            self,
+            app: FastAPI,
+            resources: ApplicationResources,
+            settings: Settings,
+        ) -> None:
+            if not settings.DATABASE_ENABLED:
+                raise RuntimeError("should not be reached when disabled")
+            await super().open(app, resources, settings)
 
     addon = _DisabledNeedsDatabaseAddon(name="needs-db", enabled=False)
     settings = test_settings.model_copy(update={"DATABASE_ENABLED": False})
@@ -115,37 +131,3 @@ async def test_disabled_resource_addon_does_not_validate_requirements(
 
     async with app.router.lifespan_context(app):
         assert addon.opened is False
-
-
-async def test_legacy_resource_addon_without_requirements_method_still_opens(
-    test_settings: Settings,
-):
-    class _LegacyAddon:
-        name = "legacy"
-
-        def __init__(self) -> None:
-            self.opened = False
-
-        def is_enabled(self, settings: Settings) -> bool:
-            return True
-
-        async def open(
-            self,
-            app: FastAPI,
-            resources: ApplicationResources,
-            settings: Settings,
-        ) -> None:
-            self.opened = True
-
-        async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
-            return None
-
-    addon = _LegacyAddon()
-    app = create_app(
-        settings=test_settings,
-        init_resources=False,
-        resource_addons=(addon,),  # type: ignore[arg-type]
-    )
-
-    async with app.router.lifespan_context(app):
-        assert addon.opened is True

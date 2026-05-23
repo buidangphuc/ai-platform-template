@@ -1,25 +1,9 @@
 from fastapi import APIRouter, Response
 
 from app.bootstrap.application import create_app
-from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.request_context import get_request_id
-
-
-def _settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        REDIS_PORT=6379,
-        REDIS_PASSWORD="",  # pragma: allowlist secret
-        REDIS_DATABASE=0,
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
-    )
+from tests.factories import api_client_for, build_test_settings
 
 
 async def test_app_error_uses_standard_envelope():
@@ -29,14 +13,10 @@ async def test_app_error_uses_standard_envelope():
     async def boom():
         raise AppError(code="test_error", message="Test error", status_code=418)
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get("/boom", headers={"X-Request-ID": "req-test"})
 
     assert response.status_code == 418
@@ -56,14 +36,10 @@ async def test_request_id_context_resets_after_request():
     async def request_id():
         return {"request_id": get_request_id()}
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get(
             "/request-id", headers={"X-Request-ID": "req-reset"}
         )
@@ -79,14 +55,10 @@ async def test_app_error_generates_request_id_without_header():
     async def boom():
         raise AppError(code="test_error", message="Test error", status_code=418)
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get("/boom")
 
     request_id = response.json()["error"]["request_id"]
@@ -102,14 +74,10 @@ async def test_request_id_uses_first_incoming_header():
     async def request_id():
         return {"request_id": get_request_id()}
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get(
             "/request-id",
             headers=[
@@ -130,14 +98,10 @@ async def test_request_id_replaces_existing_response_header():
         response.headers["X-Request-ID"] = "req-downstream"
         return {"ok": True}
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get(
             "/response-header", headers={"X-Request-ID": "req-middleware"}
         )
@@ -149,13 +113,9 @@ async def test_request_id_replaces_existing_response_header():
 
 
 async def test_404_uses_standard_error_envelope():
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get("/missing", headers={"X-Request-ID": "req-404"})
 
     assert response.status_code == 404
@@ -175,14 +135,10 @@ async def test_405_uses_standard_error_envelope():
     async def only_get():
         return {"ok": True}
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    from httpx import ASGITransport, AsyncClient
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.post(
             "/only-get",
             headers={"X-Request-ID": "req-405"},

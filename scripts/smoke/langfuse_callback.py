@@ -15,8 +15,8 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage
 
 from app.core.config import get_settings
-from app.modules.llm.langfuse import LLMTraceContext
-from app.modules.llm.runtime import build_llm_instance
+from app.modules.ai.llm.langfuse import LLMTraceContext
+from app.modules.ai.llm.runtime import build_llm_instance
 
 
 async def run_smoke(

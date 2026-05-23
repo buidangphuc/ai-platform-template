@@ -1,17 +1,9 @@
 from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
-from app.bootstrap.state import optional_app_resource
-from app.core.health import HealthService
+from app.bootstrap.state import get_health_service
 
 router = APIRouter(tags=["health"])
-
-
-def _health_service(request: Request) -> HealthService:
-    service = optional_app_resource(request.app, "health_service")
-    if service is None:
-        return HealthService(check_external_dependencies=False)
-    return service
 
 
 async def _liveness() -> dict[str, str]:
@@ -19,7 +11,7 @@ async def _liveness() -> dict[str, str]:
 
 
 async def _readiness(request: Request) -> JSONResponse | dict[str, object]:
-    result = await _health_service(request).readiness()
+    result = await get_health_service(request.app).readiness()
     payload = {
         "status": result.status,
         "dependencies": result.dependencies,

@@ -3,22 +3,12 @@ from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
 from app.core.config import Settings
+from tests.factories import build_test_settings
 
 
 @pytest.fixture()
 def test_settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        REDIS_PORT=6379,
-        REDIS_PASSWORD="",  # pragma: allowlist secret
-        REDIS_DATABASE=0,
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
+    return build_test_settings(
         AUTH_SUBJECT="test-user",
         AUTH_ROLES="admin,developer",
     )

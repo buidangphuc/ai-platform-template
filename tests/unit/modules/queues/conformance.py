@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 
 import pytest
 
-from app.modules.queue.gateway import QueueGateway
+from app.modules.messaging.queue.gateway import QueueGateway
 
 GatewayFactory = Callable[[], Awaitable[QueueGateway]]
 

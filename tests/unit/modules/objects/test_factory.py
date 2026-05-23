@@ -3,23 +3,13 @@ from fastapi import FastAPI
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
-from app.modules.objects.adapters.memory import MemoryObjectGateway
-from app.modules.objects.factory import ObjectAddon, build_object_gateway
+from app.modules.platform.objects.adapters.memory import MemoryObjectGateway
+from app.modules.platform.objects.factory import ObjectAddon, build_object_gateway
+from tests.factories import build_test_settings
 
 
 def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return Settings(**base)
+    return build_test_settings(**overrides)
 
 
 def test_build_object_gateway_defaults_to_memory():
@@ -35,11 +25,12 @@ def test_s3_object_gateway_requires_bucket():
 
 async def test_object_addon_attaches_gateway_when_enabled():
     app = FastAPI()
+    resources = ApplicationResources()
     addon = ObjectAddon()
 
-    await addon.open(app, ApplicationResources(), _settings(OBJECTS_ENABLED=True))
+    await addon.open(app, resources, _settings(OBJECTS_ENABLED=True))
 
-    assert isinstance(app.state.objects, MemoryObjectGateway)
+    assert isinstance(resources.objects, MemoryObjectGateway)
 
 
 def test_object_addon_respects_enabled_flag():

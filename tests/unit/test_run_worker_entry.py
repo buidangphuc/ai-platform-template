@@ -7,33 +7,32 @@ configuration breakage before deploys.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
-from app.bootstrap.worker import validate_worker_runtime_settings
-from app.core.config import Settings
-from app.core.worker import AsyncPollingWorker
-from app.modules.tasks.service import TaskService
-from app.modules.tasks.store import TaskRecord
-from scripts.run_worker import (
+from app.bootstrap import worker as worker_module
+from app.bootstrap.worker import (
     WorkerContext,
-    _EchoCompletionHandler,
     build_worker_context,
+    build_worker_message_handler,
     check_worker_configuration,
-    main,
+    validate_worker_runtime_settings,
     worker_context,
 )
+from app.core.config import Settings
+from app.modules.business.completions.handlers.echo import EchoCompletionHandler
+from app.modules.messaging.queue.gateway import QueueMessage
+from app.modules.messaging.queue.worker import AsyncPollingWorker
+from app.modules.messaging.tasks.models import TaskStatus
+from app.modules.messaging.tasks.service import TaskService
+from app.modules.messaging.tasks.store import TaskRecord
+from scripts.run_worker import main
+from tests.factories import build_test_settings
 
 
 def _settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
+    return build_test_settings(
         QUEUE_BACKEND="memory",
         TASK_STORE_BACKEND="memory",
         WORKER_MAX_CONCURRENT=4,
@@ -41,13 +40,16 @@ def _settings() -> Settings:
 
 
 def test_build_worker_context_wires_all_components():
+    from app.modules.messaging.tasks.service import QueueTaskDispatcher
+
     ctx = build_worker_context(_settings())
 
     assert isinstance(ctx, WorkerContext)
     assert isinstance(ctx.worker, AsyncPollingWorker)
-    assert isinstance(ctx.service, TaskService)
-    assert ctx.queue is ctx.service.queue
-    assert ctx.store is ctx.service.store
+    assert isinstance(ctx.resources.service, TaskService)
+    assert isinstance(ctx.resources.service.dispatcher, QueueTaskDispatcher)
+    assert ctx.resources.queue is ctx.resources.service.dispatcher.queue
+    assert ctx.resources.store is ctx.resources.service.store
     assert ctx.worker.max_concurrent == 4
 
 
@@ -72,15 +74,15 @@ def test_build_worker_context_does_not_open_unused_database_or_redis(monkeypatch
 
     ctx = build_worker_context(settings)
 
-    assert ctx.engine is None
-    assert ctx.redis is None
-    assert ctx.queue is ctx.service.queue
-    assert ctx.store is ctx.service.store
+    assert ctx.resources.engine is None
+    assert ctx.resources.redis is None
+    assert ctx.resources.queue is ctx.resources.service.dispatcher.queue
+    assert ctx.resources.store is ctx.resources.service.store
 
 
 def test_build_worker_context_uses_default_echo_handler():
     ctx = build_worker_context(_settings())
-    assert isinstance(ctx.handler, _EchoCompletionHandler)
+    assert isinstance(ctx.handler, EchoCompletionHandler)
 
 
 def test_build_worker_context_accepts_custom_handler():
@@ -94,15 +96,54 @@ def test_build_worker_context_accepts_custom_handler():
     assert ctx.handler is custom
 
 
+async def test_worker_message_handler_marks_task_completed():
+    class _Service:
+        def __init__(self) -> None:
+            self.processing: list[str] = []
+            self.completed: list[tuple[str, dict]] = []
+
+        async def require(self, task_id: str) -> TaskRecord:
+            return TaskRecord(
+                id=task_id,
+                type="completion",
+                status=TaskStatus.QUEUED,
+                payload={"messages": [{"role": "user", "content": "hello"}]},
+                expires_at=datetime(2026, 5, 22, tzinfo=UTC),
+            )
+
+        async def mark_processing(self, task_id: str) -> None:
+            self.processing.append(task_id)
+
+        async def mark_completed(self, task_id: str, result: dict) -> None:
+            self.completed.append((task_id, result))
+
+        async def mark_failed(self, task_id: str, error: str) -> None:
+            pytest.fail("success path should not mark failed")
+
+    service = _Service()
+    pipeline = worker_module.CompletionPipeline(EchoCompletionHandler())
+    process_message = build_worker_message_handler(service=service, pipeline=pipeline)
+
+    await process_message(QueueMessage(id="msg-1", body={"task_id": "task-1"}))
+
+    assert service.processing == ["task-1"]
+    assert service.completed == [
+        (
+            "task-1",
+            {"content": "echo: hello", "model": "echo", "metadata": {}},
+        )
+    ]
+
+
 async def test_worker_context_manager_cleans_up_resources():
     settings = _settings()
 
     async with worker_context(settings) as ctx:
         assert ctx.worker is not None
 
-    if ctx.engine is not None:
+    if ctx.resources.engine is not None:
         # Engine should be disposed after context exit (subsequent dispose is a no-op).
-        await ctx.engine.dispose()
+        await ctx.resources.engine.dispose()
 
 
 async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
@@ -168,8 +209,8 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
     )
 
     async with worker_context(_settings()) as ctx:
-        assert ctx.queue is queue
-        assert ctx.store is store
+        assert ctx.resources.queue is queue
+        assert ctx.resources.store is store
 
     assert queue.closed is True
     assert store.closed is True
@@ -208,7 +249,7 @@ def test_worker_configuration_check_validates_without_opening_sessions(monkeypat
     )
 
     monkeypatch.setattr(
-        "scripts.run_worker.get_settings",
+        "app.bootstrap.worker.get_settings",
         lambda: settings,
     )
     monkeypatch.setattr(
@@ -223,7 +264,7 @@ def test_worker_check_cli_reports_configuration_errors(monkeypatch, capsys):
     def _raise() -> None:
         raise RuntimeError("bad worker config")
 
-    monkeypatch.setattr("scripts.run_worker.check_worker_configuration", _raise)
+    monkeypatch.setattr("app.bootstrap.worker.check_worker_configuration", _raise)
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--check"])

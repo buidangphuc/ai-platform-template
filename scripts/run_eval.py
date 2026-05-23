@@ -7,8 +7,8 @@ import asyncio
 import json
 from typing import Any
 
-from app.modules.evals.evaluators import ContainsEvaluator, ExactMatchEvaluator
-from app.modules.evals.runner import (
+from app.modules.ai.evals.evaluators import ContainsEvaluator, ExactMatchEvaluator
+from app.modules.ai.evals.runner import (
     EvalCase,
     EvalTargetResult,
     load_jsonl_cases,

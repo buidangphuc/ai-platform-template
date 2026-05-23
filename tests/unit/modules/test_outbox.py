@@ -6,30 +6,20 @@ from fastapi import FastAPI
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy
-from app.modules.outbox.factory import OutboxAddon, build_outbox_store
-from app.modules.outbox.models import OutboxEvent
-from app.modules.outbox.publisher import (
+from app.modules.messaging.outbox.factory import OutboxAddon, build_outbox_store
+from app.modules.messaging.outbox.models import OutboxEvent
+from app.modules.messaging.outbox.publisher import (
     OutboxPublisher,
     QueueOutboxSink,
     WebhookOutboxSink,
 )
-from app.modules.outbox.store import OutboxRecord, OutboxStatus, OutboxStore
-from app.modules.webhooks.dispatcher import WebhookDeliveryResult
+from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus, OutboxStore
+from app.modules.messaging.webhooks.dispatcher import WebhookDeliveryResult
+from tests.factories import build_test_settings
 
 
 def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return Settings(**base)
+    return build_test_settings(**overrides)
 
 
 def test_outbox_record_is_generic_platform_shape():
@@ -66,15 +56,12 @@ def test_build_outbox_store_returns_protocol_implementation():
 
 async def test_outbox_addon_attaches_store_when_enabled():
     app = FastAPI()
+    resources = ApplicationResources(sessionmaker=object())
     addon = OutboxAddon()
 
-    await addon.open(
-        app,
-        ApplicationResources(sessionmaker=object()),
-        _settings(OUTBOX_ENABLED=True),
-    )
+    await addon.open(app, resources, _settings(OUTBOX_ENABLED=True))
 
-    assert isinstance(app.state.outbox_store, OutboxStore)
+    assert isinstance(resources.outbox_store, OutboxStore)
 
 
 def test_outbox_addon_respects_enabled_flag():

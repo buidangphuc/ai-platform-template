@@ -1,8 +1,6 @@
 from fastapi import APIRouter
-from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
-from app.core.config import Settings
 from app.core.errors import (
     AppError,
     BadRequestError,
@@ -17,19 +15,7 @@ from app.core.errors import (
     UnprocessableEntityError,
     _http_error_code,
 )
-
-
-def _settings() -> Settings:
-    return Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
-    )
+from tests.factories import api_client_for, build_test_settings
 
 
 def test_typed_errors_carry_canonical_status_and_code():
@@ -67,13 +53,10 @@ async def test_typed_error_envelope_via_handler():
     async def conflict():
         raise ConflictError("Already exists", data={"field": "email"})
 
-    app = create_app(settings=_settings(), init_resources=False)
+    app = create_app(settings=build_test_settings(), init_resources=False)
     app.include_router(router)
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.get("/conflict", headers={"X-Request-ID": "req-c"})
 
     assert response.status_code == 409

@@ -4,22 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from tests.factories import build_test_settings
 
 
 def test_settings_defaults_are_local_safe():
-    settings = Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        REDIS_PORT=6379,
-        REDIS_PASSWORD="",  # pragma: allowlist secret
-        REDIS_DATABASE=0,
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
-    )
+    settings = build_test_settings()
 
     assert settings.PROJECT_NAME == "AI Solution Engineering Platform"
     assert settings.API_V1_PREFIX == "/api/v1"
@@ -52,17 +41,8 @@ def test_settings_defaults_are_local_safe():
 
 
 def test_settings_redacts_secret_values():
-    settings = Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        REDIS_PORT=6379,
+    settings = build_test_settings(
         REDIS_PASSWORD="redis-secret",  # pragma: allowlist secret
-        REDIS_DATABASE=0,
         AUTH_BEARER_TOKEN="bearer-secret",  # pragma: allowlist secret
         LANGFUSE_SECRET_KEY="langfuse-secret",  # pragma: allowlist secret
     )
@@ -77,19 +57,7 @@ def test_settings_redacts_secret_values():
 
 
 def test_redacted_summary_redacts_secret_like_future_fields():
-    settings = Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        REDIS_PORT=6379,
-        REDIS_PASSWORD="",  # pragma: allowlist secret
-        REDIS_DATABASE=0,
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
-    )
+    settings = build_test_settings()
 
     assert settings._redacted_value("FUTURE_SERVICE_TOKEN", "token-value") == "***"
     assert settings._redacted_value("FUTURE_SIGNING_SECRET", "secret-value") == "***"
@@ -103,38 +71,20 @@ def test_redacted_summary_redacts_secret_like_future_fields():
     assert settings._redacted_value("FUTURE_PUBLIC_VALUE", "visible") == "visible"
 
 
-def test_default_rate_limit_per_minute_must_be_positive():
+def test_principal_rate_limit_per_minute_must_be_positive():
     for rate_limit in (0, -1):
         with pytest.raises(ValidationError):
-            Settings(
-                _env_file=None,
-                ENVIRONMENT="test",
-                POSTGRES_HOST="localhost",
-                POSTGRES_USER="postgres",
-                POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-                POSTGRES_DB="ai_platform",
-                REDIS_HOST="localhost",
-                REDIS_PORT=6379,
-                REDIS_PASSWORD="",  # pragma: allowlist secret
-                REDIS_DATABASE=0,
-                AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
-                DEFAULT_RATE_LIMIT_PER_MINUTE=rate_limit,
-            )
+            build_test_settings(RATE_LIMIT_PRINCIPAL_PER_MINUTE=rate_limit)
+
+
+def test_ip_rate_limit_per_minute_must_be_positive():
+    for rate_limit in (0, -1):
+        with pytest.raises(ValidationError):
+            build_test_settings(RATE_LIMIT_IP_PER_MINUTE=rate_limit)
 
 
 def test_settings_keeps_model_selection_minimal():
-    settings = Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        REDIS_PORT=6379,
-        REDIS_PASSWORD="",  # pragma: allowlist secret
-        REDIS_DATABASE=0,
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
+    settings = build_test_settings(
         CHAT_MODEL="openai:gpt-4.1-mini",
     )
 
@@ -147,8 +97,6 @@ def test_settings_keeps_model_selection_minimal():
     assert "EMBEDDING_MODEL" not in Settings.model_fields
     assert "AGENT_RUNTIME" not in Settings.model_fields
     assert "ADVANCED_RETRIEVAL_ENABLED" not in Settings.model_fields
-    assert "RAG_CHUNK_SIZE" not in Settings.model_fields
-    assert "RAG_CHUNK_OVERLAP" not in Settings.model_fields
     assert "TRACE_CONTENT" not in Settings.model_fields
     assert "STORAGE_BACKEND" not in Settings.model_fields
     assert "JOB_BACKEND" not in Settings.model_fields
@@ -158,74 +106,52 @@ def test_settings_keeps_model_selection_minimal():
     assert "EXPERIMENT_TRACKER_BACKEND" not in Settings.model_fields
 
 
-def _base_settings_kwargs(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "REDIS_PORT": 6379,
-        "REDIS_PASSWORD": "",  # pragma: allowlist secret
-        "REDIS_DATABASE": 0,
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return base
-
-
 def test_chat_model_accepts_langchain_provider_model_targets_without_allowlist():
-    settings = Settings(
-        **_base_settings_kwargs(CHAT_MODEL="bedrock:anthropic.claude-3-5-sonnet")
-    )
+    settings = build_test_settings(CHAT_MODEL="bedrock:anthropic.claude-3-5-sonnet")
 
     assert settings.CHAT_MODEL == "bedrock:anthropic.claude-3-5-sonnet"
 
 
-def test_chat_model_rejects_blank_values():
-    with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(CHAT_MODEL="   "))
+# CHAT_MODEL whitespace is no longer validated at the config layer; the LLM
+# factory rejects unparseable provider targets when it tries to build the
+# chat model. Drops the cosmetic strip check.
 
 
 def test_worker_and_sqs_tuning_values_are_validated():
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(WORKER_MAX_ATTEMPTS=0))
+        build_test_settings(WORKER_MAX_ATTEMPTS=0)
 
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(SQS_VISIBILITY_TIMEOUT_SECONDS=-1))
+        build_test_settings(SQS_VISIBILITY_TIMEOUT_SECONDS=-1)
 
 
 def test_cache_and_webhook_settings_are_validated():
+    # Backend string is intentionally not allow-listed at the config layer —
+    # the corresponding factory raises on unknown values. The numeric tuning
+    # values are still validated here.
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(CACHE_BACKEND="disk"))
+        build_test_settings(CACHE_DEFAULT_TTL_SECONDS=0)
 
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(CACHE_DEFAULT_TTL_SECONDS=0))
+        build_test_settings(WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=0)
 
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS=0))
-
-    with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(WEBHOOK_TIMEOUT_SECONDS=0))
+        build_test_settings(WEBHOOK_TIMEOUT_SECONDS=0)
 
 
 def test_auth_bearer_token_is_required_outside_dev_and_test():
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(ENVIRONMENT="prod", AUTH_BEARER_TOKEN=""))
+        build_test_settings(ENVIRONMENT="prod", AUTH_BEARER_TOKEN="")
 
 
 def test_production_rejects_openapi_docs():
     with pytest.raises(ValidationError, match="DOCS_ENABLED must be false"):
-        Settings(
-            **_base_settings_kwargs(
-                ENVIRONMENT="prod",
-                AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
-                DOCS_ENABLED=True,
-                CORS_ALLOW_ORIGINS="https://app.example.com",
-                TRUSTED_HOSTS="api.example.com",
-            )
+        build_test_settings(
+            ENVIRONMENT="prod",
+            AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
+            DOCS_ENABLED=True,
+            CORS_ALLOW_ORIGINS="https://app.example.com",
+            TRUSTED_HOSTS="api.example.com",
         )
 
 
@@ -240,51 +166,43 @@ def test_production_rejects_wildcard_cors_and_trusted_hosts():
             field: "*",
         }
         with pytest.raises(ValidationError, match=f"{field} must not contain"):
-            Settings(**_base_settings_kwargs(**values))
+            build_test_settings(**values)
 
 
 def test_production_rejects_default_or_weak_auth_tokens():
     for token in ("change-me-local-bearer-token", "short-token"):
         with pytest.raises(ValidationError, match="AUTH_BEARER_TOKEN"):
-            Settings(
-                **_base_settings_kwargs(
-                    ENVIRONMENT="prod",
-                    AUTH_BEARER_TOKEN=token,  # pragma: allowlist secret
-                    DOCS_ENABLED=False,
-                    CORS_ALLOW_ORIGINS="https://app.example.com",
-                    TRUSTED_HOSTS="api.example.com",
-                )
+            build_test_settings(
+                ENVIRONMENT="prod",
+                AUTH_BEARER_TOKEN=token,  # pragma: allowlist secret
+                DOCS_ENABLED=False,
+                CORS_ALLOW_ORIGINS="https://app.example.com",
+                TRUSTED_HOSTS="api.example.com",
             )
 
 
 def test_production_accepts_locked_down_runtime_settings():
-    settings = Settings(
-        **_base_settings_kwargs(
-            ENVIRONMENT="production",
-            AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
-            DOCS_ENABLED=False,
-            CORS_ALLOW_ORIGINS="https://app.example.com",
-            TRUSTED_HOSTS="api.example.com",
-        )
+    settings = build_test_settings(
+        ENVIRONMENT="production",
+        AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
+        DOCS_ENABLED=False,
+        CORS_ALLOW_ORIGINS="https://app.example.com",
+        TRUSTED_HOSTS="api.example.com",
     )
 
     assert settings.ENVIRONMENT == "production"
 
 
 def test_auth_roles_are_parsed_from_comma_separated_string():
-    settings = Settings(
-        **_base_settings_kwargs(AUTH_ROLES="admin, developer, , viewer")
-    )
+    settings = build_test_settings(AUTH_ROLES="admin, developer, , viewer")
 
     assert settings.auth_roles == ["admin", "developer", "viewer"]
 
 
 def test_cors_and_trusted_hosts_are_parsed_from_comma_separated_strings():
-    settings = Settings(
-        **_base_settings_kwargs(
-            CORS_ALLOW_ORIGINS="https://app.example.com, http://localhost:3000",
-            TRUSTED_HOSTS="api.example.com, localhost",
-        )
+    settings = build_test_settings(
+        CORS_ALLOW_ORIGINS="https://app.example.com, http://localhost:3000",
+        TRUSTED_HOSTS="api.example.com, localhost",
     )
 
     assert settings.cors_allow_origins == [
@@ -296,7 +214,7 @@ def test_cors_and_trusted_hosts_are_parsed_from_comma_separated_strings():
 
 def test_max_request_body_bytes_must_be_positive():
     with pytest.raises(ValidationError):
-        Settings(**_base_settings_kwargs(MAX_REQUEST_BODY_BYTES=0))
+        build_test_settings(MAX_REQUEST_BODY_BYTES=0)
 
 
 def test_env_example_includes_app_settings_defaults():

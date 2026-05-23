@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
-from app.bootstrap.addons import BootstrapAddon, validate_addon_requirements
-from app.bootstrap.manifest import BootstrapManifest, build_bootstrap_manifest
-from app.bootstrap.state import attach_app_resource, clear_app_resource
+from app.bootstrap.addons import BootstrapAddon
 from app.core.config import Settings
 from app.core.database import (
     build_engine,
@@ -14,30 +15,55 @@ from app.core.database import (
 )
 from app.core.health import DependencyCheck, HealthService
 from app.core.redis import build_redis_client, check_redis_connection
-from app.modules.queue.factory import build_queue_gateway
-from app.modules.tasks.factory import build_task_store
-from app.modules.tasks.service import TaskService
+from app.modules.messaging.queue.factory import build_queue_gateway
+from app.modules.messaging.tasks.factory import build_task_store
+from app.modules.messaging.tasks.service import TaskService
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-    from app.modules.queue.gateway import QueueGateway
-    from app.modules.tasks.store import TaskStore
+    from app.core.resilience import RetryPolicy
+    from app.modules.ai.rag.service import KnowledgeRetrievalService
+    from app.modules.business.completions.pipeline import CompletionPipeline
+    from app.modules.messaging.outbox.store import OutboxStore
+    from app.modules.messaging.queue.gateway import QueueGateway
+    from app.modules.messaging.tasks.store import TaskStore
+    from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
+    from app.modules.messaging.webhooks.signing import WebhookSigner
+    from app.modules.platform.cache.gateway import CacheGateway
+    from app.modules.platform.idempotency.store import IdempotencyStore
+    from app.modules.platform.objects.gateway import ObjectGateway
+    from app.modules.platform.rate_limit.service import (
+        InMemoryRateLimiter,
+        RedisRateLimiter,
+    )
 
 
 @dataclass
 class ApplicationResources:
-    engine: "AsyncEngine | None" = None
-    sessionmaker: "async_sessionmaker[AsyncSession] | None" = None
-    redis: "Redis | None" = None
-    queue_gateway: "QueueGateway | None" = None
-    task_store: "TaskStore | None" = None
+    # Core infrastructure
+    engine: AsyncEngine | None = None
+    sessionmaker: async_sessionmaker[AsyncSession] | None = None
+    redis: Redis | None = None
+    queue_gateway: QueueGateway | None = None
+    task_store: TaskStore | None = None
     task_service: TaskService | None = None
-    health_service: HealthService | None = None
-    manifest: BootstrapManifest | None = None
+    # Domain pipeline
+    completion_pipeline: CompletionPipeline | None = None
+    # Addon-provided components
+    cache: CacheGateway | None = None
+    idempotency_store: IdempotencyStore | None = None
+    objects: ObjectGateway | None = None
+    outbox_store: OutboxStore | None = None
+    principal_rate_limiter: InMemoryRateLimiter | RedisRateLimiter | None = None
+    ip_rate_limiter: InMemoryRateLimiter | RedisRateLimiter | None = None
+    rag_service: KnowledgeRetrievalService | None = None
+    webhook_signer: WebhookSigner | None = None
+    webhook_dispatcher: HttpWebhookDispatcher | None = None
+    webhook_retry_policy: RetryPolicy | None = None
+    # Lifecycle bookkeeping (close in reverse)
     addons: list[BootstrapAddon] = field(default_factory=list)
-    state_keys: list[str] = field(default_factory=list)
 
 
 async def open_application_resources(
@@ -47,101 +73,105 @@ async def open_application_resources(
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...] = (),
 ) -> ApplicationResources:
-    resources = ApplicationResources()
-    attach_app_resource(app, resources, "resources", resources)
-    manifest = getattr(app.state, "bootstrap_manifest", None)
-    if manifest is None:
-        manifest = build_bootstrap_manifest(
-            settings=settings,
-            init_resources=init_resources,
-            addons=addons,
-        )
-        app.state.bootstrap_manifest = manifest
-    resources.manifest = manifest
+    resources: ApplicationResources = app.state.resources
     validate_core_resource_requirements(
         settings=settings,
         init_resources=init_resources,
     )
-    validate_addon_requirements(
-        settings=settings,
-        init_resources=init_resources,
-        addons=addons,
-    )
 
-    database_enabled = init_resources and settings.DATABASE_ENABLED
-    redis_enabled = init_resources and settings.REDIS_ENABLED
-    queue_enabled = init_resources and settings.QUEUE_ENABLED
-    tasks_enabled = init_resources and settings.TASKS_ENABLED
+    if init_resources:
+        _open_database(resources, settings)
+        _open_redis(resources, settings)
+        _open_queue(resources, settings)
+        _open_tasks(resources, settings)
 
-    if tasks_enabled and not queue_enabled:
-        raise RuntimeError("TASKS_ENABLED requires QUEUE_ENABLED")
-
-    if database_enabled:
-        resources.engine = build_engine(settings)
-        resources.sessionmaker = build_sessionmaker(resources.engine)
-        attach_app_resource(app, resources, "engine", resources.engine)
-        attach_app_resource(app, resources, "sessionmaker", resources.sessionmaker)
-        manifest.mark_resource_opened("database")
-
-    if redis_enabled:
-        resources.redis = build_redis_client(settings)
-        attach_app_resource(app, resources, "redis", resources.redis)
-        manifest.mark_resource_opened("redis")
-
-    if queue_enabled:
-        resources.queue_gateway = build_queue_gateway(settings, redis=resources.redis)
-        attach_app_resource(app, resources, "queue_gateway", resources.queue_gateway)
-        manifest.mark_resource_opened("queue")
-
-    if tasks_enabled:
-        queue_gateway = resources.queue_gateway
-        if queue_gateway is None:
-            raise RuntimeError("TASKS_ENABLED requires an open queue gateway")
-        resources.task_store = build_task_store(
-            settings,
-            sessionmaker=resources.sessionmaker,
-            redis=resources.redis,
-        )
-        resources.task_service = TaskService(
-            store=resources.task_store,
-            queue=queue_gateway,
-            ttl_seconds=settings.TASK_TTL_SECONDS,
-        )
-        attach_app_resource(app, resources, "task_store", resources.task_store)
-        attach_app_resource(app, resources, "task_service", resources.task_service)
-        manifest.mark_resource_opened("tasks")
-
-    postgres_check: DependencyCheck | None = None
-    if resources.sessionmaker is not None:
-        sessionmaker = resources.sessionmaker
-
-        async def _postgres_check() -> None:
-            return await check_postgres_connection(sessionmaker)
-
-        postgres_check = _postgres_check
-
-    redis_check: DependencyCheck | None = None
-    if resources.redis is not None:
-        redis = resources.redis
-
-        async def _redis_check() -> None:
-            return await check_redis_connection(redis)
-
-        redis_check = _redis_check
-
-    resources.health_service = HealthService(
-        check_external_dependencies=init_resources,
-        postgres_check=postgres_check,
-        redis_check=redis_check,
-    )
-    app.state.health_service = resources.health_service
+    _install_health_service(app, resources, init_resources=init_resources)
 
     for addon in addons:
         if addon.is_enabled(settings):
             await addon.open(app, resources, settings)
             resources.addons.append(addon)
-            manifest.mark_addon_opened(addon.name)
+
     return resources
+
+
+def _open_database(resources: ApplicationResources, settings: Settings) -> None:
+    if not settings.DATABASE_ENABLED:
+        return
+    resources.engine = build_engine(settings)
+    resources.sessionmaker = build_sessionmaker(resources.engine)
+
+
+def _open_redis(resources: ApplicationResources, settings: Settings) -> None:
+    if not settings.REDIS_ENABLED:
+        return
+    resources.redis = build_redis_client(settings)
+
+
+def _open_queue(resources: ApplicationResources, settings: Settings) -> None:
+    if not settings.QUEUE_ENABLED:
+        return
+    resources.queue_gateway = build_queue_gateway(settings, redis=resources.redis)
+
+
+def _open_tasks(resources: ApplicationResources, settings: Settings) -> None:
+    if not settings.TASKS_ENABLED:
+        return
+    if resources.queue_gateway is None:
+        raise RuntimeError("TASKS_ENABLED requires an open queue gateway")
+    resources.task_store = build_task_store(
+        settings,
+        sessionmaker=resources.sessionmaker,
+        redis=resources.redis,
+    )
+
+    outbox_store = None
+    if settings.TASKS_DISPATCH_BACKEND == "outbox":
+        if not settings.OUTBOX_ENABLED:
+            raise RuntimeError("TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED")
+        from app.modules.messaging.outbox.factory import build_outbox_store
+
+        outbox_store = build_outbox_store(settings, sessionmaker=resources.sessionmaker)
+        resources.outbox_store = outbox_store
+
+    from app.modules.messaging.tasks.factory import build_task_dispatcher
+
+    dispatcher = build_task_dispatcher(
+        settings,
+        queue=resources.queue_gateway,
+        outbox=outbox_store,
+    )
+    resources.task_service = TaskService(
+        store=resources.task_store,
+        dispatcher=dispatcher,
+        ttl_seconds=settings.TASK_TTL_SECONDS,
+        lease_seconds=settings.TASKS_LEASE_SECONDS,
+    )
+
+
+def _install_health_service(
+    app: FastAPI,
+    resources: ApplicationResources,
+    *,
+    init_resources: bool,
+) -> None:
+    app.state.health_service = HealthService(
+        check_external_dependencies=init_resources,
+        checks=_build_dependency_checks(resources),
+    )
+
+
+def _build_dependency_checks(
+    resources: ApplicationResources,
+) -> tuple[tuple[str, DependencyCheck], ...]:
+    checks: list[tuple[str, DependencyCheck]] = []
+    if resources.sessionmaker is not None:
+        checks.append(
+            ("postgres", partial(check_postgres_connection, resources.sessionmaker))
+        )
+    if resources.redis is not None:
+        checks.append(("redis", partial(check_redis_connection, resources.redis)))
+    return tuple(checks)
 
 
 def validate_core_resource_requirements(
@@ -175,44 +205,24 @@ def _require_enabled(enabled: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-async def close_application_resources(app: FastAPI | None) -> None:
-    if app is None:
-        return
+async def close_application_resources(app: FastAPI) -> None:
+    resources: ApplicationResources = app.state.resources
 
-    resources = getattr(app.state, "resources", None)
-    task_store = resources.task_store if resources is not None else None
-    queue_gateway = resources.queue_gateway if resources is not None else None
-    redis = resources.redis if resources is not None else None
-    engine = resources.engine if resources is not None else None
+    for addon in reversed(resources.addons):
+        await addon.close(app, resources)
+    resources.addons.clear()
 
-    if resources is not None:
-        for addon in reversed(resources.addons):
-            await addon.close(app, resources)
-            if resources.manifest is not None:
-                resources.manifest.mark_addon_closed(addon.name)
-
-    if task_store is not None:
-        await task_store.close()
-        if resources is not None and resources.manifest is not None:
-            resources.manifest.mark_resource_closed("tasks")
-
-    if queue_gateway is not None:
-        await queue_gateway.close()
-        if resources is not None and resources.manifest is not None:
-            resources.manifest.mark_resource_closed("queue")
-
-    if redis is not None and hasattr(redis, "aclose"):
-        await redis.aclose()
-        if resources is not None and resources.manifest is not None:
-            resources.manifest.mark_resource_closed("redis")
-
-    if engine is not None and hasattr(engine, "dispose"):
-        await engine.dispose()
-        if resources is not None and resources.manifest is not None:
-            resources.manifest.mark_resource_closed("database")
-
-    if resources is not None:
-        for state_key in reversed(resources.state_keys):
-            clear_app_resource(app, state_key)
+    if resources.task_store is not None:
+        await resources.task_store.close()
+        resources.task_store = None
+    if resources.queue_gateway is not None:
+        await resources.queue_gateway.close()
+        resources.queue_gateway = None
+    if resources.redis is not None:
+        await resources.redis.aclose()
+        resources.redis = None
+    if resources.engine is not None:
+        await resources.engine.dispose()
+        resources.engine = None
 
     app.state.health_service = HealthService(check_external_dependencies=False)

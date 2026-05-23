@@ -1,7 +1,7 @@
 import pytest
 
-from app.modules.queue.adapters.memory import InMemoryQueueGateway
-from app.modules.queue.gateway import QueueGateway
+from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
+from app.modules.messaging.queue.gateway import QueueGateway
 
 from .conformance import QueueGatewayConformance
 
@@ -38,3 +38,29 @@ async def test_in_memory_gateway_exposes_pending_and_inflight_counts():
     for msg in messages:
         await gateway.ack(msg)
     assert gateway.inflight_count() == 0
+
+
+async def test_in_memory_gateway_routes_unrequeued_nack_to_dead_letter():
+    gateway = InMemoryQueueGateway()
+    await gateway.send({"event": "1"})
+
+    [message] = await gateway.receive(max_messages=1, wait_seconds=0.1)
+    await gateway.nack(message, requeue=False)
+
+    assert gateway.dead_letter_count() == 1
+    assert gateway.dead_letter_messages()[0].body == {"event": "1"}
+    assert gateway.pending_count() == 0
+
+
+async def test_in_memory_gateway_requeue_increments_receive_count():
+    gateway = InMemoryQueueGateway()
+    await gateway.send({"event": "1"})
+
+    [first] = await gateway.receive(max_messages=1, wait_seconds=0.1)
+    await gateway.nack(first, requeue=True)
+
+    [second] = await gateway.receive(max_messages=1, wait_seconds=0.1)
+
+    assert first.receive_count == 1
+    assert second.receive_count == 2
+    assert gateway.dead_letter_count() == 0

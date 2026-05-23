@@ -2,24 +2,14 @@ import pytest
 from fakeredis import aioredis
 
 from app.core.config import Settings
-from app.modules.cache.adapters.memory import MemoryCacheGateway
-from app.modules.cache.adapters.redis import RedisCacheGateway
-from app.modules.cache.factory import CacheAddon, build_cache_gateway
+from app.modules.platform.cache.adapters.memory import MemoryCacheGateway
+from app.modules.platform.cache.adapters.redis import RedisCacheGateway
+from app.modules.platform.cache.factory import CacheAddon, build_cache_gateway
+from tests.factories import build_test_settings
 
 
 def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return Settings(**base)
+    return build_test_settings(**overrides)
 
 
 def test_build_cache_gateway_defaults_to_memory():

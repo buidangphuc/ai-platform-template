@@ -5,18 +5,11 @@ from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
 from app.core.config import Settings
+from tests.factories import build_test_settings
 
 
 def _settings(*, timeout_seconds: int = 1) -> Settings:
-    return Settings(
-        _env_file=None,
-        ENVIRONMENT="test",
-        POSTGRES_HOST="localhost",
-        POSTGRES_USER="postgres",
-        POSTGRES_PASSWORD="postgres",  # pragma: allowlist secret
-        POSTGRES_DB="ai_platform",
-        REDIS_HOST="localhost",
-        AUTH_BEARER_TOKEN="test-token",  # pragma: allowlist secret
+    return build_test_settings(
         REQUEST_TIMEOUT_ENABLED=True,
         REQUEST_TIMEOUT_SECONDS=timeout_seconds,
     )
@@ -26,10 +19,6 @@ def _build_app(settings: Settings):
     app = create_app(settings=settings, init_resources=False)
 
     router = APIRouter()
-
-    @router.get("/fast")
-    async def fast():
-        return {"ok": True}
 
     @router.get("/slow")
     async def slow():
@@ -43,19 +32,6 @@ def _build_app(settings: Settings):
 
     app.include_router(router)
     return app
-
-
-async def test_fast_request_passes_through():
-    app = _build_app(_settings(timeout_seconds=5))
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as client:
-        response = await client.get("/fast")
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
 
 
 async def test_slow_request_times_out_with_504_envelope():

@@ -1,22 +1,13 @@
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.core.config import Settings
-from app.modules.llm.router import ModelFailoverPolicy, ModelRouter
+from app.core.resilience import CircuitBreakerPolicy
+from app.modules.ai.llm.router import ModelRouter
+from tests.factories import build_test_settings
 
 
 def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "_env_file": None,
-        "ENVIRONMENT": "test",
-        "POSTGRES_HOST": "localhost",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "postgres",  # pragma: allowlist secret
-        "POSTGRES_DB": "ai_platform",
-        "REDIS_HOST": "localhost",
-        "AUTH_BEARER_TOKEN": "test-token",  # pragma: allowlist secret
-    }
-    base.update(overrides)
-    return Settings(**base)
+    return build_test_settings(**overrides)
 
 
 def test_model_router_uses_fake_model_when_default_model_is_empty():
@@ -46,7 +37,7 @@ def test_model_router_uses_judge_model_when_configured():
     assert created == ["openai:gpt-4.1"]
 
 
-def test_model_router_parses_fallback_models():
+def test_model_router_lists_primary_then_secondary_targets():
     router = ModelRouter(
         _settings(
             CHAT_MODEL="openai:gpt-4.1-mini",
@@ -60,7 +51,7 @@ def test_model_router_parses_fallback_models():
     ]
 
 
-def test_model_router_builds_primary_secondary_failover_policy():
+def test_model_router_switches_to_secondary_after_primary_4xx_threshold():
     router = ModelRouter(
         _settings(
             CHAT_MODEL="openai:gpt-4.1-mini",
@@ -68,54 +59,48 @@ def test_model_router_builds_primary_secondary_failover_policy():
         )
     )
 
-    policy = router.failover_policy("default")
+    assert router.current_target("default") == "openai:gpt-4.1-mini"
+    router.record_error("openai:gpt-4.1-mini", status_code=429)
+    router.record_error("openai:gpt-4.1-mini", status_code=400)
+    assert router.current_target("default") == "openai:gpt-4.1-mini"
 
-    assert policy.current_target() == "openai:gpt-4.1-mini"
-    policy.record_error("openai:gpt-4.1-mini", status_code=429)
-    policy.record_error("openai:gpt-4.1-mini", status_code=400)
-    assert policy.current_target() == "openai:gpt-4.1-mini"
+    router.record_error("openai:gpt-4.1-mini", status_code=401)
 
-    policy.record_error("openai:gpt-4.1-mini", status_code=401)
-
-    assert policy.current_target() == "anthropic:claude-sonnet-4-5"
+    assert router.current_target("default") == "anthropic:claude-sonnet-4-5"
 
 
-def test_model_failover_policy_ignores_non_primary_and_non_4xx_errors():
-    policy = ModelFailoverPolicy(
-        primary_target="primary",
-        secondary_target="secondary",
-        primary_4xx_threshold=2,
+def test_model_router_ignores_non_primary_and_non_4xx_errors():
+    router = ModelRouter(
+        _settings(
+            CHAT_MODEL="primary",
+            CHAT_FALLBACK_MODELS="secondary",
+        ),
+        breaker_policy=CircuitBreakerPolicy(
+            failure_threshold=2,
+            failure_status_range=range(400, 500),
+        ),
     )
 
-    policy.record_error("primary", status_code=500)
-    policy.record_error("secondary", status_code=429)
+    router.record_error("primary", status_code=500)
+    router.record_error("secondary", status_code=429)
 
-    assert policy.current_target() == "primary"
+    assert router.current_target("default") == "primary"
 
 
-def test_model_failover_policy_resets_primary_4xx_count_on_success():
-    policy = ModelFailoverPolicy(
-        primary_target="primary",
-        secondary_target="secondary",
-        primary_4xx_threshold=2,
+def test_model_router_resets_primary_4xx_count_on_success():
+    router = ModelRouter(
+        _settings(
+            CHAT_MODEL="primary",
+            CHAT_FALLBACK_MODELS="secondary",
+        ),
+        breaker_policy=CircuitBreakerPolicy(
+            failure_threshold=2,
+            failure_status_range=range(400, 500),
+        ),
     )
 
-    policy.record_error("primary", status_code=429)
-    policy.record_success("primary")
-    policy.record_error("primary", status_code=429)
+    router.record_error("primary", status_code=429)
+    router.record_success("primary")
+    router.record_error("primary", status_code=429)
 
-    assert policy.current_target() == "primary"
-
-
-def test_model_router_builds_langfuse_metadata():
-    router = ModelRouter(_settings())
-
-    assert router.trace_metadata(
-        role="judge",
-        fallback_rank=1,
-        model_target="openai:gpt-4.1",
-    ) == {
-        "model_role": "judge",
-        "fallback_rank": 1,
-        "model_target": "openai:gpt-4.1",
-    }
+    assert router.current_target("default") == "primary"

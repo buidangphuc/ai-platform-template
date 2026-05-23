@@ -29,3 +29,6 @@ research/artifacts/sample_model_manifest.yaml
 research/artifacts/generated/
 
 fastapi_template
+
+# Claude Code: user-specific permissions (not shared with team)
+.claude/settings.local.json

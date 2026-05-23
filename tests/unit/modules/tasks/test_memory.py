@@ -1,7 +1,7 @@
 import pytest
 
-from app.modules.tasks.adapters.memory import InMemoryTaskStore
-from app.modules.tasks.store import TaskStore
+from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
+from app.modules.messaging.tasks.store import TaskStore
 
 from .conformance import TaskStoreConformance, _make_task
 

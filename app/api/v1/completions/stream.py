@@ -1,37 +1,48 @@
-"""SSE streaming completion endpoint."""
-
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.v1.completions.deps import get_completion_handler
-from app.api.v1.completions.handler import CompletionHandler
-from app.api.v1.completions.schemas import CompletionRequest, CompletionStreamChunk
-from app.modules.identity.auth import require_principal
-
-router = APIRouter(
-    prefix="/completions",
-    tags=["completions"],
-    dependencies=[Depends(require_principal)],
+from app.bootstrap.state import get_app_resources
+from app.core.errors import AppError
+from app.modules.business.completions.pipeline import CompletionPipeline
+from app.modules.business.completions.schemas import (
+    CompletionRequest,
+    CompletionStreamChunk,
 )
+
+router = APIRouter()
+
+
+def get_completion_pipeline(request: Request) -> CompletionPipeline:
+    pipeline = get_app_resources(request.app).completion_pipeline
+    if pipeline is None:
+        raise AppError(
+            code="completion_handler_not_configured",
+            message="Completion handler is not configured",
+            status_code=501,
+        )
+    return pipeline
 
 
 @router.post("/stream")
-async def stream(payload: CompletionRequest, request: Request):
-    handler = get_completion_handler(request)
+async def stream(
+    payload: CompletionRequest,
+    request: Request,
+) -> StreamingResponse:
+    pipeline = get_completion_pipeline(request)
     return StreamingResponse(
-        stream_completion_events(handler, payload),
+        stream_completion_events(pipeline, payload),
         media_type="text/event-stream",
     )
 
 
 async def stream_completion_events(
-    handler: CompletionHandler,
+    pipeline: CompletionPipeline,
     payload: CompletionRequest,
 ) -> AsyncIterator[str]:
-    async for chunk in handler.stream(payload):
+    async for chunk in pipeline.stream(payload):
         stream_chunk = normalize_stream_chunk(chunk)
         if stream_chunk.delta:
             yield sse_event(

@@ -2,13 +2,16 @@ import sys
 import types
 
 import pytest
+from fastapi import FastAPI
 
 from app.bootstrap import (
     application as application_module,
     resources as resources_module,
 )
 from app.bootstrap.application import _build_lifespan, create_app
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
+from app.core.health import HealthService
 
 
 class _FakeLangfuseClient:
@@ -27,16 +30,36 @@ def _install_fake_langfuse(monkeypatch: pytest.MonkeyPatch) -> _FakeLangfuseClie
     return client
 
 
+def _bare_app() -> FastAPI:
+    app = FastAPI()
+    app.state.resources = ApplicationResources()
+    app.state.in_flight_tracker = None
+    app.state.health_service = HealthService(check_external_dependencies=False)
+    return app
+
+
+def _patch_resource_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop_open(app, settings, *, init_resources, addons=()):
+        return app.state.resources
+
+    async def _noop_close(app):
+        return None
+
+    monkeypatch.setattr(application_module, "open_application_resources", _noop_open)
+    monkeypatch.setattr(application_module, "close_application_resources", _noop_close)
+
+
 async def test_lifespan_flushes_langfuse_client_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     test_settings: Settings,
 ):
     fake_client = _install_fake_langfuse(monkeypatch)
+    _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=True)
+    lifespan = _build_lifespan(settings, init_resources=True, addons=())
 
-    async with lifespan(None):  # type: ignore[arg-type]
+    async with lifespan(_bare_app()):
         assert fake_client.flushed is False
 
     assert fake_client.flushed is True
@@ -56,11 +79,12 @@ async def test_lifespan_skips_flush_when_init_resources_is_false(
         "_flush_langfuse_client",
         _should_not_be_called,
     )
+    _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=False)
+    lifespan = _build_lifespan(settings, init_resources=False, addons=())
 
-    async with lifespan(None):  # type: ignore[arg-type]
+    async with lifespan(_bare_app()):
         pass
 
     assert flush_calls == []
@@ -77,10 +101,11 @@ async def test_lifespan_skips_flush_when_langfuse_disabled(
         "_flush_langfuse_client",
         lambda: flush_calls.append("called"),
     )
+    _patch_resource_lifecycle(monkeypatch)
 
-    lifespan = _build_lifespan(test_settings, init_resources=True)
+    lifespan = _build_lifespan(test_settings, init_resources=True, addons=())
 
-    async with lifespan(None):  # type: ignore[arg-type]
+    async with lifespan(_bare_app()):
         pass
 
     assert flush_calls == []
@@ -91,11 +116,12 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
     test_settings: Settings,
 ):
     monkeypatch.setitem(sys.modules, "langfuse", None)
+    _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=True)
+    lifespan = _build_lifespan(settings, init_resources=True, addons=())
 
-    async with lifespan(None):  # type: ignore[arg-type]
+    async with lifespan(_bare_app()):
         pass
 
 
@@ -173,37 +199,37 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     )
 
     app = create_app(settings=test_settings, init_resources=True)
+    resources_before = app.state.resources
 
-    assert not hasattr(app.state, "engine")
-    assert not hasattr(app.state, "sessionmaker")
-    assert not hasattr(app.state, "redis")
-    assert not hasattr(app.state, "queue_gateway")
-    assert not hasattr(app.state, "task_store")
-    assert not hasattr(app.state, "task_service")
+    assert resources_before.engine is None
+    assert resources_before.sessionmaker is None
+    assert resources_before.redis is None
+    assert resources_before.queue_gateway is None
+    assert resources_before.task_store is None
+    assert resources_before.task_service is None
 
     async with app.router.lifespan_context(app):
-        assert app.state.engine is engine
-        assert app.state.sessionmaker is sessionmaker
-        assert app.state.redis is redis
-        assert app.state.queue_gateway is queue
-        assert app.state.task_store is task_store
-        assert app.state.task_service is not None
+        resources_open = app.state.resources
+        assert resources_open.engine is engine
+        assert resources_open.sessionmaker is sessionmaker
+        assert resources_open.redis is redis
+        assert resources_open.queue_gateway is queue
+        assert resources_open.task_store is task_store
+        assert resources_open.task_service is not None
         assert engine.disposed is False
         assert redis.closed is False
         assert queue.closed is False
         assert task_store.closed is False
 
+    resources_closed = app.state.resources
     assert engine.disposed is True
     assert redis.closed is True
     assert queue.closed is True
     assert task_store.closed is True
-    assert not hasattr(app.state, "resources")
-    assert not hasattr(app.state, "engine")
-    assert not hasattr(app.state, "sessionmaker")
-    assert not hasattr(app.state, "redis")
-    assert not hasattr(app.state, "queue_gateway")
-    assert not hasattr(app.state, "task_store")
-    assert not hasattr(app.state, "task_service")
+    assert resources_closed.engine is None
+    assert resources_closed.redis is None
+    assert resources_closed.queue_gateway is None
+    assert resources_closed.task_store is None
     assert app.state.health_service is not None
 
 
@@ -248,12 +274,13 @@ async def test_app_lifespan_honors_resource_flags(
     app = create_app(settings=settings, init_resources=True)
 
     async with app.router.lifespan_context(app):
-        assert not hasattr(app.state, "engine")
-        assert not hasattr(app.state, "sessionmaker")
-        assert not hasattr(app.state, "redis")
-        assert not hasattr(app.state, "queue_gateway")
-        assert not hasattr(app.state, "task_store")
-        assert not hasattr(app.state, "task_service")
+        resources_open = app.state.resources
+        assert resources_open.engine is None
+        assert resources_open.sessionmaker is None
+        assert resources_open.redis is None
+        assert resources_open.queue_gateway is None
+        assert resources_open.task_store is None
+        assert resources_open.task_service is None
         assert app.state.health_service is not None
 
     assert build_calls == []
@@ -280,10 +307,22 @@ async def test_app_lifespan_init_resources_false_opens_no_runtime_resources(
     app = create_app(settings=test_settings, init_resources=False)
 
     async with app.router.lifespan_context(app):
-        assert not hasattr(app.state, "engine")
-        assert not hasattr(app.state, "redis")
+        resources_open = app.state.resources
+        assert resources_open.engine is None
+        assert resources_open.redis is None
 
     assert build_calls == []
+
+
+def test_resource_lifecycle_uses_named_open_steps():
+    for name in (
+        "_open_database",
+        "_open_redis",
+        "_open_queue",
+        "_open_tasks",
+        "_install_health_service",
+    ):
+        assert callable(getattr(resources_module, name))
 
 
 async def test_app_lifespan_fails_fast_when_redis_queue_backend_has_no_redis(
@@ -331,7 +370,7 @@ async def test_app_lifespan_fails_fast_when_postgres_task_store_has_no_database(
                 "REDIS_ENABLED": False,
                 "RATE_LIMIT_BACKEND": "redis",
             },
-            "Addon 'rate_limit' requires redis",
+            "RATE_LIMIT_BACKEND=redis requires REDIS_ENABLED",
         ),
         (
             {
@@ -340,21 +379,21 @@ async def test_app_lifespan_fails_fast_when_postgres_task_store_has_no_database(
                 "CACHE_ENABLED": True,
                 "CACHE_BACKEND": "redis",
             },
-            "Addon 'cache' requires redis",
+            "CACHE_BACKEND=redis requires REDIS_ENABLED",
         ),
         (
             {
                 "DATABASE_ENABLED": False,
                 "IDEMPOTENCY_ENABLED": True,
             },
-            "Addon 'idempotency' requires database",
+            "IDEMPOTENCY_BACKEND=postgres requires DATABASE_ENABLED",
         ),
         (
             {
                 "DATABASE_ENABLED": False,
                 "OUTBOX_ENABLED": True,
             },
-            "Addon 'outbox' requires database",
+            "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
         ),
     ],
 )

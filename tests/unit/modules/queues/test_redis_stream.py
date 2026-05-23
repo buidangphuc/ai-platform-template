@@ -1,8 +1,8 @@
 import pytest
 from fakeredis import aioredis
 
-from app.modules.queue.adapters.redis_stream import RedisStreamQueueGateway
-from app.modules.queue.gateway import QueueGateway
+from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
+from app.modules.messaging.queue.gateway import QueueGateway
 
 from .conformance import QueueGatewayConformance
 
