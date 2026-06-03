@@ -7,6 +7,7 @@ from app.bootstrap.state import (
     get_app_settings,
     get_health_service,
     get_in_flight_tracker,
+    get_service_resource,
     require,
 )
 from app.core.errors import ServiceUnavailableError
@@ -69,3 +70,35 @@ def test_require_raises_service_unavailable_when_none() -> None:
 
     assert exc_info.value.code == "cache_not_configured"
     assert "disabled or lifespan" in exc_info.value.message
+
+
+class _ExampleService:
+    pass
+
+
+def test_get_service_resource_returns_registered_service() -> None:
+    app = FastAPI()
+    service = _ExampleService()
+    app.state.resources = ApplicationResources(services={"example": service})
+
+    assert get_service_resource(app, "example", _ExampleService) is service
+
+
+def test_get_service_resource_rejects_missing_service() -> None:
+    app = FastAPI()
+    app.state.resources = ApplicationResources()
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        get_service_resource(app, "example", _ExampleService)
+
+    assert exc_info.value.code == "example_not_configured"
+
+
+def test_get_service_resource_rejects_wrong_service_type() -> None:
+    app = FastAPI()
+    app.state.resources = ApplicationResources(services={"example": object()})
+
+    with pytest.raises(ServiceUnavailableError) as exc_info:
+        get_service_resource(app, "example", _ExampleService)
+
+    assert exc_info.value.code == "example_misconfigured"

@@ -11,6 +11,8 @@ This repository currently covers the local application foundation:
 - Health/readiness endpoints.
 - Request ID middleware, logging context, and standard error envelope.
 - Static Bearer token authentication.
+- Central application composition root for project services that are built from
+  platform resources.
 - Lean product primitives: service context, explicit DB transactions,
   pagination schemas, audit events, and idempotency persistence.
 - Fixed-window rate limiting foundation.
@@ -85,7 +87,7 @@ Python processes can use `LANGFUSE_BASE_URL=http://localhost:3000`.
 ```text
 app/
   api/                  Versioned FastAPI routers
-  bootstrap/            App factory and service wiring
+  bootstrap/            App factory, platform resources, and service wiring
   core/                 Settings, database, Redis, errors, logging, health
   modules/
     identity/           Static Bearer principal and auth dependency
@@ -155,15 +157,25 @@ does not carry Redis, object storage clients, feature flags, or AI runtimes; add
 those directly at the business module boundary when a project actually needs
 them.
 
-Endpoint wiring should stay local to the owning module. API routers should keep
-only HTTP concerns: path/query/body parsing, response models or envelopes, and a
-small call into a business service. Runtime wiring belongs in a module-local
-provider such as `app/modules/business/<domain>/providers.py`; that provider
-may read `app.state` resources and settings, then construct the service and its
-runtime dependencies. Business services should receive explicit constructor
-dependencies and must not read FastAPI `Request`, `app.state`, or a global
-service locator. Avoid central API-level `deps.py` files that accumulate
-feature-specific wiring.
+Application wiring is centralized in the bootstrap layer. API routers should
+keep only HTTP concerns: path/query/body parsing, response models or envelopes,
+and a small call into a business service. Platform modules expose reusable
+capabilities such as Mongo, quota, cache, objects, LLM, queues, and task stores;
+`app/bootstrap/resources.py` opens those capabilities once for the app.
+
+Business services should receive explicit constructor dependencies and must not
+read FastAPI `Request`, `app.state`, or a global service locator. When a product
+service needs lifespan-owned runtime dependencies, build it in the bootstrap
+composition root from already-open platform resources, register it on
+`ApplicationResources.services`, and expose a small FastAPI dependency adapter
+that calls `get_service_resource(...)`. API dependency adapters should live
+under the owning API surface, for example `app/api/<surface>/dependencies.py`,
+not inside `app/modules/business`.
+
+Adding a new endpoint usually should not touch bootstrap. Add or extend the
+business service method, then call it from the API router. Update bootstrap only
+when the endpoint introduces a new runtime dependency or a new application
+service that must be created once per app lifecycle.
 
 Database access uses a session-per-request dependency. The dependency rolls
 back on unhandled exceptions and always closes the session, but it does not

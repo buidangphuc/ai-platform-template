@@ -53,6 +53,8 @@ class ApplicationResources:
     task_service: TaskService | None = None
     # Domain pipeline
     completion_pipeline: CompletionPipeline | None = None
+    # App-composed business services
+    services: dict[str, object] = field(default_factory=dict)
     # Addon-provided components
     cache: CacheGateway | None = None
     idempotency_store: IdempotencyStore | None = None
