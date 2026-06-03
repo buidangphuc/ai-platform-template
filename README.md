@@ -123,6 +123,7 @@ LlamaIndex services where it actually needs them.
 - `AUTH_BEARER_TOKEN=change-me-local-bearer-token`
 - `AUTH_SUBJECT=local-user`
 - `AUTH_ROLES=admin`
+- `MONGO_ENABLED=false`
 - `IDEMPOTENCY_ENABLED=false`
 - `CORS_ALLOW_ORIGINS=*`
 - `TRUSTED_HOSTS=*`
@@ -167,6 +168,12 @@ feature-specific wiring.
 Database access uses a session-per-request dependency. The dependency rolls
 back on unhandled exceptions and always closes the session, but it does not
 auto-commit. Business services own explicit `commit()` calls.
+
+Mongo access is an opt-in platform resource. Install the `mongo` extra, set
+`MONGO_ENABLED=true`, and use `app.modules.platform.mongo.MongoDep` or
+`get_mongo(...)` to access the lifespan-managed `MongoGateway`. Product modules
+should build their own stores on top of the gateway instead of opening clients
+or reading app state directly.
 
 List endpoints can reuse `app.core.pagination.PaginationParams` and
 `build_list_response(...)` for offset-based responses:

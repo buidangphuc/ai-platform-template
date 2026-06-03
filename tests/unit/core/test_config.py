@@ -23,6 +23,9 @@ def test_settings_defaults_are_local_safe():
     assert settings.QUOTA_ENABLED is False
     assert settings.QUOTA_BACKEND == "memory"
     assert settings.DATABASE_ENABLED is True
+    assert settings.MONGO_ENABLED is False
+    assert settings.MONGODB_URI == "mongodb://localhost:27017"
+    assert settings.MONGODB_DATABASE == "app"
     assert settings.REDIS_ENABLED is True
     assert settings.QUEUE_ENABLED is True
     assert settings.TASKS_ENABLED is True
