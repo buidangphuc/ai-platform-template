@@ -395,6 +395,14 @@ async def test_app_lifespan_fails_fast_when_postgres_task_store_has_no_database(
             },
             "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
         ),
+        (
+            {
+                "DATABASE_ENABLED": False,
+                "QUOTA_ENABLED": True,
+                "QUOTA_BACKEND": "postgres",
+            },
+            "QUOTA_BACKEND=postgres requires DATABASE_ENABLED",
+        ),
     ],
 )
 async def test_app_lifespan_fails_fast_for_invalid_addon_backend_combinations(

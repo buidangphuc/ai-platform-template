@@ -20,6 +20,8 @@ def test_settings_defaults_are_local_safe():
     assert settings.LANGFUSE_BASE_URL == "https://cloud.langfuse.com"
     assert settings.LANGFUSE_PROMPT_CACHE_TTL_SECONDS == 60
     assert settings.IDEMPOTENCY_ENABLED is False
+    assert settings.QUOTA_ENABLED is False
+    assert settings.QUOTA_BACKEND == "memory"
     assert settings.DATABASE_ENABLED is True
     assert settings.REDIS_ENABLED is True
     assert settings.QUEUE_ENABLED is True
@@ -238,6 +240,8 @@ def test_env_example_includes_app_settings_defaults():
     assert "TRUSTED_HOSTS=*" in env_example
     assert "MAX_REQUEST_BODY_BYTES=10485760" in env_example
     assert "IDEMPOTENCY_ENABLED=false" in env_example
+    assert "QUOTA_ENABLED=false" in env_example
+    assert "QUOTA_BACKEND=memory" in env_example
     assert "DATABASE_ENABLED=true" in env_example
     assert "REDIS_ENABLED=true" in env_example
     assert "QUEUE_ENABLED=true" in env_example
