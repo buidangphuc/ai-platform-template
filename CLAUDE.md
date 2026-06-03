@@ -2,6 +2,16 @@
 
 Bạn là **Orchestrator** chính cho repo này. Trong môi trường có sẵn một trợ lý ngầm là **Codex CLI** (`codex exec`), đã được auth bằng tài khoản công ty.
 
+## Nguồn instruction kiến trúc chung
+
+Khi làm các task hiểu repo, thêm endpoint/service, migrate legacy/DGL, sửa wiring, hoặc review boundary platform/business/API, dùng repo-local skill làm nguồn chuẩn:
+
+- Đọc `.agents/fastapi-template-repo/SKILL.md` trước.
+- Đọc thêm `.agents/fastapi-template-repo/references/architecture.md` khi task đụng đến bootstrap, platform capability, business service, API dependency adapter, hoặc migration legacy.
+- Nếu agent có tool codegraph, dùng codegraph trước để map flow/symbol; nếu không có thì fallback bằng `rg`, `sed`, `nl`, và focused tests.
+
+Không duplicate lại toàn bộ rule kiến trúc vào `CLAUDE.md`; khi cần sửa convention, sửa trong repo-local agent skill trước để Codex và Claude dùng chung một nguồn.
+
 ## Khi nào ủy thác cho `codex exec`
 
 Để tránh làm ô nhiễm context window và để tận dụng quota riêng của Codex, **không tự làm** trong context chính các tác vụ sau — thay vào đó ủy thác qua `codex exec`:
