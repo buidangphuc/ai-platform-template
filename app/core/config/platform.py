@@ -43,6 +43,10 @@ class PlatformSettingsMixin(BaseModel):
     IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS: int = Field(default=60, gt=0)
     IDEMPOTENCY_KEY_MAX_LENGTH: int = Field(default=64, gt=0)
 
+    # Durable quota / entitlement counters
+    QUOTA_ENABLED: bool = False
+    QUOTA_BACKEND: str = "memory"
+
     @computed_field
     @property
     def auth_roles(self) -> list[str]:
