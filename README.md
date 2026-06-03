@@ -154,6 +154,16 @@ does not carry Redis, object storage clients, feature flags, or AI runtimes; add
 those directly at the business module boundary when a project actually needs
 them.
 
+Endpoint wiring should stay local to the owning module. API routers should keep
+only HTTP concerns: path/query/body parsing, response models or envelopes, and a
+small call into a business service. Runtime wiring belongs in a module-local
+provider such as `app/modules/business/<domain>/providers.py`; that provider
+may read `app.state` resources and settings, then construct the service and its
+runtime dependencies. Business services should receive explicit constructor
+dependencies and must not read FastAPI `Request`, `app.state`, or a global
+service locator. Avoid central API-level `deps.py` files that accumulate
+feature-specific wiring.
+
 Database access uses a session-per-request dependency. The dependency rolls
 back on unhandled exceptions and always closes the session, but it does not
 auto-commit. Business services own explicit `commit()` calls.
