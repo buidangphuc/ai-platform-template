@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from app.modules.messaging.webhooks.signing import WebhookSigner
     from app.modules.platform.cache.gateway import CacheGateway
     from app.modules.platform.idempotency.store import IdempotencyStore
+    from app.modules.platform.mongo.gateway import MongoGateway
     from app.modules.platform.objects.gateway import ObjectGateway
     from app.modules.platform.quota.service import QuotaService
     from app.modules.platform.rate_limit.service import (
@@ -56,6 +57,7 @@ class ApplicationResources:
     cache: CacheGateway | None = None
     idempotency_store: IdempotencyStore | None = None
     objects: ObjectGateway | None = None
+    mongo: MongoGateway | None = None
     quota: QuotaService | None = None
     outbox_store: OutboxStore | None = None
     principal_rate_limiter: InMemoryRateLimiter | RedisRateLimiter | None = None
@@ -87,12 +89,12 @@ async def open_application_resources(
         _open_queue(resources, settings)
         _open_tasks(resources, settings)
 
-    _install_health_service(app, resources, init_resources=init_resources)
-
     for addon in addons:
         if addon.is_enabled(settings):
             await addon.open(app, resources, settings)
             resources.addons.append(addon)
+
+    _install_health_service(app, resources, init_resources=init_resources)
 
     return resources
 
@@ -173,6 +175,10 @@ def _build_dependency_checks(
         )
     if resources.redis is not None:
         checks.append(("redis", partial(check_redis_connection, resources.redis)))
+    if resources.mongo is not None:
+        from app.modules.platform.mongo.factory import check_mongo_connection
+
+        checks.append(("mongo", partial(check_mongo_connection, resources.mongo)))
     return tuple(checks)
 
 

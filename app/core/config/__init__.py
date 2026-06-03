@@ -26,6 +26,7 @@ from app.core.config.ai import AISettingsMixin
 from app.core.config.http import HttpSettingsMixin
 from app.core.config.infra import InfraSettingsMixin
 from app.core.config.messaging import MessagingSettingsMixin
+from app.core.config.mongo import MongoSettingsMixin
 from app.core.config.platform import PlatformSettingsMixin
 from app.core.config.runtime import (
     WEAK_AUTH_TOKENS,
@@ -48,6 +49,7 @@ class Settings(
     RuntimeSettingsMixin,
     HttpSettingsMixin,
     InfraSettingsMixin,
+    MongoSettingsMixin,
     AISettingsMixin,
     MessagingSettingsMixin,
     PlatformSettingsMixin,

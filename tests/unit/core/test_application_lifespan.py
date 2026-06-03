@@ -157,6 +157,21 @@ class _FakeTaskStore:
         self.closed = True
 
 
+class _FakeMongoClient:
+    def __init__(self) -> None:
+        self.closed = False
+        self.admin = self
+
+    def __getitem__(self, database: str) -> dict:
+        return {}
+
+    async def command(self, command: str) -> dict:
+        return {"ok": 1}
+
+    def close(self) -> None:
+        self.closed = True
+
+
 async def test_app_lifespan_owns_database_and_redis_resources(
     monkeypatch: pytest.MonkeyPatch,
     test_settings: Settings,
@@ -231,6 +246,38 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     assert resources_closed.queue_gateway is None
     assert resources_closed.task_store is None
     assert app.state.health_service is not None
+
+
+async def test_app_lifespan_owns_mongo_addon_resource(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+):
+    mongo_client = _FakeMongoClient()
+    settings = test_settings.model_copy(
+        update={
+            "DATABASE_ENABLED": False,
+            "REDIS_ENABLED": False,
+            "QUEUE_ENABLED": False,
+            "TASKS_ENABLED": False,
+            "MONGO_ENABLED": True,
+        }
+    )
+    monkeypatch.setattr(
+        "app.modules.platform.mongo.factory.build_mongo_client",
+        lambda received_settings: mongo_client,
+    )
+
+    app = create_app(settings=settings, init_resources=True)
+
+    async with app.router.lifespan_context(app):
+        resources_open = app.state.resources
+        assert resources_open.mongo is not None
+        readiness = await app.state.health_service.readiness()
+        assert readiness.dependencies["mongo"] == "ok"
+        assert mongo_client.closed is False
+
+    assert app.state.resources.mongo is None
+    assert mongo_client.closed is True
 
 
 async def test_app_lifespan_honors_resource_flags(

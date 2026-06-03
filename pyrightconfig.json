@@ -10,9 +10,9 @@
     "alembic/versions",
     "scripts",
     "docs",
-    "app/modules/queue/adapters/sqs.py",
-    "app/modules/queue/adapters/rabbitmq.py",
-    "app/modules/objects/adapters/s3.py"
+    "app/modules/messaging/queue/adapters/sqs.py",
+    "app/modules/messaging/queue/adapters/rabbitmq.py",
+    "app/modules/platform/objects/adapters/s3.py"
   ],
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
