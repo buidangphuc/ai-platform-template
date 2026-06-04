@@ -9,4 +9,4 @@ truth:
 3. Use codegraph first when available; otherwise fall back to `rg`, `sed`, `nl`, and focused tests.
 
 Do not duplicate the architecture rules here. Update the repo-local agent skill first
-so Codex, Claude, and other agents stay aligned.
+so every agent stays aligned with a single source.

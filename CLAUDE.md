@@ -1,67 +1,32 @@
-# Hướng dẫn điều phối dự án (Orchestration Rules)
+# How to work in this repo
 
-Bạn là **Orchestrator** chính cho repo này. Trong môi trường có sẵn một trợ lý ngầm là **Codex CLI** (`codex exec`), đã được auth bằng tài khoản công ty.
+## Architecture: source of truth
 
-## Nguồn instruction kiến trúc chung
+The architecture knowledge for this repo lives in the repo-local skills under `.agents/`. Read them before touching anything that involves understanding the repo, adding an endpoint/service, migrating legacy/DGL code, fixing wiring, or reviewing the platform/business/API boundary — they tell you where code lives and how it's wired, so you don't have to reverse-engineer it from scratch.
 
-Khi làm các task hiểu repo, thêm endpoint/service, migrate legacy/DGL, sửa wiring, hoặc review boundary platform/business/API, dùng repo-local skill làm nguồn chuẩn:
+- Start with `.agents/fastapi-template-repo/SKILL.md` (where code lives, how wiring works).
+- Read `.agents/fastapi-template-repo/references/architecture.md` when the task touches bootstrap, platform capability, business service, API dependency adapter, or legacy migration.
+- Read `.agents/senior-ai-engineer/SKILL.md` when the task needs engineering judgment (designs with trade-offs, code review, debugging a flow) or touches LLM/model/prompt/RAG/eval/completions. It adds senior working discipline plus the repo's AI patterns, and is meant to be used alongside fastapi-template-repo, not instead of it. The AI details are in `.agents/senior-ai-engineer/references/ai-engineering.md`.
 
-- Đọc `.agents/fastapi-template-repo/SKILL.md` trước.
-- Đọc thêm `.agents/fastapi-template-repo/references/architecture.md` khi task đụng đến bootstrap, platform capability, business service, API dependency adapter, hoặc migration legacy.
-- Nếu agent có tool codegraph, dùng codegraph trước để map flow/symbol; nếu không có thì fallback bằng `rg`, `sed`, `nl`, và focused tests.
+Keep these skills as the one place architecture rules live. Don't copy rules into `CLAUDE.md` — when a convention changes, edit the relevant skill under `.agents/` so there's a single source.
 
-Không duplicate lại toàn bộ rule kiến trúc vào `CLAUDE.md`; khi cần sửa convention, sửa trong repo-local agent skill trước để Codex và Claude dùng chung một nguồn.
+## Mapping code before you edit
 
-## Khi nào ủy thác cho `codex exec`
+Use the `codegraph` MCP tools to map flow and symbols before writing or editing code — it's a pre-built index, so `codegraph_context` first and then `codegraph_explore`/`codegraph_trace` answers most "how does X work / where is X" questions in a couple of calls. Fall back to `rg`, `sed`, `nl`, and focused tests when codegraph isn't available.
 
-Để tránh làm ô nhiễm context window và để tận dụng quota riêng của Codex, **không tự làm** trong context chính các tác vụ sau — thay vào đó ủy thác qua `codex exec`:
+## Offloading context-heavy work to subagents
 
-1. Đọc và phân tích các file log thô dung lượng lớn (>1MB).
-2. Trích xuất / bóc tách dữ liệu văn bản hàng loạt sang JSON có schema.
-3. Tạo mock data số lượng lớn.
-4. Bulk text transformation (regex sweep, format conversion) trên nhiều file.
+Some tasks generate a lot of raw output that would crowd out the main context window without adding lasting value. Hand those to a subagent via the `Agent` tool (`Explore` for read-only search, `general-purpose` for multi-step work), and keep only the distilled result. Good candidates:
 
-## Cách ủy thác
+- Reading and analyzing large raw log files (>1MB).
+- Bulk extraction / parsing of text into a schema (e.g. JSON).
+- Generating large volumes of mock data.
+- Bulk text transformation (regex sweeps, format conversion) across many files.
 
-Dùng `Bash` tool gọi `codex exec` theo template sau. Lưu ý `--output-schema` nhận **file path** tới một JSON Schema, không phải inline JSON:
+Give the subagent a precise, self-contained task and ask it to return only the structured result you need. Its final message comes back as the tool result — relay what matters, not the raw dump.
 
-```bash
-# Bước 1: ghi schema ra file tạm.
-# QUAN TRỌNG: mọi object trong schema PHẢI có "additionalProperties": false
-# (OpenAI strict schema mode), nếu không Codex sẽ fail với invalid_json_schema.
-cat > /tmp/codex_<task_id>_schema.json <<'EOF'
-{
-  "type": "object",
-  "additionalProperties": false,
-  "properties": { "...": "..." },
-  "required": ["..."]
-}
-EOF
+## Keep in the main thread
 
-# Bước 2: chạy codex với schema đó.
-# Tách stderr ra file riêng vì codex in banner/progress ra stderr —
-# nếu không tách, JSON output sẽ bị lẫn log và không parse được.
-codex exec "<nhiệm vụ mô tả rõ ràng>" \
-  --output-schema /tmp/codex_<task_id>_schema.json \
-  > /tmp/codex_<task_id>.json \
-  2> /tmp/codex_<task_id>.err
-```
-
-Nếu không cần structured output, có thể bỏ `--output-schema` và parse text trả về trực tiếp, hoặc dùng `--json` để có event log dạng JSONL.
-
-Sau đó:
-
-1. `Read` file `/tmp/codex_<task_id>.json` để lấy dữ liệu sạch.
-2. Dùng dữ liệu đó tiếp tục tác vụ kiến trúc / coding chính.
-3. Xóa file tạm khi xong: `rm /tmp/codex_<task_id>*`.
-
-## Khi nào KHÔNG ủy thác
-
-- Sửa code logic / kiến trúc trong `app/` — đây là việc của bạn.
-- Đọc file nhỏ (<500 dòng) — tự dùng `Read` cho nhanh.
-- Tác vụ cần hiểu sâu code context hiện tại — Codex chạy ngầm không có full context.
-
-## Quy ước file tạm
-
-- Output từ Codex luôn ghi vào `/tmp/codex_*.json` (không commit vào repo).
-- Dọn dẹp ngay sau khi consume xong.
+- Editing code logic or architecture in `app/` — do it directly, with the `.agents/` skills as your guide.
+- Reading small files (<500 lines) — just use `Read`.
+- Anything that depends on the current code context you've built up — a subagent starts fresh and would lose that context.

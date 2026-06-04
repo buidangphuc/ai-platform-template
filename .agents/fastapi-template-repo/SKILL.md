@@ -6,8 +6,8 @@ description: Understand and modify this FastAPI template repository with a codeg
 # FastAPI Template Repo
 
 This repo-local agent skill is the canonical AI instruction for this backend.
-Codex, Claude, and other agents should read it through the repo instructions in
-`AGENTS.md` and `CLAUDE.md`.
+Agents should read it through the repo instructions in `AGENTS.md` and
+`CLAUDE.md`.
 
 ## Core Workflow
 
