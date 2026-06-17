@@ -1,46 +1,33 @@
-import ssl
+import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-from core.conf import settings  # import config từ pydantic_settings
-from database.base import Base
+from app.core.config import get_settings
+from app.core.database import Base
+from app.modules.messaging.outbox import models as outbox_models  # noqa: F401
+from app.modules.messaging.tasks import models as tasks_models  # noqa: F401
+from app.modules.platform.audit import models as audit_models  # noqa: F401
+from app.modules.platform.idempotency import models as idempotency_models  # noqa: F401
 
-# Đọc config từ alembic.ini
 config = context.config
 
-# Cấu hình logging từ file alembic.ini
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Metadata để Alembic autogenerate
+settings = get_settings()
+database_url = settings.POSTGRES_URL
+config.set_main_option("sqlalchemy.url", database_url)
+
 target_metadata = Base.metadata
 
-# Lấy URL từ settings (pydantic_settings)
-DATABASE_URL = settings.MYSQL_URL
 
-# Convert từ async URL -> sync URL cho Alembic
-if DATABASE_URL.startswith("mysql+asyncmy"):
-    DATABASE_URL = DATABASE_URL.replace("mysql+asyncmy", "mysql+pymysql")
-
-print(f"Using database URL: {DATABASE_URL}")
-
-# Set URL vào config của Alembic
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
-
-# SSL config cho MySQL
-connect_args = {}
-if DATABASE_URL.startswith("mysql+pymysql"):
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    connect_args["ssl"] = ssl_context
-
-
-def run_migrations_offline():
+def run_migrations_offline() -> None:
     context.configure(
-        url=DATABASE_URL,
+        url=database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -50,26 +37,33 @@ def run_migrations_offline():
         context.run_migrations()
 
 
-def run_migrations_online():
-    """Chạy migration trực tiếp với DB."""
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        connect_args=connect_args,
+def do_run_migrations(connection: Connection) -> None:
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
     )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-        )
-
-        with context.begin_transaction():
-            context.run_migrations()
+    with context.begin_transaction():
+        context.run_migrations()
 
 
-# Gọi hàm tương ứng tùy theo mode
+async def run_async_migrations() -> None:
+    connectable = async_engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+
+    await connectable.dispose()
+
+
+def run_migrations_online() -> None:
+    asyncio.run(run_async_migrations())
+
+
 if context.is_offline_mode():
     run_migrations_offline()
 else:

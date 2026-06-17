@@ -16,42 +16,14 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: debug-statements
-      - id: requirements-txt-fixer
 
-  # Formatter
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
+  # Ruff: format + lint (replaces black + isort + flake8 + pyink)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.2
     hooks:
-      - id: black
-        args: ["--line-length=88"]
-
-  # Import sorter
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        name: isort (python)
-        args: ["--profile", "black"]
-
-  # Linter
-  - repo: https://github.com/PyCQA/flake8
-    rev: 7.1.1
-    hooks:
-      - id: flake8
-        args: ["--config=.flake8"]
-        exclude: |
-          (?x)^(
-            notebooks/.*|
-            project/research/.*|
-            aime_mme_model/.*|
-            \\.venv/.*|
-            \\.env/.*|
-            docs/.*|
-            data/.*|
-            mlruns/.*|
-            minio/.*|
-            \\.git/.*
-          )$
+      - id: ruff-format
+      - id: ruff
+        args: ["--fix"]
 
   # Secrets detection
   - repo: https://github.com/Yelp/detect-secrets
@@ -61,30 +33,22 @@ repos:
         args: ["--baseline", ".secrets.baseline"]
         exclude: ^(project/artifacts/|project/data/|data/|mlruns/|minio/)
 
-  # Notebooks: format/lint + strip
-  - repo: https://github.com/nbQA-dev/nbQA
-    rev: 1.8.5
-    hooks:
-      - id: nbqa-black
-        additional_dependencies: [black==24.4.2]
-        args: ["--line-length=88"]
-        files: ^(project/research|notebooks)/.*\\.ipynb$
-      - id: nbqa-flake8
-        additional_dependencies: [flake8==7.1.1, flake8-bugbear, flake8-import-order]
-        files: ^(project/research|notebooks)/.*\\.ipynb$
-
-  - repo: https://github.com/kynan/nbstripout
-    rev: 0.7.1
-    hooks:
-      - id: nbstripout
-        files: ^(project/research|notebooks)/.*\\.ipynb$
-
-  # Shell & Markdown
+  # Shell
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
-        files: ^(scripts/|.*\\.sh)$
+        files: ^(scripts/|.*\.sh)$
+
+  # Verify .env.example matches Settings fields
+  - repo: local
+    hooks:
+      - id: check-env-example
+        name: Check .env.example matches Settings
+        entry: uv run python -m scripts.check_env_example
+        language: system
+        pass_filenames: false
+        files: ^(\.env\.example|app/core/config\.py)$
 
   # Commit message (Conventional Commits)
   - repo: https://github.com/commitizen-tools/commitizen

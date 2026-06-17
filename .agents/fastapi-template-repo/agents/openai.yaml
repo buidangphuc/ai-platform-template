@@ -1,0 +1,4 @@
+interface:
+  display_name: "FastAPI Template Repo"
+  short_description: "Follow this FastAPI repo architecture."
+  default_prompt: "Use $fastapi-template-repo to inspect the backend with codegraph and make changes that follow its service, bootstrap, and platform boundaries."

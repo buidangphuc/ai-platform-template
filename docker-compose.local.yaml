@@ -1,67 +1,96 @@
-version: '3'
-
 services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - ai-platform
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    command: ["python", "-m", "scripts.run_worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -m scripts.run_worker --check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - ai-platform
+
   postgres:
     image: postgres:16
-    ports:
-      - "${POSTGRES_PORT}:5432"
-    container_name: postgres
-    restart: always
     env_file:
       - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      TZ: UTC
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
-      - network
+      - ai-platform
 
   redis:
-    image: redis
+    image: redis:7
     ports:
-      - "${REDIS_PORT}:6379"
-    container_name: redis
-    restart: always
-    env_file:
-      - .env
-    environment:
-      - TZ=UTC
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis:/data
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     networks:
-      - network
-
-  rabbitmq:
-    hostname: rabbitmq
-    image: rabbitmq:3.13.7
-    ports:
-      - "15672:15672"
-      - "${RABBITMQ_PORT}:5672"
-    container_name: rabbitmq
-    restart: always
-    env_file:
-      - .env
-    environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
-    volumes:
-      - rabbitmq:/var/lib/rabbitmq
-    networks:
-      - network
+      - ai-platform
 
 networks:
-  network:
-    name: network
+  ai-platform:
+    name: ai-platform
     driver: bridge
 
 volumes:
-  postgres:
-    name: postgres_local
-  redis:
-    name: redis_local
-  rabbitmq:
-    name: rabbitmq_local
+  postgres-data:
+  redis-data:

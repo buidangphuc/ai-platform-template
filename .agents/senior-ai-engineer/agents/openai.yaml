@@ -1,0 +1,4 @@
+interface:
+  display_name: "Senior AI Engineer"
+  short_description: "Work like a senior AI software engineer in this repo."
+  default_prompt: "Use $senior-ai-engineer together with $fastapi-template-repo: map the flow first, make the smallest correct change, and wire observability, resilience, redaction, and evals for any LLM/RAG/completions work."
