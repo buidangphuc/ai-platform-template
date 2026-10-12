@@ -2,7 +2,7 @@
 
 Running record of every migration phase: what was migrated, what was
 added/changed/fixed, and what differs from legacy. Each phase ends with a
-re-check against the [plan](../superpowers/plans/2026-06-02-dgl-listing-generator-migration.md)
+re-check against the DGL listing-generator migration plan (2026-06-02, since removed)
 and [ADR](../adr/0001-dgl-listing-generator-migration.md).
 
 Legacy source: `bds-genai-dgl` · Target: this repo · Branch: `dev_migrate_dgl`.

@@ -2,7 +2,7 @@ schema: spec-driven
 
 context: |
   FastAPI AI-platform template (Python 3.12, uv, pydantic v2, SQLAlchemy async, Alembic, Redis, Mongo optional).
-  Architecture source of truth: .agents/fastapi-template-repo/ and .agents/senior-ai-engineer/ skills.
+  Architecture source of truth: docs/agents/architecture.md and docs/agents/ai-engineering.md.
   Rules: business modules never touch infra; app/bootstrap is the single owner of resource lifecycle and
   service composition; the API layer reaches services only via request.app.state.resources.
   One <Domain>Service class per business domain, one instance per app, built in lifespan.
