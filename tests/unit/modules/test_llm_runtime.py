@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import (
@@ -7,9 +10,9 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.errors import ServiceUnavailableError
-from app.core.resilience import BreakerState
+from app.core.resilience import BreakerState, is_transient_error
 from app.modules.ai.llm.langfuse import LLMTraceContext
-from app.modules.ai.llm.runtime import build_llm_instance
+from app.modules.ai.llm.runtime import LLMDeadlineExceeded, build_llm_instance
 
 
 class _StatusError(Exception):
@@ -265,3 +268,79 @@ def test_build_llm_instance_keeps_router_and_tracker_separate(test_settings):
     assert instance.tracker.instance_id == "search-rerank"
     assert instance.tracker.service_name == "search"
     assert "retrieval" in config["tags"]
+
+
+class _SleepingModel(FakeListChatModel):
+    delay: float
+
+    async def _agenerate(self, *args, **kwargs):
+        await asyncio.sleep(self.delay)
+        return await super()._agenerate(*args, **kwargs)
+
+
+def _deadline_instance(test_settings, delays: dict[str, float], failures=None):
+    failures = failures or {}
+    settings = test_settings.model_copy(
+        update={
+            "CHAT_MODEL": "a",
+            "CHAT_FALLBACK_MODELS": "b, c",
+            "LLM_BREAKER_FAILURE_THRESHOLD": 1,
+            "LLM_CHAIN_DEADLINE_SECONDS": 0.4,
+        }
+    )
+    called: list[str] = []
+
+    def build(target: str) -> BaseChatModel:
+        if target in failures:
+            return _model(target, failures)
+        called.append(target)
+        return _SleepingModel(responses=[target], delay=delays.get(target, 0))
+
+    instance = build_llm_instance(
+        settings, instance_id="t", service_name="test", model_builder=build
+    )
+    return instance, called
+
+
+async def test_chain_deadline_stops_walking_instead_of_paying_every_hop(test_settings):
+    instance, called = _deadline_instance(
+        test_settings, {"a": 0.3, "b": 5, "c": 5}, {"a": TimeoutError()}
+    )
+    started = time.monotonic()
+
+    with pytest.raises(LLMDeadlineExceeded):
+        await instance.ainvoke([HumanMessage(content="hi")])
+
+    assert time.monotonic() - started < 1.0  # b would have slept 5s
+    assert "c" not in called
+
+
+async def test_deadline_cut_attempt_does_not_count_against_its_breaker(test_settings):
+    instance, _ = _deadline_instance(test_settings, {"b": 5}, {"a": _StatusError(503)})
+
+    with pytest.raises(LLMDeadlineExceeded):
+        await instance.ainvoke([HumanMessage(content="hi")])
+
+    breakers = instance.router._breakers
+    assert breakers[("default", "a")].state is BreakerState.OPEN  # its own 503
+    assert breakers[("default", "b")].failure_count == 0
+    assert breakers[("default", "b")].state is BreakerState.CLOSED
+
+
+async def test_deadline_error_is_a_transient_504(test_settings):
+    instance, _ = _deadline_instance(test_settings, {"a": 5})
+
+    with pytest.raises(LLMDeadlineExceeded) as raised:
+        await instance.ainvoke([HumanMessage(content="hi")])
+
+    assert raised.value.status_code == 504
+    assert raised.value.code == "llm_deadline_exceeded"
+    assert is_transient_error(raised.value)
+
+
+async def test_a_call_inside_the_deadline_is_unaffected(test_settings):
+    instance, _ = _deadline_instance(test_settings, {"a": 0.05})
+
+    response = await instance.ainvoke([HumanMessage(content="hi")])
+
+    assert response.content == "a"

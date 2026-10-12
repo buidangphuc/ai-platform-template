@@ -327,3 +327,13 @@ def test_streaming_deadlines_have_safe_defaults_and_bounds():
 
 def test_graceful_shutdown_is_on_by_default():
     assert build_test_settings().GRACEFUL_SHUTDOWN_ENABLED is True
+
+
+def test_llm_chain_deadline_must_cover_one_call_timeout():
+    settings = build_test_settings(
+        LLM_TIMEOUT_SECONDS=30, LLM_CHAIN_DEADLINE_SECONDS=30
+    )
+    assert settings.LLM_CHAIN_DEADLINE_SECONDS == 30
+
+    with pytest.raises(ValidationError, match="LLM_CHAIN_DEADLINE_SECONDS"):
+        build_test_settings(LLM_TIMEOUT_SECONDS=60, LLM_CHAIN_DEADLINE_SECONDS=30)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 RagBackend = Literal["memory"]
 
@@ -21,11 +21,22 @@ class AISettingsMixin(BaseModel):
     LLM_MAX_TOKENS: int = Field(default=2048, gt=0, le=200_000)
     LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=600)
     LLM_MAX_RETRIES: int = Field(default=1, ge=0, le=5)
+    # Overall budget for one ``LLMInstance.ainvoke`` across the whole fallback
+    # chain; without it a 3-model chain can cost 3x LLM_TIMEOUT_SECONDS.
+    LLM_CHAIN_DEADLINE_SECONDS: float = Field(default=90.0, gt=0, le=1800)
     # Primary-model circuit breaker: consecutive transient failures (429, 5xx,
     # timeouts, connection errors) before failover, and the cooldown before the
     # primary is probed again.
     LLM_BREAKER_FAILURE_THRESHOLD: int = Field(default=3, gt=0)
     LLM_BREAKER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0)
+
+    @model_validator(mode="after")
+    def _chain_deadline_covers_one_call(self) -> AISettingsMixin:
+        if self.LLM_CHAIN_DEADLINE_SECONDS < self.LLM_TIMEOUT_SECONDS:
+            raise ValueError(
+                "LLM_CHAIN_DEADLINE_SECONDS must be >= LLM_TIMEOUT_SECONDS"
+            )
+        return self
 
     # Langfuse observability
     LANGFUSE_ENABLED: bool = False

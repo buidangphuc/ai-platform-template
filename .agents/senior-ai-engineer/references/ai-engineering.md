@@ -60,8 +60,14 @@ Rules:
   error propagates at once; if every target fails the **last** error is
   raised; if every breaker is open, `ServiceUnavailableError`
   (`llm_unavailable`). Chosen over LangChain `with_fallbacks` because that
-  wrapper cannot report outcomes to a breaker or skip an open target. Each
-  failover hop adds up to one full call timeout, so keep chains short (2–3).
+  wrapper cannot report outcomes to a breaker or skip an open target.
+- The walk has an **overall deadline**, `LLM_CHAIN_DEADLINE_SECONDS` (default
+  90, must be >= `LLM_TIMEOUT_SECONDS`): each attempt runs under what is left
+  of it, and when it runs out the walk stops with `LLMDeadlineExceeded`
+  (`AppError`, 504, `llm_deadline_exceeded`; transient-classified). An attempt
+  cut short by the deadline is *our* budget, not the provider's fault, so it is
+  **not** reported to that target's breaker. Per-request `LLM_TIMEOUT_SECONDS`
+  stays the SDK's job. Still keep chains short (2–3).
 - Streaming / tool-binding callers use `instance.chat_model(role)` (raw model
   for the first admitted target, `ServiceUnavailableError` if none) and own
   failover and outcome reporting via `router.chain(role)`,
