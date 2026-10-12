@@ -41,11 +41,16 @@ None.
   `app/modules/messaging/queue/adapters/sqs.py`, `queue/factory.py`,
   `app/core/config/messaging.py`, `.env.example`; tests under `tests/unit/modules/`.
 - **Behavior change, failure timing**: with `OBJECT_BACKEND=s3` or
-  `QUEUE_BACKEND=sqs`, a missing/forbidden bucket or queue (or bad endpoint or
-  credentials) now fails startup (API lifespan and worker) instead of the first
-  use. The IAM identity needs `s3:ListBucket` (HeadBucket) and
-  `sqs:GetQueueAttributes` on the target. A DLQ URL additionally needs
-  `sqs:SendMessage` on the DLQ. The DLQ queue itself is not verified at open.
+  `QUEUE_BACKEND=sqs`, a missing bucket or queue, bad credentials or an
+  unreachable endpoint now fails startup (API lifespan and worker) instead of the
+  first use. Deployments that don't enable these backends are unaffected.
+  **No extra IAM permission is required:** when the probe itself is denied
+  (`AccessDenied` — e.g. a least-privilege policy without `s3:ListBucket` or
+  `sqs:GetQueueAttributes`), open logs a warning and continues; existence is then
+  checked on first use. S3 probes with `list_objects_v2` inside the app prefix
+  (not `head_bucket`, whose bodiless 403 can't tell bad credentials from a
+  missing permission). A DLQ URL needs `sqs:SendMessage` on the DLQ, as any
+  sender would; the DLQ itself is not probed at open.
   This supersedes the note in `fallback-chain-and-eager-clients` that SQS/S3 open
   only builds the client.
 - CI: new `aws-adapters` job runs the env-gated real-server tests

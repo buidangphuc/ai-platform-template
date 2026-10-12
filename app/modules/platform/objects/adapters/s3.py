@@ -4,6 +4,10 @@ from collections.abc import Callable
 from inspect import isawaitable
 from typing import Any, Self
 
+from loguru import logger
+
+from app.core.aws_errors import is_permission_denied
+
 try:
     import aioboto3
 except ImportError:  # pragma: no cover - exercised when optional extra is missing
@@ -41,11 +45,14 @@ class S3ObjectGateway:
         )
 
     async def open(self) -> Self:
-        """Create the S3 client and verify the bucket with one ``head_bucket``.
+        """Create the S3 client and probe the bucket once.
 
-        Call once, before any operation, then ``close``. A wrong endpoint,
-        credentials or bucket fails here (the client is closed first), not on
-        the first request.
+        Call once, before any operation, then ``close``. A missing bucket, bad
+        credentials or an unreachable endpoint fails here (the client is closed
+        first). The probe is ``list_objects_v2`` inside the app prefix: unlike
+        ``head_bucket`` its errors carry a code, so a policy without
+        ``s3:ListBucket`` (``AccessDenied``) is told apart from bad credentials
+        and only logged — no extra IAM permission is required.
         """
         kwargs: dict[str, Any] = {"region_name": self.region_name}
         if self.endpoint_url:
@@ -53,8 +60,17 @@ class S3ObjectGateway:
         self._client_cm = self._session.client("s3", **kwargs)
         self._client = await self._client_cm.__aenter__()
         try:
-            await self._client.head_bucket(Bucket=self.bucket)
+            await self._client.list_objects_v2(
+                Bucket=self.bucket, Prefix=f"{self.prefix}/", MaxKeys=1
+            )
         except Exception as exc:
+            if is_permission_denied(exc):
+                logger.warning(
+                    "s3.open probe_denied bucket={} (no s3:ListBucket); "
+                    "bucket existence is checked on first use",
+                    self.bucket,
+                )
+                return self
             await self._client_cm.__aexit__(None, None, None)
             raise RuntimeError(
                 f"S3 bucket {self.bucket!r} is not reachable"

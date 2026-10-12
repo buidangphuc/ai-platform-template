@@ -1,4 +1,5 @@
 import pytest
+from botocore.exceptions import ClientError
 
 from app.modules.platform.objects.adapters.s3 import S3ObjectGateway
 
@@ -17,13 +18,14 @@ class _FakeS3Client:
         self.get_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.head_calls: list[dict[str, object]] = []
-        self.head_bucket_calls: list[dict[str, object]] = []
-        self.head_bucket_error: Exception | None = None
+        self.probe_calls: list[dict[str, object]] = []
+        self.probe_error: Exception | None = None
 
-    async def head_bucket(self, **kwargs: object) -> None:
-        self.head_bucket_calls.append(kwargs)
-        if self.head_bucket_error is not None:
-            raise self.head_bucket_error
+    async def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
+        self.probe_calls.append(kwargs)
+        if self.probe_error is not None:
+            raise self.probe_error
+        return {"KeyCount": 0}
 
     async def put_object(self, **kwargs: object) -> None:
         self.put_calls.append(kwargs)
@@ -140,13 +142,13 @@ async def test_open_verifies_the_bucket():
         bucket="bucket", region_name="r", session_factory=lambda: _FakeSession(client)
     ).open()
 
-    assert client.head_bucket_calls == [{"Bucket": "bucket"}]
+    assert client.probe_calls == [{"Bucket": "bucket", "Prefix": "app/", "MaxKeys": 1}]
     await gateway.close()
 
 
 async def test_open_closes_the_client_and_raises_when_the_bucket_is_unreachable():
     client = _FakeS3Client()
-    client.head_bucket_error = RuntimeError("404 Not Found")
+    client.probe_error = _client_error("NoSuchBucket", "ListObjectsV2")
     session = _FakeSession(client)
     gateway = S3ObjectGateway(
         bucket="missing",
@@ -159,5 +161,42 @@ async def test_open_closes_the_client_and_raises_when_the_bucket_is_unreachable(
         await gateway.open()
 
     assert "http://s3.test" in str(excinfo.value)
-    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert isinstance(excinfo.value.__cause__, ClientError)
+    assert session.context.exited is True
+
+
+def _client_error(code: str, operation: str) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
+
+
+async def test_open_tolerates_a_missing_list_permission(caplog):
+    # Least-privilege policies often grant Get/PutObject without ListBucket:
+    # credentials and bucket are fine, only the boot-time probe is forbidden.
+    client = _FakeS3Client()
+    client.probe_error = _client_error("AccessDenied", "ListObjectsV2")
+    session = _FakeSession(client)
+
+    gateway = await S3ObjectGateway(
+        bucket="bucket", region_name="r", session_factory=lambda: session
+    ).open()
+
+    assert session.context.exited is False
+    await gateway.put("k", b"v")
+    assert client.put_calls
+    await gateway.close()
+
+
+@pytest.mark.parametrize(
+    "code", ["InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken"]
+)
+async def test_open_fails_on_bad_credentials(code: str):
+    client = _FakeS3Client()
+    client.probe_error = _client_error(code, "ListObjectsV2")
+    session = _FakeSession(client)
+
+    with pytest.raises(RuntimeError, match="bucket"):
+        await S3ObjectGateway(
+            bucket="bucket", region_name="r", session_factory=lambda: session
+        ).open()
+
     assert session.context.exited is True

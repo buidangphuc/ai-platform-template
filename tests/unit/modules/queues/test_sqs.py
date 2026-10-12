@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from botocore.exceptions import ClientError
 
 import app.modules.messaging.queue.adapters.sqs as sqs_mod
 from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
@@ -86,12 +87,14 @@ async def test_open_verifies_the_queue(monkeypatch):
 
 async def test_open_closes_the_client_and_raises_for_an_unreachable_queue(monkeypatch):
     client, context = _install(monkeypatch)
-    client.attributes_error = RuntimeError("AWS.SimpleQueueService.NonExistentQueue")
+    client.attributes_error = _client_error(
+        "AWS.SimpleQueueService.NonExistentQueue", "GetQueueAttributes"
+    )
 
     with pytest.raises(RuntimeError, match=QUEUE_URL) as excinfo:
         await SQSQueueGateway(queue_url=QUEUE_URL).open()
 
-    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert isinstance(excinfo.value.__cause__, ClientError)
     assert context.exited is True
 
 
@@ -160,3 +163,31 @@ async def test_nack_with_requeue_makes_the_message_visible_again(monkeypatch):
             {"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-1", "VisibilityTimeout": 0},
         )
     ]
+
+
+def _client_error(code: str, operation: str) -> ClientError:
+    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
+
+
+@pytest.mark.parametrize("code", ["AccessDenied", "AccessDeniedException"])
+async def test_open_tolerates_a_missing_get_queue_attributes_permission(
+    monkeypatch, code: str
+):
+    client, context = _install(monkeypatch)
+    client.attributes_error = _client_error(code, "GetQueueAttributes")
+
+    gateway = await SQSQueueGateway(queue_url=QUEUE_URL).open()
+
+    assert context.exited is False
+    assert await gateway.send({"x": 1}) == "new-id"
+
+
+@pytest.mark.parametrize("code", ["InvalidClientTokenId", "SignatureDoesNotMatch"])
+async def test_open_fails_on_bad_credentials(monkeypatch, code: str):
+    client, context = _install(monkeypatch)
+    client.attributes_error = _client_error(code, "GetQueueAttributes")
+
+    with pytest.raises(RuntimeError, match=QUEUE_URL):
+        await SQSQueueGateway(queue_url=QUEUE_URL).open()
+
+    assert context.exited is True
