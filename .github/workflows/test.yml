@@ -76,3 +76,11 @@ jobs:
         run: uv run --all-extras alembic upgrade head
       - name: Check models match migrations
         run: uv run --all-extras alembic check
+      - name: Postgres adapter tests (drop/recreate their own tables; runs last)
+        env:
+          QUOTA_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ai_platform # pragma: allowlist secret
+          IDEMPOTENCY_TEST_POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ai_platform # pragma: allowlist secret
+        run: >-
+          uv run --all-extras pytest -q
+          tests/unit/modules/test_quota_postgres_store.py
+          tests/unit/modules/test_idempotency_postgres_store.py
