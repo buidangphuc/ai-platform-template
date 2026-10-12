@@ -3,19 +3,21 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 
+from app.bootstrap.addons.outbox import OutboxAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy
-from app.modules.messaging.outbox.factory import OutboxAddon, build_outbox_store
+from app.modules.messaging.outbox.adapters import PostgresOutboxStore
+from app.modules.messaging.outbox.factory import build_outbox_store
 from app.modules.messaging.outbox.models import OutboxEvent
 from app.modules.messaging.outbox.publisher import (
     OutboxPublisher,
     QueueOutboxSink,
     WebhookOutboxSink,
 )
-from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus, OutboxStore
+from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus
 from app.modules.messaging.webhooks.dispatcher import WebhookDeliveryResult
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 
 def _settings(**overrides: object) -> Settings:
@@ -43,33 +45,30 @@ def test_outbox_model_uses_safe_metadata_column_name():
     assert OutboxEvent.event_metadata.property.columns[0].name == "metadata"
 
 
-def test_build_outbox_store_requires_sessionmaker_for_postgres():
-    with pytest.raises(RuntimeError, match="sessionmaker"):
-        build_outbox_store(_settings(OUTBOX_ENABLED=True))
+def test_build_outbox_store_returns_postgres_store():
+    store = build_outbox_store(
+        _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True), object()
+    )
 
-
-def test_build_outbox_store_returns_protocol_implementation():
-    store = build_outbox_store(_settings(OUTBOX_ENABLED=True), sessionmaker=object())
-
-    assert isinstance(store, OutboxStore)
+    assert isinstance(store, PostgresOutboxStore)
 
 
 async def test_outbox_addon_attaches_store_when_enabled():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources(sessionmaker=object())
     addon = OutboxAddon()
 
-    await addon.open(
-        app, resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True)
+    await open_addon(
+        addon, resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True)
     )
 
-    assert isinstance(resources.outbox_store, OutboxStore)
+    assert isinstance(resources.outbox_store, PostgresOutboxStore)
 
 
 def test_outbox_addon_respects_enabled_flag():
     addon = OutboxAddon()
 
-    assert addon.is_enabled(_settings(OUTBOX_ENABLED=True)) is True
+    assert addon.is_enabled(_settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True))
     assert addon.is_enabled(_settings(OUTBOX_ENABLED=False)) is False
 
 
@@ -79,6 +78,7 @@ class _FakeOutboxStore:
         self.published: list[tuple[str, datetime]] = []
         self.failed: list[tuple[str, str, datetime | None]] = []
         self.claim_calls: list[tuple[int, datetime | None, float]] = []
+        self.claim_prefixes: list[str | None] = []
         self.list_calls = 0
 
     async def list_pending(
@@ -96,8 +96,10 @@ class _FakeOutboxStore:
         limit: int = 100,
         now: datetime | None = None,
         lock_seconds: float = 60.0,
+        event_type_prefix: str | None = None,
     ) -> list[OutboxRecord]:
         self.claim_calls.append((limit, now, lock_seconds))
+        self.claim_prefixes.append(event_type_prefix)
         return self.records[:limit]
 
     async def mark_published(self, event_id: str, *, published_at: datetime) -> None:
@@ -196,7 +198,13 @@ async def test_outbox_publisher_reschedules_transient_failures_before_max_attemp
     publisher = OutboxPublisher(
         store=store,
         sink=_FailingSink(),
-        retry_policy=RetryPolicy(max_attempts=3, backoff_seconds=(5.0,)),
+        retry_policy=RetryPolicy(
+            max_attempts=3,
+            base_delay_seconds=5.0,
+            max_delay_seconds=5.0,
+            rng=lambda: 1.0,
+            retry_on=lambda _error: True,
+        ),
     )
 
     report = await publisher.publish_pending(now=now)
@@ -222,7 +230,13 @@ async def test_outbox_publisher_marks_final_failure_after_max_attempts():
     publisher = OutboxPublisher(
         store=store,
         sink=_FailingSink(),
-        retry_policy=RetryPolicy(max_attempts=3, backoff_seconds=(5.0,)),
+        retry_policy=RetryPolicy(
+            max_attempts=3,
+            base_delay_seconds=5.0,
+            max_delay_seconds=5.0,
+            rng=lambda: 1.0,
+            retry_on=lambda _error: True,
+        ),
     )
 
     report = await publisher.publish_pending(now=now)
@@ -255,3 +269,16 @@ async def test_webhook_outbox_sink_dispatches_generic_envelope():
     assert envelope.id == "evt-1"
     assert envelope.type == "generic.event"
     assert envelope.occurred_at == now
+
+
+async def test_outbox_publisher_claims_only_its_event_family():
+    store = _FakeOutboxStore([])
+    publisher = OutboxPublisher(
+        store=store,
+        sink=QueueOutboxSink(_FakeQueue()),
+        event_type_prefix="task.",
+    )
+
+    await publisher.publish_pending()
+
+    assert store.claim_prefixes == ["task."]

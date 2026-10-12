@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import (
+from app.core.database.model import (
     ActorAuditMixin,
     Base,
     CreatedAtMixin,

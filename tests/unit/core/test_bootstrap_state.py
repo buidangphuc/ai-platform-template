@@ -1,18 +1,21 @@
 import pytest
 from fastapi import FastAPI
 
-from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.resources import ApplicationResources, TaskServices
 from app.bootstrap.state import (
     get_app_resources,
     get_app_settings,
     get_health_service,
     get_in_flight_tracker,
-    get_service_resource,
+    get_task_services,
     require,
 )
 from app.core.errors import ServiceUnavailableError
 from app.core.health import HealthService
 from app.core.middleware import InFlightTracker
+from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
+from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
+from app.modules.messaging.tasks.service import TaskService
 from tests.factories import build_test_settings
 
 
@@ -72,33 +75,31 @@ def test_require_raises_service_unavailable_when_none() -> None:
     assert "disabled or lifespan" in exc_info.value.message
 
 
-class _ExampleService:
-    pass
+class _NoopDispatcher:
+    async def dispatch(self, task_id: str, *, type: str) -> None:
+        return None
 
 
-def test_get_service_resource_returns_registered_service() -> None:
+def test_get_task_services_returns_feature_group() -> None:
     app = FastAPI()
-    service = _ExampleService()
-    app.state.resources = ApplicationResources(services={"example": service})
+    store = InMemoryTaskStore()
+    dispatcher = _NoopDispatcher()
+    tasks = TaskServices(
+        service=TaskService(store=store, dispatcher=dispatcher),
+        store=store,
+        dispatcher=dispatcher,
+        queue=InMemoryQueueGateway(),
+    )
+    app.state.resources = ApplicationResources(tasks=tasks)
 
-    assert get_service_resource(app, "example", _ExampleService) is service
+    assert get_task_services(app) is tasks
 
 
-def test_get_service_resource_rejects_missing_service() -> None:
+def test_get_task_services_raises_when_feature_not_opened() -> None:
     app = FastAPI()
     app.state.resources = ApplicationResources()
 
     with pytest.raises(ServiceUnavailableError) as exc_info:
-        get_service_resource(app, "example", _ExampleService)
+        get_task_services(app)
 
-    assert exc_info.value.code == "example_not_configured"
-
-
-def test_get_service_resource_rejects_wrong_service_type() -> None:
-    app = FastAPI()
-    app.state.resources = ApplicationResources(services={"example": object()})
-
-    with pytest.raises(ServiceUnavailableError) as exc_info:
-        get_service_resource(app, "example", _ExampleService)
-
-    assert exc_info.value.code == "example_misconfigured"
+    assert exc_info.value.code == "task_service_not_configured"

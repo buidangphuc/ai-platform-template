@@ -12,7 +12,10 @@ from app.modules.platform.idempotency.service import (
     delete_expired_idempotency_keys,
     store_idempotency_response,
 )
-from app.modules.platform.idempotency.store import IdempotencyCachedResponse
+from app.modules.platform.idempotency.store import (
+    IdempotencyCachedResponse,
+    IdempotencyClaim,
+)
 
 
 class PostgresIdempotencyStore:
@@ -32,7 +35,7 @@ class PostgresIdempotencyStore:
         principal_id: str,
         request_hash: str,
         expires_at: datetime,
-    ) -> IdempotencyCachedResponse | None:
+    ) -> IdempotencyCachedResponse | IdempotencyClaim:
         async with self.sessionmaker() as session, session.begin():
             return await check_or_store_idempotency_key(
                 session,
@@ -48,21 +51,25 @@ class PostgresIdempotencyStore:
         *,
         key: str,
         principal_id: str,
+        claim_token: str,
         status_code: int,
         response_body: Mapping[str, Any],
-    ) -> None:
+    ) -> bool:
         async with self.sessionmaker() as session, session.begin():
-            await store_idempotency_response(
+            return await store_idempotency_response(
                 session,
                 key=key,
                 principal_id=principal_id,
+                claim_token=claim_token,
                 status_code=status_code,
                 response_body=response_body,
             )
 
-    async def delete_expired(self, *, before: datetime) -> int:
+    async def delete_expired(self, *, before: datetime, limit: int) -> int:
         async with self.sessionmaker() as session, session.begin():
-            return await delete_expired_idempotency_keys(session, before=before)
+            return await delete_expired_idempotency_keys(
+                session, before=before, limit=limit
+            )
 
     async def close(self) -> None:
         return None

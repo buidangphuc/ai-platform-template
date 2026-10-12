@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from app.core.resilience import RetryPolicy
 from app.modules.messaging.outbox.store import OutboxRecord, OutboxStore
@@ -11,7 +11,15 @@ from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
 from app.modules.messaging.webhooks.envelope import WebhookEnvelope
 
 
-@runtime_checkable
+def _retry_any_error(error: BaseException) -> bool:
+    # A sink failure is infrastructure failing (queue, webhook endpoint), never
+    # a bad request of ours: retry until max_attempts rather than classify.
+    return True
+
+
+DEFAULT_OUTBOX_RETRY_POLICY = RetryPolicy(retry_on=_retry_any_error)
+
+
 class OutboxSink(Protocol):
     async def publish(self, record: OutboxRecord, *, now: datetime) -> None: ...
 
@@ -60,10 +68,13 @@ class OutboxPublisher:
         store: OutboxStore,
         sink: OutboxSink,
         retry_policy: RetryPolicy | None = None,
+        event_type_prefix: str | None = None,
     ) -> None:
+        """``event_type_prefix`` limits this publisher to one family of events."""
         self.store = store
         self.sink = sink
-        self.retry_policy = retry_policy or RetryPolicy()
+        self.event_type_prefix = event_type_prefix
+        self.retry_policy = retry_policy or DEFAULT_OUTBOX_RETRY_POLICY
 
     async def publish_pending(
         self,
@@ -79,6 +90,7 @@ class OutboxPublisher:
             limit=limit,
             now=now,
             lock_seconds=lock_seconds,
+            event_type_prefix=self.event_type_prefix,
         )
         published = 0
         retried = 0

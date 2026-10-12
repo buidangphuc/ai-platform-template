@@ -58,7 +58,7 @@ Reserve `@field_validator` and `@model_validator` for cross-field or semantic ch
 
 ### Adding a backend / adapter
 
-**Don't** add `RATE_LIMIT_BACKENDS = {"memory", "redis"}` style allowlists here. The factory (`app/modules/<X>/factory.py`) handles dispatch and raises `ValueError` on unknown. Allowlisting in config layer duplicates work and blocks scaling.
+Backends are `Literal` aliases (e.g. `RateLimitBackend = Literal["memory", "redis"]`), so `Settings` rejects unknown values. Dispatch is an exhaustive `match` with no default branch; pyright (`reportMatchNotExhaustive`) fails until a new value has its `case`.
 
 ### Adding a new section
 
@@ -81,8 +81,8 @@ if settings.ENVIRONMENT.is_production:
 `@model_validator(mode="after")` runs after all fields are validated. Refuses to start a production environment with:
 - `DOCS_ENABLED=True`
 - `*` in `CORS_ALLOW_ORIGINS` / `TRUSTED_HOSTS`
-- Weak `AUTH_BEARER_TOKEN` (in `WEAK_AUTH_TOKENS` set or shorter than 24 chars)
-- Missing `AUTH_BEARER_TOKEN` outside dev/local/test
+- An `AUTH_API_KEYS` entry whose digest is a known placeholder token (`WEAK_AUTH_DIGESTS`)
+- Missing `AUTH_API_KEYS` outside dev/local/test (a malformed entry fails in every environment)
 
 ---
 
@@ -90,17 +90,17 @@ if settings.ENVIRONMENT.is_production:
 
 ```
 database/
-├── __init__.py       # Re-exports — caller imports `from app.core.database import X`
-├── engine.py         # build_engine, build_sessionmaker, Base, DbSession, get_db, check_postgres_connection
-└── model.py          # TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, id_key, utcnow
+├── __init__.py       # Empty — import from the defining file
+├── engine.py         # build_engine, build_sessionmaker, DbSession, get_db, check_postgres_connection
+└── model.py          # Base, TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, id_key, utcnow
 ```
 
-External callers use one import path:
+Import each symbol from the file that defines it (ORM models only need `model.py`,
+so they don't load the engine or FastAPI):
 
 ```python
-from app.core.database import (
-    Base, DbSession, TimestampMixin, ActorAuditMixin, id_key, utcnow,
-)
+from app.core.database.engine import DbSession
+from app.core.database.model import Base, TimestampMixin, utcnow
 ```
 
 `DbSession = Annotated[AsyncSession, Depends(get_db)]` — drop into FastAPI endpoints.
@@ -132,21 +132,21 @@ from app.core.database import (
 HealthService(
     check_external_dependencies: bool = True,
     checks: tuple[tuple[str, DependencyCheck], ...] = (),
+    check_timeout_seconds: float = 2.0,
 )
 ```
 
-No hardcoded postgres/redis slots. Bootstrap registers what's enabled:
+No hardcoded postgres/redis slots. Each opener registers its own readiness
+check on `resources.health_checks` (a `HealthChecks` registry) as its resource
+comes up, and `build_health_service` hands the registry to `HealthService`:
 
 ```python
-checks = []
-if resources.sessionmaker:
-    checks.append(("postgres", partial(check_postgres_connection, resources.sessionmaker)))
-if resources.redis:
-    checks.append(("redis", partial(check_redis_connection, resources.redis)))
-HealthService(checks=tuple(checks))
+resources.health_checks.register("redis", partial(check_redis_connection, redis))
 ```
 
-Adding a new dependency check (queue, vector DB, etc.) = append one tuple, no code change in `health.py`.
+Checks run concurrently and each is bounded by `HEALTH_CHECK_TIMEOUT_SECONDS`
+(a timeout reports `error`). Adding a dependency check (queue, vector DB, model
+server) = one `register` call in its opener, no change in `health.py`.
 
 ---
 
@@ -167,27 +167,32 @@ Install order is set by `app/bootstrap/middleware.py::install_core_middlewares()
 
 ## resilience.py
 
-Three immutable policies + one stateful object:
+Three immutable policies + one stateful object. "Transient" is defined once
+(`is_transient_error`: 408, 429, 5xx, timeouts, connection errors) and shared by
+retry and the breaker; deterministic 4xx never retries or trips failover.
 
 ```python
 RetryPolicy(
     max_attempts: int,
     retry_status_codes: tuple[int, ...],
     retry_exceptions: bool,
-    backoff_seconds: tuple[float, ...],
+    retry_on: Callable[[BaseException], bool],  # default is_transient_error
+    base_delay_seconds: float,   # capped exponential, full jitter
+    max_delay_seconds: float,
+    rng: Callable[[], float],    # injectable for tests
 )
 # Usage
 decision = policy.decision(attempt=N, status_code=503, error=None)
-# decision.should_retry, decision.next_delay_seconds
+# decision.should_retry, decision.next_delay_seconds (honors Retry-After)
 
-CircuitBreakerPolicy(failure_threshold, failure_status_codes, failure_status_range)
-breaker = policy.build()  # CircuitBreaker (stateful)
-breaker.allows_request() / record_success() / record_failure(status_code=...)
+CircuitBreakerPolicy(failure_threshold, cooldown_seconds)
+breaker = policy.build(clock=...)  # CircuitBreaker: closed -> open -> half-open
+breaker.try_acquire() / record_success() / record_failure(error)
 
 TimeoutPolicy(timeout_seconds: float)  # Used by callers with asyncio.wait_for
 ```
 
-Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (circuit breaker for primary→secondary failover), `ai/rag/service.py` (timeout), `ai/evals/runner.py` (timeout), `messaging/outbox/publisher.py`. (Worker retry uses `WORKER_MAX_ATTEMPTS`, not a `RetryPolicy`.)
+Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (per-target circuit breakers for the ordered failover chain), `ai/rag/service.py` (timeout), `ai/evals/runner.py` (timeout), `messaging/outbox/publisher.py`. (Worker retry uses `WORKER_MAX_ATTEMPTS`, not a `RetryPolicy`.)
 
 ---
 

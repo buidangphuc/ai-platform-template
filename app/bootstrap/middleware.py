@@ -61,5 +61,6 @@ def install_core_middlewares(app: FastAPI, settings: Settings) -> None:
         app.add_middleware(
             IPRateLimitMiddleware,
             exclude_patterns=tuple(settings.rate_limit_exclude_patterns),
+            trusted_proxy_count=settings.TRUSTED_PROXY_COUNT,
         )
     app.add_middleware(RequestIdMiddleware)

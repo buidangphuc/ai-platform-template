@@ -35,6 +35,7 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app app ./app
 COPY --chown=app:app alembic ./alembic
+COPY --chown=app:app scripts ./scripts
 COPY --chown=app:app main.py alembic.ini ./
 
 USER app
@@ -42,11 +43,10 @@ USER app
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"
+    CMD python -c "import os, urllib.request, sys; port = os.environ.get('SERVER_PORT', '8000'); sys.exit(0 if urllib.request.urlopen(f'http://localhost:{port}/healthz', timeout=3).status == 200 else 1)"
 
-CMD ["uvicorn", "main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--loop", "uvloop", \
-     "--http", "httptools", \
-     "--no-access-log"]
+# Exec form: python is PID 1 and receives SIGTERM. app.serve marks /readyz 503 on
+# SIGTERM, keeps the listener open SHUTDOWN_READINESS_DELAY_SECONDS, then runs
+# uvicorn's graceful shutdown (GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS). Host/port come
+# from SERVER_HOST / SERVER_PORT (default 0.0.0.0:8000).
+CMD ["python", "-m", "app.serve"]

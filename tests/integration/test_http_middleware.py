@@ -10,7 +10,7 @@ from app.modules.business.completions.schemas import (
     CompletionResult,
     CompletionStreamChunk,
 )
-from tests.factories import build_test_settings
+from tests.factories import api_client_for, build_test_settings
 
 
 def _settings(**overrides: object) -> Settings:
@@ -97,16 +97,13 @@ async def test_request_body_limit_returns_standard_envelope():
 
 async def test_access_log_records_request_context(caplog):
     app = create_app(
-        completion_handler=_CompletionHandler(),
+        completion_handler_factory=lambda resources, settings: _CompletionHandler(),
         settings=_settings(),
         init_resources=False,
     )
 
     with caplog.at_level(logging.INFO, logger="app.access"):
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-        ) as client:
+        async with api_client_for(app) as client:
             response = await client.post(
                 "/api/v1/completions",
                 headers={
@@ -122,7 +119,7 @@ async def test_access_log_records_request_context(caplog):
     assert any("path=/api/v1/completions" in message for message in messages)
     assert any("status=200" in message for message in messages)
     assert any("request_id=req-log" in message for message in messages)
-    assert any("principal=local-user" in message for message in messages)
+    assert any("principal=test-user" in message for message in messages)
 
 
 async def test_security_headers_are_disabled_by_default():

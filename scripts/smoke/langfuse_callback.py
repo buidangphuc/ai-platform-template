@@ -45,21 +45,17 @@ async def run_smoke(
         tags=("smoke",),
     )
 
-    trace_config = instance.trace_config(
-        LLMTraceContext(
-            run_name=run_name,
-            session_id=session_id,
-            user_id=user_id,
-            request_id=str(uuid4()),
-            tags=("langfuse-smoke",),
-            metadata={"smoke_run": True},
-        )
+    context = LLMTraceContext(
+        run_name=run_name,
+        session_id=session_id,
+        user_id=user_id,
+        request_id=str(uuid4()),
+        tags=("langfuse-smoke",),
+        metadata={"smoke_run": True},
     )
+    trace_config = instance.trace_config(context)
 
-    response = await instance.chat_model.ainvoke(
-        [HumanMessage(content=prompt)],
-        trace_config,
-    )
+    response = await instance.ainvoke([HumanMessage(content=prompt)], context=context)
     instance.tracker.flush()
 
     return {

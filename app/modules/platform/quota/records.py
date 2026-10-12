@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, TimestampMixin
+from app.core.database.model import Base, TimestampMixin
 from app.modules.platform.quota.models import QuotaReservationStatus
 
 
@@ -18,10 +18,11 @@ class QuotaCounter(Base, TimestampMixin):
             "window_key",
             name="uq_quota_counters_subject_resource_window",
         ),
+        CheckConstraint("used >= 0", name="ck_quota_counters_used_non_negative"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    subject_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    subject_id: Mapped[str] = mapped_column(String(255), nullable=False)
     resource: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     window_key: Mapped[str] = mapped_column(String(64), nullable=False)
     used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -39,10 +40,15 @@ class QuotaReservationRecord(Base, TimestampMixin):
             "idempotency_key",
             name="uq_quota_reservations_idempotency",
         ),
+        CheckConstraint(
+            "status IN ('reserved', 'finalized', 'refunded')",
+            name="ck_quota_reservations_status",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    subject_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # No index=True on subject_id: uq_quota_reservations_idempotency leads with it.
+    subject_id: Mapped[str] = mapped_column(String(255), nullable=False)
     resource: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     window_key: Mapped[str] = mapped_column(String(64), nullable=False)
     cost: Mapped[int] = mapped_column(Integer, nullable=False)

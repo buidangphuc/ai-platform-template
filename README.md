@@ -10,7 +10,7 @@ This repository currently covers the local application foundation:
 - Pydantic settings and `.env` workflow.
 - Health/readiness endpoints.
 - Request ID middleware, logging context, and standard error envelope.
-- Static Bearer token authentication.
+- API-key Bearer authentication (hashed keys, per-client principals) and per-owner task access.
 - Central application composition root for project services that are built from
   platform resources.
 - Lean product primitives: per-concern request dependencies, explicit DB
@@ -64,12 +64,36 @@ Useful endpoints:
 - `POST /api/v1/completions/stream`
 
 All `/api/v1/*` platform endpoints except health checks require
-`Authorization: Bearer <AUTH_BEARER_TOKEN>`.
+`Authorization: Bearer <api-key>` (see [Bearer Auth](#bearer-auth)).
 
 The completions endpoints are intentionally thin transport skeletons. They
 accept chat messages, call an injected `CompletionHandler`, and return either
 one JSON completion or server-sent stream deltas. They do not know prompt
 templates, model selection, caching, retrieval, or product workflow logic.
+
+### Streaming (`POST /api/v1/completions/stream`)
+
+The response is `text/event-stream` with `Cache-Control: no-cache` and
+`X-Accel-Buffering: no`. Frames:
+
+- `data: {"type":"content.delta","delta":"...","metadata":{}}` for each piece of text.
+- `: ping` comment lines every `SSE_HEARTBEAT_SECONDS` while the model is quiet
+  (clients ignore them).
+- `data: {"type":"done", ...}` last, with `usage`, `finish_reason` and `model` when
+  the handler reported them (plain `{"type":"done"}` otherwise).
+- `event: error` + `data: {"type":"error","code":"..."}` if the stream fails after it
+  started (codes: `stream_timeout`, `stream_error`, or an application error code);
+  the stream then closes with no `done`. The frame never carries exception text.
+
+Failures before the first chunk (guardrail violation, handler startup error, no chunk
+within `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS`) return the normal JSON error envelope
+(422 / 500 / 504 `stream_timeout`) instead of a `200` stream. A gap longer than
+`STREAM_IDLE_TIMEOUT_SECONDS` between chunks ends the stream with `stream_timeout`.
+Handlers yield `CompletionStreamChunk`; the last chunk may set `usage` and
+`finish_reason`.
+
+Each sync and stream completion (API and worker) logs one `completion mode=... outcome=... model=...
+duration_ms=... ttft_ms=... finish_reason=... input_tokens=...` line (no content).
 
 ## Docker
 
@@ -94,6 +118,24 @@ keys are bootstrapped from `.env` through Langfuse headless initialization. The
 API container uses `LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000`; host
 Python processes can use `LANGFUSE_BASE_URL=http://localhost:3000`.
 
+### Graceful shutdown and Kubernetes
+
+The image runs `python -m app.serve` (also usable locally; `SERVER_HOST` /
+`SERVER_PORT`, default `0.0.0.0:8000`). uvicorn closes its listener as soon as it
+gets SIGTERM, which would hide the `/readyz` 503 from load balancers, so on the
+first SIGTERM/SIGINT `app.serve` marks the app draining (`/readyz` returns 503,
+`/healthz` stays 200), keeps accepting for `SHUTDOWN_READINESS_DELAY_SECONDS`
+(default 5, `0` disables), then runs the normal graceful shutdown. A second signal
+forces exit.
+
+- A `preStop: sleep` hook is optional with this delay; set the delay at least
+  `periodSeconds * failureThreshold` of the readiness probe plus endpoint
+  propagation time.
+- `terminationGracePeriodSeconds` must exceed `SHUTDOWN_READINESS_DELAY_SECONDS` +
+  `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` (connection drain), plus another
+  `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` in the worst case (the lifespan then waits
+  for in-flight requests): `5 + 2 * 30 + margin` with the defaults.
+
 ## Project Layout
 
 ```text
@@ -113,7 +155,7 @@ app/
       tasks/            Durable async task dispatch
       webhooks/         Outbound webhook delivery
     platform/
-      identity/         Static Bearer principal and auth dependency
+      identity/         API-key principal and auth dependency
       audit/            Product audit events for actor/resource/action history
       idempotency/      Concrete idempotency-key persistence helpers
       rate_limit/       Rate limit service contracts and implementations
@@ -151,14 +193,12 @@ LlamaIndex services where it actually needs them.
 The values below are what `.env.example` ships for the local golden path — they
 are **not** the code defaults. In code every capability `*_ENABLED` flag
 defaults to `false` (`LANGFUSE_ENABLED` included, `app/core/config/ai.py`),
-`AUTH_BEARER_TOKEN` defaults to `""`, and `LANGFUSE_BASE_URL` defaults to
+`AUTH_API_KEYS` defaults to `""` (no keys, no implicit admin), and `LANGFUSE_BASE_URL` defaults to
 `https://cloud.langfuse.com`. `.env.example` pre-enables Langfuse with dummy
 local keys only so `make docker-run-langfuse` works out of the box.
 
 - `CHAT_MODEL=`
-- `AUTH_BEARER_TOKEN=change-me-local-bearer-token`
-- `AUTH_SUBJECT=local-user`
-- `AUTH_ROLES=admin`
+- `AUTH_API_KEYS=local-user:admin:<sha256 of change-me-local-bearer-token>`
 - `MONGO_ENABLED=false`
 - `IDEMPOTENCY_ENABLED=false`
 - `CORS_ALLOW_ORIGINS=*`
@@ -206,11 +246,10 @@ capabilities such as Mongo, quota, cache, objects, LLM, queues, and task stores;
 Business services should receive explicit constructor dependencies and must not
 read FastAPI `Request`, `app.state`, or a global service locator. When a product
 service needs lifespan-owned runtime dependencies, build it in the bootstrap
-composition root from already-open platform resources, register it on
-`ApplicationResources.services`, and expose a small FastAPI dependency adapter
-that calls `get_service_resource(...)`. API dependency adapters should live
-under the owning API surface, for example `app/api/<surface>/dependencies.py`,
-not inside `app/modules/business`.
+composition root (`app/bootstrap/services.py`) from already-open platform
+resources, as exactly one instance per app stored on a typed
+`ApplicationResources` field (e.g. `completion_service`). Views read it with
+`get_app_resources(request.app)`; no per-surface getter helpers.
 
 Adding a new endpoint usually should not touch bootstrap. Add or extend the
 business service method, then call it from the API router. Update bootstrap only
@@ -261,7 +300,9 @@ per-instance Langfuse tracker. Pass `instance.trace_config(...)` into LangChain
 calls to keep parallel LLM services separated by instance, service, session,
 user, and request metadata.
 
-To use the completions transport, inject business logic at app construction:
+To use the completions transport, pass a handler factory. It runs in lifespan
+with the opened resources, so the handler can take an LLM instance, RAG service
+or stores from them:
 
 ```python
 from collections.abc import AsyncIterator
@@ -272,6 +313,8 @@ from app.modules.business.completions.schemas import (
     CompletionStreamChunk,
 )
 from app.bootstrap.application import create_app
+from app.bootstrap.resources import ApplicationResources
+from app.core.config import Settings
 
 
 class MyCompletionHandler:
@@ -285,11 +328,16 @@ class MyCompletionHandler:
         yield CompletionStreamChunk(delta="...")
 
 
-app = create_app(completion_handler=MyCompletionHandler())
+def build_handler(resources: ApplicationResources, settings: Settings) -> MyCompletionHandler:
+    return MyCompletionHandler()
+
+
+app = create_app(completion_handler_factory=build_handler)
 ```
 
-Without an injected handler, `/api/v1/completions` and
-`/api/v1/completions/stream` return `501 completion_handler_not_configured`.
+Without a factory, the scaffold `EchoCompletionHandler` answers (the worker uses
+the same default). The async task routes (`/api/v1/completions/tasks`) are mounted
+only when `TASKS_ENABLED=true`.
 
 The app factory registers a FastAPI lifespan that calls
 `langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and
@@ -304,19 +352,40 @@ readiness checks.
 
 ## Bearer Auth
 
-Set `AUTH_BEARER_TOKEN` in `.env`, then call a protected endpoint with:
+Clients authenticate with an API key sent as `Authorization: Bearer <token>`.
+The server stores only SHA-256 digests, in `AUTH_API_KEYS`: comma-separated
+entries of
+
+```
+subject:scope|scope:sha256hex      # e.g. billing-svc:tasks:read|tasks:write:3f2a...c9
+```
+
+(`subject` is everything before the first `:`, the digest everything after the
+last; scopes may contain `:` and may be empty, which grants nothing.)
 
 ```bash
+python -m scripts.hash_api_key --generate   # prints a random token and its digest
+# AUTH_API_KEYS=billing-svc:admin:<digest>
 curl -X POST http://localhost:8000/api/v1/completions \
-  -H "Authorization: Bearer $AUTH_BEARER_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-The template intentionally does not create users, passwords, sessions, or API
-key tables. `AUTH_SUBJECT` and `AUTH_ROLES` (`app/core/config/platform.py`)
-define the `Principal` built by `require_principal`
-(`app/modules/platform/identity/auth.py`) as
-`{"id": "...", "type": "service", "scopes": [...]}`, which guards every
-`/api/v1/completions*` route. There is no `/auth/me` endpoint — its absence is
+Tokens must be randomly generated (the digest is unsalted, so a guessable token
+is brute-forceable from a leaked config). The presented token's digest is
+compared in constant time against every entry.
+
+**Rotation (overlap).** Several entries may share a subject. Add a second entry
+for the same subject, roll the client over to the new token, then remove the old
+entry. The principal (`subject`) is unchanged throughout, so rate limits, audit
+and task ownership carry over.
+
+The subject is the principal id: per-principal rate limiting is therefore
+per-client, and `GET /api/v1/completions/tasks/{id}` returns a task only to the
+principal that submitted it (404 otherwise). The `Principal` built by
+`require_principal` (`app/modules/platform/identity/auth.py`) is
+`{"id": subject, "type": "service", "scopes": [...]}` and guards every
+`/api/v1/completions*` route. The template intentionally does not create users,
+passwords, sessions, or key-management tables. There is no `/auth/me` endpoint — its absence is
 pinned by `tests/unit/core/test_application_wiring.py`.

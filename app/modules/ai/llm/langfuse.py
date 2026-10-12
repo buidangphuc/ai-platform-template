@@ -1,8 +1,15 @@
+"""Per-instance Langfuse tracker: trace config, prompt registry, eval scores."""
+
+from __future__ import annotations
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.core.config import Settings
+
+if TYPE_CHECKING:
+    from langfuse import Langfuse
 
 LangfuseScoreDataType = Literal["NUMERIC", "CATEGORICAL", "BOOLEAN", "TEXT"]
 
@@ -21,8 +28,7 @@ class LLMTraceContext:
 class LangfuseLLMTracker:
     instance_id: str
     service_name: str
-    enabled: bool
-    client: Any | None = None
+    client: Langfuse | None = None  # None = tracing disabled
     callback_handler_factory: Callable[[], Any] | None = None
     default_tags: tuple[str, ...] = ()
     prompt_cache_ttl_seconds: int = 60
@@ -35,7 +41,7 @@ class LangfuseLLMTracker:
         }
         if context.run_name:
             config["run_name"] = context.run_name
-        if self.enabled:
+        if self.client is not None:
             config["callbacks"] = [self._new_callback_handler()]
         return config
 
@@ -48,7 +54,7 @@ class LangfuseLLMTracker:
         cache_ttl_seconds: int | None = None,
     ) -> Any:
         client = self._require_client()
-        kwargs: dict[str, object] = {
+        kwargs: dict[str, Any] = {
             "cache_ttl_seconds": (
                 self.prompt_cache_ttl_seconds
                 if cache_ttl_seconds is None
@@ -72,7 +78,7 @@ class LangfuseLLMTracker:
         observation_id: str | None = None,
     ) -> Any:
         client = self._require_client()
-        payload: dict[str, object] = {
+        payload: dict[str, Any] = {
             "trace_id": trace_id,
             "name": name,
             "value": value,
@@ -85,7 +91,7 @@ class LangfuseLLMTracker:
         return client.create_score(**payload)
 
     def flush(self) -> None:
-        if self.client is not None and hasattr(self.client, "flush"):
+        if self.client is not None:
             self.client.flush()
 
     def _metadata(self, context: LLMTraceContext) -> dict[str, object]:
@@ -122,11 +128,9 @@ class LangfuseLLMTracker:
             ) from exc
         return CallbackHandler()
 
-    def _require_client(self) -> Any:
-        if not self.enabled:
-            raise RuntimeError("Langfuse is disabled for this LLM instance")
+    def _require_client(self) -> Langfuse:
         if self.client is None:
-            self.client = _build_langfuse_client()
+            raise RuntimeError("Langfuse is disabled for this LLM instance")
         return self.client
 
 
@@ -141,7 +145,6 @@ def build_langfuse_tracker(
         return LangfuseLLMTracker(
             instance_id=instance_id,
             service_name=service_name,
-            enabled=False,
             default_tags=tags,
             prompt_cache_ttl_seconds=settings.LANGFUSE_PROMPT_CACHE_TTL_SECONDS,
         )
@@ -155,14 +158,13 @@ def build_langfuse_tracker(
     return LangfuseLLMTracker(
         instance_id=instance_id,
         service_name=service_name,
-        enabled=True,
         client=_build_langfuse_client(settings),
         default_tags=tags,
         prompt_cache_ttl_seconds=settings.LANGFUSE_PROMPT_CACHE_TTL_SECONDS,
     )
 
 
-def _build_langfuse_client(settings: Settings | None = None) -> Any:
+def _build_langfuse_client(settings: Settings) -> Langfuse:
     try:
         from langfuse import Langfuse
     except ImportError as exc:
@@ -170,8 +172,6 @@ def _build_langfuse_client(settings: Settings | None = None) -> Any:
             "langfuse package is required for Langfuse tracking"
         ) from exc
 
-    if settings is None:
-        return Langfuse()
     return Langfuse(
         public_key=settings.LANGFUSE_PUBLIC_KEY,
         secret_key=settings.LANGFUSE_SECRET_KEY,

@@ -2,16 +2,17 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
+from app.bootstrap.addons.mongo import MongoAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.errors import ServiceUnavailableError
 from app.modules.platform.mongo.dependency import get_mongo
 from app.modules.platform.mongo.factory import (
-    MongoAddon,
     build_mongo_gateway,
     check_mongo_connection,
 )
 from app.modules.platform.mongo.gateway import MongoGateway
+from tests.factories import open_addon
 
 
 class _FakeAdmin:
@@ -120,14 +121,14 @@ async def test_mongo_addon_opens_and_closes_gateway(
     )
 
     assert addon.is_enabled(settings) is True
-    await addon.open(FastAPI(), resources, settings)
+    stack = await open_addon(addon, resources, settings)
 
     assert isinstance(resources.mongo, MongoGateway)
     assert resources.mongo.client is client
+    assert [name for name, _ in resources.health_checks.checks] == ["mongo"]
 
-    await addon.close(FastAPI(), resources)
+    await stack.aclose()
 
-    assert resources.mongo is None
     assert client.closed is True
 
 

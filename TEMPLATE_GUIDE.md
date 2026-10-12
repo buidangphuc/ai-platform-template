@@ -12,7 +12,7 @@ instead of, the template skill.
 
 ## 0. Fork checklist
 
-1. Clone/fork, then `cp .env.example .env` and set `AUTH_BEARER_TOKEN`.
+1. Clone/fork, then `cp .env.example .env` and set `AUTH_API_KEYS` (hash tokens with `python -m scripts.hash_api_key --generate`).
 2. `make dev` → `curl localhost:8000/healthz` — you have a running core.
 3. Rename the project in `pyproject.toml` + `PROJECT_NAME` default.
 4. Delete what you won't use: `app/modules/ai/` (and the `[ai]` extra) if the
@@ -47,25 +47,24 @@ running the worker (`python -m scripts.run_worker` — the same command
 app/modules/business/<domain>/
   schemas.py        # request/result Pydantic models
   types.py          # enums/constants
-  services/         # orchestration — keyword-only constructor deps, no Request/app.state
+  service.py        # <Domain>Service — constructor deps only, no Request/app.state
   stores/           # own the table/collection details
   integrations/     # external HTTP APIs — __init__(self, client, settings)
 app/api/v1/<domain>/
-  dependencies.py   # resolve the service (get_service_resource) — no generic deps.py
   router.py         # mounts leaf routers, attaches Depends(require_principal)
-  <leaf>.py         # thin endpoints: parse -> one service call -> response model
-app/bootstrap/<domain>.py
-  <DOMAIN>_SERVICE_NAME, <Domain>Runtime (async close), build_<domain>_runtime(),
-  <Domain>Addon (is_enabled gates on your *_ENABLED flag;
-  open() -> resources.services[NAME] = runtime)
+  <leaf>.py         # thin endpoints: get_app_resources(request.app).<domain>_service -> one call
+app/bootstrap/services.py
+  build the single <Domain>Service instance in compose_business_services() and
+  store it on a typed ApplicationResources.<domain>_service field
 app/core/config/<domain>.py
   <Domain>SettingsMixin(BaseModel) — *_ENABLED defaults False; add to Settings
 ```
 
-Then register the addon in `app/bootstrap/addons.py:default_resource_addons()`
-and include your router in `app/api/router.py` gated on your flag. The
-`completions` surface is the living reference for the thin-transport shape;
-its handler is injected via `create_app(completion_handler=...)`.
+If the domain needs a new lifecycle resource, add an addon in
+`app/bootstrap/addons.py:default_resource_addons()`. Include your router in
+`app/api/router.py` gated on your flag. The `completions` surface is the living
+reference for the thin-transport shape; its handler comes from
+`create_app(completion_handler_factory=...)`.
 
 > **Deliberate: no structured-output enforcement at the transport.** The
 > completions contract serves both sync and streaming, and schema validation

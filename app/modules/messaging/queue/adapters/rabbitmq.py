@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Self
 
 from app.modules.messaging.queue.gateway import QueueMessage
 
 try:
     import aio_pika
-    from aio_pika.abc import AbstractIncomingMessage, AbstractRobustChannel
+    from aio_pika.abc import AbstractIncomingMessage
 except ImportError:  # pragma: no cover - exercised only when extras missing
     aio_pika = None
-    AbstractIncomingMessage = AbstractRobustChannel = None  # type: ignore[assignment,misc]
+    AbstractIncomingMessage = None  # type: ignore[assignment,misc]
 
 
 def _require_aio_pika() -> None:
@@ -24,28 +24,64 @@ def _require_aio_pika() -> None:
         )
 
 
+# Header the adapter stamps on a requeue-republish so the attempt count survives
+# (a plain nack(requeue=True) on a classic queue carries no delivery counter).
+_ATTEMPT_HEADER = "x-attempt"
+# Set by RabbitMQ itself on quorum queues: number of prior failed deliveries.
+_DELIVERY_COUNT_HEADER = "x-delivery-count"
+
+
 class RabbitMQQueueGateway:
-    def __init__(self, *, url: str, queue_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        url: str,
+        queue_name: str,
+        dead_letter_enabled: bool = True,
+        dead_letter_exchange: str = "",
+        dead_letter_queue: str = "",
+    ) -> None:
         _require_aio_pika()
         if not url:
             raise ValueError("url is required for RabbitMQ gateway")
         self.url = url
         self.queue_name = queue_name
-        self._connection = None
-        self._channel: AbstractRobustChannel | None = None
-        self._queue = None
+        self.dead_letter_enabled = dead_letter_enabled
+        self.dead_letter_exchange = dead_letter_exchange or f"{queue_name}.dlx"
+        self.dead_letter_queue = dead_letter_queue or f"{queue_name}.dead"
         self._inflight: dict[str, AbstractIncomingMessage] = {}
 
-    async def _ensure_ready(self) -> None:
-        if self._channel is not None:
-            return
+    async def open(self) -> Self:
+        """Connect and declare the topology; call once, before any operation,
+        then ``close``. Raises if the broker is unreachable."""
         self._connection = await aio_pika.connect_robust(self.url)
-        self._channel = await self._connection.channel()
-        await self._channel.set_qos(prefetch_count=10)
-        self._queue = await self._channel.declare_queue(self.queue_name, durable=True)
+        try:
+            self._channel = await self._connection.channel()
+            await self._channel.set_qos(prefetch_count=10)
+            arguments: dict[str, Any] | None = None
+            if self.dead_letter_enabled:
+                dlx = await self._channel.declare_exchange(
+                    self.dead_letter_exchange,
+                    aio_pika.ExchangeType.DIRECT,
+                    durable=True,
+                )
+                dlq = await self._channel.declare_queue(
+                    self.dead_letter_queue, durable=True
+                )
+                await dlq.bind(dlx, routing_key=self.queue_name)
+                arguments = {
+                    "x-dead-letter-exchange": self.dead_letter_exchange,
+                    "x-dead-letter-routing-key": self.queue_name,
+                }
+            self._queue = await self._channel.declare_queue(
+                self.queue_name, durable=True, arguments=arguments
+            )
+        except BaseException:
+            await self._connection.close()
+            raise
+        return self
 
     async def send(self, payload: dict[str, Any]) -> str:
-        await self._ensure_ready()
         message = aio_pika.Message(
             body=json.dumps(payload).encode("utf-8"),
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
@@ -61,7 +97,6 @@ class RabbitMQQueueGateway:
         max_messages: int = 10,
         wait_seconds: float = 0.0,
     ) -> list[QueueMessage]:
-        await self._ensure_ready()
         messages: list[QueueMessage] = []
         deadline = wait_seconds if wait_seconds > 0 else None
 
@@ -91,15 +126,29 @@ class RabbitMQQueueGateway:
 
     async def nack(self, message: QueueMessage, *, requeue: bool = True) -> None:
         incoming = self._inflight.pop(message.id, None)
-        if incoming is not None:
-            await incoming.nack(requeue=requeue)
+        if incoming is None:
+            return
+        if not requeue:
+            # Routed to the dead-letter exchange when one is declared.
+            await incoming.nack(requeue=False)
+            return
+        # Republish with an incremented attempt header, then ack the original, so
+        # the count survives (nack-requeue would reset it on classic queues).
+        headers = dict(incoming.headers or {})
+        headers[_ATTEMPT_HEADER] = message.receive_count + 1
+        await self._channel.default_exchange.publish(
+            aio_pika.Message(
+                body=incoming.body,
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                headers=headers,
+                message_id=incoming.message_id,
+            ),
+            routing_key=self.queue_name,
+        )
+        await incoming.ack()
 
     async def close(self) -> None:
-        if self._connection is not None:
-            await self._connection.close()
-            self._connection = None
-            self._channel = None
-            self._queue = None
+        await self._connection.close()
 
     def _wrap(self, incoming: AbstractIncomingMessage) -> QueueMessage:
         message_id = incoming.message_id or str(incoming.delivery_tag)
@@ -107,5 +156,22 @@ class RabbitMQQueueGateway:
         return QueueMessage(
             id=message_id,
             body=json.loads(incoming.body.decode("utf-8")),
+            receive_count=_receive_count(incoming),
             raw=incoming,
         )
+
+
+def _receive_count(incoming: AbstractIncomingMessage) -> int:
+    headers = incoming.headers or {}
+    count = 1
+    # Quorum queues report prior delivery attempts; our own requeue-republish
+    # stamps the attempt number. Take whichever is higher.
+    delivery_count = headers.get(_DELIVERY_COUNT_HEADER)
+    if isinstance(delivery_count, int):
+        count = max(count, delivery_count + 1)
+    attempt = headers.get(_ATTEMPT_HEADER)
+    if isinstance(attempt, int):
+        count = max(count, attempt)
+    if incoming.redelivered:
+        count = max(count, 2)
+    return count

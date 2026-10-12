@@ -1,17 +1,14 @@
-"""Select a ``TaskStore`` + ``TaskDispatcher`` based on Settings."""
+"""Build a ``TaskStore`` for the configured backend.
+
+Memory needs nothing; postgres and redis take the client they need as a
+required argument, so bootstrap passes exactly what the backend uses.
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from app.core.config import Settings
-from app.modules.messaging.outbox.store import OutboxStore
-from app.modules.messaging.queue.gateway import QueueGateway
-from app.modules.messaging.tasks.service import (
-    OutboxTaskDispatcher,
-    QueueTaskDispatcher,
-    TaskDispatcher,
-)
 from app.modules.messaging.tasks.store import TaskStore
 
 if TYPE_CHECKING:
@@ -19,52 +16,21 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
-def build_task_store(
-    settings: Settings,
-    *,
-    sessionmaker: async_sessionmaker[AsyncSession] | None = None,
-    redis: Redis | None = None,
+def build_memory_task_store() -> TaskStore:
+    from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
+
+    return InMemoryTaskStore()
+
+
+def build_postgres_task_store(
+    sessionmaker: async_sessionmaker[AsyncSession],
 ) -> TaskStore:
-    backend = settings.TASK_STORE_BACKEND
+    from app.modules.messaging.tasks.adapters.postgres import PostgresTaskStore
 
-    if backend == "memory":
-        from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
-
-        return InMemoryTaskStore()
-
-    if backend == "postgres":
-        if sessionmaker is None:
-            raise RuntimeError("sessionmaker required for postgres task store")
-        from app.modules.messaging.tasks.adapters.postgres import PostgresTaskStore
-
-        return PostgresTaskStore(sessionmaker)
-
-    if backend == "redis":
-        if redis is None:
-            raise RuntimeError("redis client required for redis task store")
-        from app.modules.messaging.tasks.adapters.redis import RedisTaskStore
-
-        return RedisTaskStore(redis=redis, prefix=settings.TASK_REDIS_PREFIX)
-
-    raise ValueError(f"Unknown TASK_STORE_BACKEND={backend!r}")
+    return PostgresTaskStore(sessionmaker)
 
 
-def build_task_dispatcher(
-    settings: Settings,
-    *,
-    queue: QueueGateway | None = None,
-    outbox: OutboxStore | None = None,
-) -> TaskDispatcher:
-    backend = settings.TASKS_DISPATCH_BACKEND
+def build_redis_task_store(settings: Settings, redis: Redis) -> TaskStore:
+    from app.modules.messaging.tasks.adapters.redis import RedisTaskStore
 
-    if backend == "queue":
-        if queue is None:
-            raise RuntimeError("queue gateway required for queue task dispatcher")
-        return QueueTaskDispatcher(queue)
-
-    if backend == "outbox":
-        if outbox is None:
-            raise RuntimeError("outbox store required for outbox task dispatcher")
-        return OutboxTaskDispatcher(outbox)
-
-    raise ValueError(f"Unknown TASKS_DISPATCH_BACKEND={backend!r}")
+    return RedisTaskStore(redis=redis, prefix=settings.TASK_REDIS_PREFIX)

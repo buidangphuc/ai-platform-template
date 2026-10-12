@@ -90,14 +90,26 @@ class RedisRateLimiter:
     the previous. The previous key's TTL is set to ``2 * window_seconds`` so
     it survives long enough to influence weighting. The Lua script is
     atomic — no race between the check and increment.
+
+    The window index and elapsed time come from the Redis server clock
+    (``TIME``) inside the script, so every pod agrees on which window a
+    request belongs to; a per-process clock would give each pod its own
+    window boundaries. The script derives the window keys itself, which makes
+    them undeclared KEYS: fine on a single node, not under Redis Cluster
+    (wrap ``prefix:key`` in a ``{hash tag}`` if you ever shard).
     """
 
     _CHECK_SCRIPT = """
-local current_key = KEYS[1]
-local previous_key = KEYS[2]
+local base_key = KEYS[1]
 local window_seconds = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
-local elapsed = tonumber(ARGV[3])
+
+local server_time = redis.call('TIME')
+local now = tonumber(server_time[1]) + tonumber(server_time[2]) / 1000000
+local window_index = math.floor(now / window_seconds)
+local elapsed = now - window_index * window_seconds
+local current_key = base_key .. ':' .. window_index
+local previous_key = base_key .. ':' .. (window_index - 1)
 
 local current = tonumber(redis.call('GET', current_key) or '0')
 local previous = tonumber(redis.call('GET', previous_key) or '0')
@@ -126,7 +138,6 @@ return {weighted_after, retry_after, 1}
         limit: int,
         window_seconds: int = 60,
         prefix: str = "rate-limit",
-        clock: Callable[[], float] | None = None,
     ) -> None:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -136,23 +147,14 @@ return {weighted_after, retry_after, 1}
         self.limit = limit
         self.window_seconds = window_seconds
         self.prefix = prefix
-        self.clock = clock or monotonic
 
     async def check(self, key: str) -> RateLimitResult:
-        now = self.clock()
-        window_index = int(now // self.window_seconds)
-        elapsed = now - window_index * self.window_seconds
-        current_key = f"{self.prefix}:{key}:{window_index}"
-        previous_key = f"{self.prefix}:{key}:{window_index - 1}"
-
         result = await self.redis.eval(
             self._CHECK_SCRIPT,
-            2,
-            current_key,
-            previous_key,
+            1,
+            f"{self.prefix}:{key}",
             self.window_seconds,
             self.limit,
-            elapsed,
         )
         weighted = int(result[0])
         retry_after = int(result[1])

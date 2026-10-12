@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, Request
 from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
@@ -53,7 +54,7 @@ class _ExampleService:
         assert resources.cache is not None
         assert resources.objects is not None
         assert resources.queue_gateway is not None
-        assert resources.task_service is not None
+        assert resources.tasks is not None
         assert resources.webhook_signer is not None
 
         await resources.cache.set("service-smoke/cache-key", b"cache-value")
@@ -67,9 +68,10 @@ class _ExampleService:
         object_value = await resources.objects.get("service-smoke/object.txt")
         object_exists = await resources.objects.exists("service-smoke/object.txt")
 
-        task = await resources.task_service.submit(
+        task = await resources.tasks.service.submit(
             type="service-smoke",
             payload={"input": "ok"},
+            principal_id="smoke",
         )
         messages = await resources.queue_gateway.receive(
             max_messages=1, wait_seconds=0.01
@@ -95,43 +97,48 @@ class _ExampleService:
             "attached": {
                 "idempotency_store": resources.idempotency_store is not None,
                 "outbox_store": resources.outbox_store is not None,
-                "example_service": hasattr(request.app.state, "example_service"),
+                "example_service": _EXAMPLE_ADDON.service is not None,
             },
         }
 
 
 class _ExampleServiceAddon:
     name = "example_service"
+    service: _ExampleService | None = None
 
     def is_enabled(self, settings: Settings) -> bool:
         return True
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
         if not settings.DATABASE_ENABLED or not settings.TASKS_ENABLED:
             raise RuntimeError(
                 "_ExampleServiceAddon requires DATABASE_ENABLED and TASKS_ENABLED"
             )
-        app.state.example_service = _ExampleService(opened_at=datetime.now(UTC))
+        self.service = _ExampleService(opened_at=datetime.now(UTC))
+        stack.callback(self._close)
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
-        if hasattr(app.state, "example_service"):
-            delattr(app.state, "example_service")
+    def _close(self) -> None:
+        self.service = None
+
+
+_EXAMPLE_ADDON = _ExampleServiceAddon()
 
 
 async def _service_smoke(request: Request) -> dict[str, Any]:
-    return await request.app.state.example_service.run(request)
+    assert _EXAMPLE_ADDON.service is not None
+    return await _EXAMPLE_ADDON.service.run(request)
 
 
 async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled():
     app = create_app(
         settings=_settings(),
         init_resources=True,
-        resource_addons=(_ExampleServiceAddon(),),
+        resource_addons=(_EXAMPLE_ADDON,),
     )
     app.add_api_route(
         "/service-smoke",
@@ -149,7 +156,7 @@ async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled
         assert resources_open.engine is not None
         assert resources_open.redis is not None
         assert resources_open.queue_gateway is not None
-        assert resources_open.task_service is not None
+        assert resources_open.tasks is not None
         assert resources_open.cache is not None
         assert resources_open.objects is not None
         assert [addon.name for addon in resources_open.addons][-1] == "example_service"
@@ -182,8 +189,8 @@ async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled
     assert resources_closed.engine is None
     assert resources_closed.redis is None
     assert resources_closed.queue_gateway is None
-    assert resources_closed.task_store is None
+    assert resources_closed.tasks is None
     assert resources_closed.cache is None
     assert resources_closed.objects is None
     assert resources_closed.addons == []
-    assert not hasattr(app.state, "example_service")
+    assert _EXAMPLE_ADDON.service is None

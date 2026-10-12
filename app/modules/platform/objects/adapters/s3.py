@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from inspect import isawaitable
-from typing import Any
+from typing import Any, Self
+
+from loguru import logger
+
+from app.core.aws_errors import is_permission_denied
 
 try:
     import aioboto3
@@ -39,17 +43,40 @@ class S3ObjectGateway:
         self._session = (
             session_factory() if session_factory is not None else aioboto3.Session()
         )
-        self._client_cm = None
-        self._client = None
 
-    async def _get_client(self):
-        if self._client is None:
-            kwargs: dict[str, Any] = {"region_name": self.region_name}
-            if self.endpoint_url:
-                kwargs["endpoint_url"] = self.endpoint_url
-            self._client_cm = self._session.client("s3", **kwargs)
-            self._client = await self._client_cm.__aenter__()
-        return self._client
+    async def open(self) -> Self:
+        """Create the S3 client and probe the bucket once.
+
+        Call once, before any operation, then ``close``. A missing bucket, bad
+        credentials or an unreachable endpoint fails here (the client is closed
+        first). The probe is ``list_objects_v2`` inside the app prefix: unlike
+        ``head_bucket`` its errors carry a code, so a policy without
+        ``s3:ListBucket`` (``AccessDenied``) is told apart from bad credentials
+        and only logged — no extra IAM permission is required.
+        """
+        kwargs: dict[str, Any] = {"region_name": self.region_name}
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+        self._client_cm = self._session.client("s3", **kwargs)
+        self._client = await self._client_cm.__aenter__()
+        try:
+            await self._client.list_objects_v2(
+                Bucket=self.bucket, Prefix=f"{self.prefix}/", MaxKeys=1
+            )
+        except Exception as exc:
+            if is_permission_denied(exc):
+                logger.warning(
+                    "s3.open probe_denied bucket={} (no s3:ListBucket); "
+                    "bucket existence is checked on first use",
+                    self.bucket,
+                )
+                return self
+            await self._client_cm.__aexit__(None, None, None)
+            raise RuntimeError(
+                f"S3 bucket {self.bucket!r} is not reachable"
+                f" (endpoint {self.endpoint_url or 'default'}): {exc}"
+            ) from exc
+        return self
 
     async def put(
         self,
@@ -58,7 +85,7 @@ class S3ObjectGateway:
         *,
         content_type: str | None = None,
     ) -> None:
-        client = await self._get_client()
+        client = self._client
         kwargs: dict[str, Any] = {
             "Bucket": self.bucket,
             "Key": self._key(key),
@@ -69,7 +96,7 @@ class S3ObjectGateway:
         await client.put_object(**kwargs)
 
     async def get(self, key: str) -> bytes | None:
-        client = await self._get_client()
+        client = self._client
         try:
             response = await client.get_object(Bucket=self.bucket, Key=self._key(key))
         except Exception as exc:
@@ -80,11 +107,11 @@ class S3ObjectGateway:
         return await body.read()
 
     async def delete(self, key: str) -> None:
-        client = await self._get_client()
+        client = self._client
         await client.delete_object(Bucket=self.bucket, Key=self._key(key))
 
     async def exists(self, key: str) -> bool:
-        client = await self._get_client()
+        client = self._client
         try:
             await client.head_object(Bucket=self.bucket, Key=self._key(key))
         except Exception as exc:
@@ -96,7 +123,7 @@ class S3ObjectGateway:
     async def list(self, prefix: str = "", *, limit: int = 100) -> list[str]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        client = await self._get_client()
+        client = self._client
         scoped = self._key(prefix) if prefix else self.prefix
         response = await client.list_objects_v2(
             Bucket=self.bucket,
@@ -107,7 +134,7 @@ class S3ObjectGateway:
         return [obj["Key"][prefix_len:] for obj in response.get("Contents", [])]
 
     async def presign_get(self, key: str, *, expires_seconds: int = 3600) -> str:
-        client = await self._get_client()
+        client = self._client
         url = client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": self._key(key)},
@@ -124,7 +151,7 @@ class S3ObjectGateway:
         expires_seconds: int = 3600,
         content_type: str | None = None,
     ) -> str:
-        client = await self._get_client()
+        client = self._client
         params: dict[str, Any] = {"Bucket": self.bucket, "Key": self._key(key)}
         if content_type:
             params["ContentType"] = content_type
@@ -138,10 +165,7 @@ class S3ObjectGateway:
         return str(url)
 
     async def close(self) -> None:
-        if self._client_cm is not None:
-            await self._client_cm.__aexit__(None, None, None)
-            self._client_cm = None
-            self._client = None
+        await self._client_cm.__aexit__(None, None, None)
 
     def _key(self, key: str) -> str:
         normalized = key.strip("/")

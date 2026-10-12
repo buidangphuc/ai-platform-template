@@ -17,27 +17,24 @@ from app.bootstrap.state import get_app_resources, get_app_settings, require
 from app.core.errors import AppError
 from app.modules.platform.idempotency.service import (
     build_request_hash,
-    compute_idempotency_expires_at,
 )
-from app.modules.platform.idempotency.store import IdempotencyStore
+from app.modules.platform.idempotency.store import (
+    IdempotencyCachedResponse,
+    IdempotencyClaim,
+    IdempotencyStore,
+)
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 
-__all__ = [
-    "IDEMPOTENCY_KEY_HEADER",
-    "IdempotencyRequestState",
-    "compute_idempotency_expires_at",
-    "get_idempotency_key",
-    "replay_or_start_idempotent_request",
-    "store_idempotent_response",
-]
-
 
 @dataclass(frozen=True, slots=True)
-class IdempotencyRequestState:
+class IdempotentCall:
+    """Handle for a claimed key; pass it to ``store_idempotent_response``."""
+
     key: str
     principal_id: str
-    request_hash: str
+    claim_token: str
+    store: IdempotencyStore
 
 
 def get_idempotency_key(request: Request) -> str | None:
@@ -71,7 +68,14 @@ async def replay_or_start_idempotent_request(
     principal_id: str,
     body: bytes,
     expires_at: datetime,
-) -> JSONResponse | None:
+) -> JSONResponse | IdempotentCall | None:
+    """Claim the request's key.
+
+    Returns ``None`` when no ``Idempotency-Key`` header is present, a
+    ``JSONResponse`` to return as-is when a completed response is replayed, or
+    an ``IdempotentCall`` once the key is claimed (run the handler, then pass
+    the call to ``store_idempotent_response``).
+    """
     idempotency_key = get_idempotency_key(request)
     if idempotency_key is None:
         return None
@@ -83,35 +87,35 @@ async def replay_or_start_idempotent_request(
         body=body,
         principal_id=principal_id,
     )
-    cached = await store.check_or_store(
+    outcome = await store.check_or_store(
         key=idempotency_key,
         principal_id=principal_id,
         request_hash=request_hash,
         expires_at=expires_at,
     )
-    request.state.idempotency_request = IdempotencyRequestState(
-        key=idempotency_key,
-        principal_id=principal_id,
-        request_hash=request_hash,
-    )
-    if cached is None:
-        return None
-    return JSONResponse(status_code=cached.status_code, content=cached.body)
+    match outcome:
+        case IdempotencyCachedResponse():
+            return JSONResponse(status_code=outcome.status_code, content=outcome.body)
+        case IdempotencyClaim():
+            return IdempotentCall(
+                key=idempotency_key,
+                principal_id=principal_id,
+                claim_token=outcome.token,
+                store=store,
+            )
 
 
 async def store_idempotent_response(
-    request: Request,
+    call: IdempotentCall,
     *,
     status_code: int,
     response_body: Mapping[str, Any],
-) -> None:
-    state = getattr(request.state, "idempotency_request", None)
-    if state is None:
-        return
-    store = _require_enabled_store(request)
-    await store.store_response(
-        key=state.key,
-        principal_id=state.principal_id,
+) -> bool:
+    """Cache the response; ``False`` if the claim was reclaimed meanwhile."""
+    return await call.store.store_response(
+        key=call.key,
+        principal_id=call.principal_id,
+        claim_token=call.claim_token,
         status_code=status_code,
         response_body=response_body,
     )

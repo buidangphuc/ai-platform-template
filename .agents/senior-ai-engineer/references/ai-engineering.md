@@ -28,25 +28,62 @@ Rules:
 
 - Resolves the target model per role: `"default"` and `"judge"` (judge model
   used by eval-as-judge flows). Reads `Settings.CHAT_MODEL`, `JUDGE_CHAT_MODEL`,
-  `CHAT_FALLBACK_MODELS`.
-- Primary → secondary fallback is driven by a **circuit breaker on 4xx**
-  (`CircuitBreakerPolicy`, `failure_status_range=range(400, 500)`). After each
-  call the caller must report the outcome:
-  - `record_success(target, role=...)`
-  - `record_error(target, status_code=..., role=...)`
-  When the primary breaker opens, `current_target` returns the secondary.
-- With no model configured, `chat_model()` returns `FakeListChatModel` — this is
+  `CHAT_FALLBACK_MODELS`. An empty `JUDGE_CHAT_MODEL` falls back to
+  `CHAT_MODEL` with a warning locally and a `ValueError` outside
+  dev/local/test — a judge silently grading with the production model is not
+  an independent judge.
+- Every model is built with bounded calls: `LLM_MAX_TOKENS`,
+  `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` (the SDK's hidden retry budget,
+  default 1 — the breaker only sees a call after the SDK gave up, so each
+  extra retry delays failover).
+- Failover is an **ordered chain**: the `default` role's chain is `CHAT_MODEL`
+  followed by *every* `CHAT_FALLBACK_MODELS` entry, in order (duplicates
+  dropped); `judge` has the judge model alone and no fallbacks. With more than
+  one target, each target has its **own circuit breaker**
+  (`CircuitBreaker`, `app/core/resilience.py`), keyed by (role, target). A
+  breaker counts only *transient* failures: 408/429/5xx, timeouts and
+  connection errors (`is_transient_error`). Deterministic errors (bad prompt,
+  context length, content policy, other 4xx) never count and never fail over —
+  the next model would only repeat them. After
+  `LLM_BREAKER_FAILURE_THRESHOLD` consecutive transient failures a target's
+  breaker opens and the chain skips it; after `LLM_BREAKER_COOLDOWN_SECONDS`
+  exactly one call is let through to it as a probe (half-open): success closes
+  the breaker, a transient failure reopens it for another cooldown. A
+  single-target chain is never gated.
+- The router is not discarded: `LLMInstance` carries it (`instance.router`)
+  next to the tracker, and the model is resolved **per call**, because which
+  target is healthy changes at runtime. Handlers call
+  `await instance.ainvoke(messages, role=..., context=LLMTraceContext(...))`,
+  which walks the chain: skip a target whose breaker is open, call it with the
+  Langfuse trace config, report the outcome to *that target's* breaker, and
+  move to the next target only after a transient failure. A deterministic
+  error propagates at once; if every target fails the **last** error is
+  raised; if every breaker is open, `ServiceUnavailableError`
+  (`llm_unavailable`). Chosen over LangChain `with_fallbacks` because that
+  wrapper cannot report outcomes to a breaker or skip an open target.
+- The walk has an **overall deadline**, `LLM_CHAIN_DEADLINE_SECONDS` (default
+  90, must be >= `LLM_TIMEOUT_SECONDS`): each attempt runs under what is left
+  of it, and when it runs out the walk stops with `LLMDeadlineExceeded`
+  (`AppError`, 504, `llm_deadline_exceeded`; transient-classified). An attempt
+  cut short by the deadline is *our* budget, not the provider's fault, so it is
+  **not** reported to that target's breaker. Per-request `LLM_TIMEOUT_SECONDS`
+  stays the SDK's job. Still keep chains short (2–3).
+- Streaming / tool-binding callers use `instance.chat_model(role)` (raw model
+  for the first admitted target, `ServiceUnavailableError` if none) and own
+  failover and outcome reporting via `router.chain(role)`,
+  `router.try_acquire(target)`, `router.record_success(target)` /
+  `router.record_error(target, error=exc)`.
+- With no model configured, the router returns `FakeListChatModel` — this is
   why tests and local runs work without provider keys. Lean on it for tests.
 
-When adding a model call: get the target from the router, invoke with the
-trace config, then record success/error so fallback health stays accurate.
-
-> **Open seam: the template itself never reports outcomes.** The scaffold
-> handler (`handlers/echo.py`) doesn't touch the router, so no shipped code
-> path calls `record_success`/`record_error` — the breaker cannot trip and
-> fallback never engages until your first real handler reports them. That
-> wiring deliberately lives with the product handler, not the scaffold:
-> outcome reporting only makes sense where the provider call happens.
+> **Open seam: the scaffold handler does not call a model.**
+> `handlers/echo.py` never touches the `LLMInstance`, and no resource builds
+> one yet, so nothing in the template exercises failover end to end. A real
+> handler factory (in `bootstrap/services.py`) builds the instance with
+> `build_llm_instance(...)` once and injects it; the handler then only calls
+> `instance.ainvoke(...)`. Outcome reporting is no longer the handler's job.
+> `application.py` still flushes Langfuse through the global `get_client()`
+> rather than the tracker's own client (`tracker.flush()`).
 
 ## Evals — `app/modules/ai/evals/`
 
@@ -87,21 +124,40 @@ Factory + bootstrap-addon pattern (`factory.py`):
 - The service carries a `RedactionPolicy` and a `TimeoutPolicy` — retrieval is
   bounded and redacted by construction. Preserve that when extending.
 
-## Completions business pipeline — `app/modules/business/completions/`
+## Completions business service — `app/modules/business/completions/`
 
-- `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`.
-- `pipeline.py`: `CompletionPipeline` wraps one handler and exposes the same two
-  methods. The pipeline is stable; behavior lives in the handler.
+- `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`;
+  `stream` yields `CompletionStreamChunk` only (the last chunk may carry `usage`,
+  `finish_reason`, `model`).
+- `service.py`: `CompletionService(handler, *, guards, sink, policy)` wraps one handler and
+  exposes the same two methods. Behavior lives in the handler. One instance per app lives on
+  `ApplicationResources.completion_service`; the API and the worker share it.
+- Observation: each `complete()`/`stream()` call records one `CompletionObservation` (mode, outcome
+  `ok|error|timeout|disconnected`, duration, ttft for streams, model, finish reason, tokens; never
+  content) to the `CompletionSink`. Bootstrap composes `FanOutSink([LogCompletionSink(), otel?])`,
+  so every completion logs one `completion mode=...` line.
+- Stream deadlines: `StreamPolicy(first_token_timeout, idle_timeout)` comes from
+  `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_IDLE_TIMEOUT_SECONDS`; a missed deadline raises
+  `StreamTimeoutError` (504, `stream_timeout`).
 - `handlers/echo.py` is the scaffold handler.
+- Stream contract (`app/api/sse.py` `event_stream_response` + `CompletionService.stream`): the
+  first event is awaited before headers, so guard violations, handler startup errors and the
+  first-token timeout are normal JSON errors (422 / 500 / 504). After the first event a failure is
+  `event: error` with a safe code (no exception text), an idle gap past the policy is
+  `stream_timeout`, and `: ping` comments go out every `SSE_HEARTBEAT_SECONDS`. A handler must not
+  swallow `CancelledError`.
 
 To add a real model-backed completion:
 
 1. Implement `CompletionHandler` (e.g. `handlers/<name>.py`), taking an
    `LLMInstance` as a constructor dependency.
-2. Compose it in bootstrap and inject it into `CompletionPipeline`.
+2. Pass a handler factory `create_app(completion_handler_factory=...)`; it runs in
+   lifespan with the opened `ApplicationResources`, so it can take an `LLMInstance`,
+   RAG service or stores from there (`app/bootstrap/services.py`).
 3. Keep the API endpoint thin and the response contract unchanged.
 
-Do not modify `CompletionPipeline` to add behavior — swap the handler.
+Do not modify `CompletionService` to add behavior — swap the handler, or add checks
+through `create_app(completion_guards_factory=...)` (input/output guards, fail-closed).
 
 ## Cross-cutting requirements for every AI call
 
@@ -110,7 +166,19 @@ Do not modify `CompletionPipeline` to add behavior — swap the handler.
   for other external calls.
 - **Observability:** Langfuse trace via `LLMInstance.trace_config(...)`.
 - **Redaction:** `RedactionPolicy` (`app/core/redaction`) before logging/tracing
-  sensitive input or output.
+  sensitive input or output. It masks emails, bearer/`sk-`/AWS keys, phone
+  numbers (incl. Vietnamese), Luhn-valid card numbers, secret-named keys
+  (`authorization`, `cookie`, `x-api-key`, ...) and recurses into lists.
+- **Input/output guards:** pass `CompletionGuard`s to `CompletionService(handler,
+  guards=...)` (`business/completions/guards.py`); raise `GuardrailViolation`
+  (422, fail-closed). Output guards run on `complete()` only; streamed output is
+  not guarded yet. An input violation in `stream()` raises on first iteration, which
+  the API awaits before sending headers, so it is a 422 JSON error.
+- **Untrusted content:** clients cannot send `system` messages (the server owns
+  the system prompt). Retrieved text is untrusted: `knowledge_search` wraps each
+  match in `<document id=... source="retrieved">` and says so in its tool
+  description. Do the same for any other tool that returns third-party text, and
+  delimit graded output in judge prompts.
 - **Evals:** at least one eval case covering the new behavior.
 
 > **Open seam: traces are NOT auto-redacted.** The Langfuse callback captures
@@ -120,11 +188,14 @@ Do not modify `CompletionPipeline` to add behavior — swap the handler.
 > flag was deliberately trimmed with the other advanced settings
 > (`tests/unit/core/test_config.py` pins its absence). A product that traces
 > sensitive data adds its own setting and applies the policy at the call site.
+> The policy now also masks phone numbers, card numbers, AWS keys and strings in
+> lists, so applying it at the call site covers more than before; it is still
+> regex-based, so treat it as a floor, not a PII guarantee.
 
 ## Ship checklist for an AI feature
 
 - [ ] Model accessed via `LLMInstance` / handler dependency, not the SDK directly.
-- [ ] Outcome reported to `ModelRouter` (`record_success` / `record_error`).
+- [ ] Model called via `LLMInstance.ainvoke` (reports outcomes + one-shot failover); raw `chat_model(role)` users report to the router themselves.
 - [ ] Bounded timeout + fallback path defined.
 - [ ] Trace config passed; sensitive data redacted.
 - [ ] Eval cases added; gating (A) or monitoring (B) chosen deliberately.

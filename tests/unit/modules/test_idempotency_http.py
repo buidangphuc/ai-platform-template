@@ -3,16 +3,21 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.modules.platform.idempotency.http import (
+    IdempotentCall,
     get_idempotency_key,
     replay_or_start_idempotent_request,
     store_idempotent_response,
 )
-from app.modules.platform.idempotency.store import IdempotencyCachedResponse
+from app.modules.platform.idempotency.store import (
+    IdempotencyCachedResponse,
+    IdempotencyClaim,
+)
 from tests.factories import build_test_settings
 
 
@@ -77,9 +82,9 @@ def test_idempotency_key_max_length_comes_from_settings():
 class _FakeIdempotencyStore:
     def __init__(
         self,
-        cached: IdempotencyCachedResponse | None = None,
+        outcome: IdempotencyCachedResponse | IdempotencyClaim | None = None,
     ) -> None:
-        self.cached = cached
+        self.outcome = outcome or IdempotencyClaim(token="claim-1")
         self.check_calls: list[dict[str, object]] = []
         self.store_calls: list[dict[str, object]] = []
 
@@ -90,7 +95,7 @@ class _FakeIdempotencyStore:
         principal_id: str,
         request_hash: str,
         expires_at: datetime,
-    ) -> IdempotencyCachedResponse | None:
+    ) -> IdempotencyCachedResponse | IdempotencyClaim:
         self.check_calls.append(
             {
                 "key": key,
@@ -99,24 +104,30 @@ class _FakeIdempotencyStore:
                 "expires_at": expires_at,
             }
         )
-        return self.cached
+        return self.outcome
 
     async def store_response(
         self,
         *,
         key: str,
         principal_id: str,
+        claim_token: str,
         status_code: int,
         response_body: dict,
-    ) -> None:
+    ) -> bool:
         self.store_calls.append(
             {
                 "key": key,
                 "principal_id": principal_id,
+                "claim_token": claim_token,
                 "status_code": status_code,
                 "response_body": response_body,
             }
         )
+        return True
+
+    async def delete_expired(self, *, before: datetime, limit: int) -> int:
+        return 0
 
     async def close(self) -> None:
         return None
@@ -124,7 +135,7 @@ class _FakeIdempotencyStore:
 
 def _app_with_idempotency(store: _FakeIdempotencyStore) -> FastAPI:
     app = FastAPI()
-    app.state.settings = _settings(IDEMPOTENCY_ENABLED=True)
+    app.state.settings = _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True)
     app.state.resources = ApplicationResources(idempotency_store=store)
     return app
 
@@ -160,7 +171,7 @@ async def test_idempotency_boundary_replays_cached_response():
         expires_at=datetime(2026, 5, 22, tzinfo=UTC),
     )
 
-    assert response is not None
+    assert isinstance(response, JSONResponse)
     assert response.status_code == 202
     assert response.body == b'{"task_id":"t1"}'
     assert request.state.idempotency_key == "job-1"
@@ -174,19 +185,20 @@ async def test_idempotency_boundary_stores_success_response_after_start():
         app=_app_with_idempotency(store),
     )
 
-    response = await replay_or_start_idempotent_request(
+    call = await replay_or_start_idempotent_request(
         request,
         principal_id="user-1",
         body=b'{"input":"hello"}',
         expires_at=expires_at,
     )
-    await store_idempotent_response(
-        request,
+    assert isinstance(call, IdempotentCall)
+    stored = await store_idempotent_response(
+        call,
         status_code=201,
         response_body={"id": "created"},
     )
 
-    assert response is None
+    assert stored is True
     assert store.check_calls[0]["key"] == "job-1"
     assert store.check_calls[0]["principal_id"] == "user-1"
     assert store.check_calls[0]["expires_at"] == expires_at
@@ -194,6 +206,7 @@ async def test_idempotency_boundary_stores_success_response_after_start():
         {
             "key": "job-1",
             "principal_id": "user-1",
+            "claim_token": "claim-1",
             "status_code": 201,
             "response_body": {"id": "created"},
         }

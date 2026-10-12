@@ -18,8 +18,3 @@ Do not also use ``app.modules.platform.idempotency`` for the same endpoint —
 combining the two causes stuck-in-progress records and TTL drift. See that
 module's docstring for the conflict rationale.
 """
-
-from app.modules.messaging.tasks.models import Task, TaskStatus
-from app.modules.messaging.tasks.store import TaskStore
-
-__all__ = ["Task", "TaskStatus", "TaskStore"]

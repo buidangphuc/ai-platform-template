@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.messaging.outbox.models import OutboxEvent
@@ -23,12 +23,11 @@ class PostgresOutboxStore:
         metadata: Mapping[str, Any] | None = None,
         available_at: datetime | None = None,
     ) -> OutboxRecord:
-        event = OutboxEvent(
+        event = new_outbox_row(
             event_type=event_type,
-            payload=dict(payload),
-            event_metadata=dict(metadata or {}),
-            status=str(OutboxStatus.PENDING),
-            available_at=available_at or datetime.now(UTC),
+            payload=payload,
+            metadata=metadata,
+            available_at=available_at,
         )
         async with self.sessionmaker() as session, session.begin():
             session.add(event)
@@ -55,6 +54,7 @@ class PostgresOutboxStore:
         limit: int = 100,
         now: datetime | None = None,
         lock_seconds: float = 60.0,
+        event_type_prefix: str | None = None,
     ) -> Sequence[OutboxRecord]:
         if limit <= 0:
             raise ValueError("limit must be positive")
@@ -62,7 +62,9 @@ class PostgresOutboxStore:
             raise ValueError("lock_seconds must be positive")
         now = now or datetime.now(UTC)
         locked_until = now + timedelta(seconds=lock_seconds)
-        stmt = _pending_stmt(limit=limit, now=now).with_for_update(skip_locked=True)
+        stmt = _pending_stmt(
+            limit=limit, now=now, event_type_prefix=event_type_prefix
+        ).with_for_update(skip_locked=True)
         async with self.sessionmaker() as session, session.begin():
             rows = (await session.scalars(stmt)).all()
             for row in rows:
@@ -103,6 +105,23 @@ class PostgresOutboxStore:
             if getattr(result, "rowcount", 0) == 0:
                 raise KeyError(event_id)
 
+    async def delete_published_before(self, before: datetime, *, limit: int) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        old = (
+            select(OutboxEvent.id)
+            .where(
+                OutboxEvent.status == str(OutboxStatus.PUBLISHED),
+                OutboxEvent.published_at < before,
+            )
+            .limit(limit)
+        )
+        async with self.sessionmaker() as session, session.begin():
+            result = await session.execute(
+                delete(OutboxEvent).where(OutboxEvent.id.in_(old))
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
+
     async def close(self) -> None:
         return None
 
@@ -131,17 +150,32 @@ def _to_record(event: OutboxEvent) -> OutboxRecord:
     )
 
 
-def _pending_stmt(*, limit: int, now: datetime):
-    return (
-        select(OutboxEvent)
-        .where(
-            OutboxEvent.status == str(OutboxStatus.PENDING),
-            OutboxEvent.available_at <= now,
-            or_(
-                OutboxEvent.locked_until.is_(None),
-                OutboxEvent.locked_until <= now,
-            ),
-        )
-        .order_by(OutboxEvent.available_at, OutboxEvent.created_at)
-        .limit(limit)
+def new_outbox_row(
+    *,
+    event_type: str,
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any] | None = None,
+    available_at: datetime | None = None,
+) -> OutboxEvent:
+    """Build a pending row; lets a caller insert it in its own transaction."""
+    return OutboxEvent(
+        event_type=event_type,
+        payload=dict(payload),
+        event_metadata=dict(metadata or {}),
+        status=str(OutboxStatus.PENDING),
+        available_at=available_at or datetime.now(UTC),
     )
+
+
+def _pending_stmt(*, limit: int, now: datetime, event_type_prefix: str | None = None):
+    stmt = select(OutboxEvent).where(
+        OutboxEvent.status == str(OutboxStatus.PENDING),
+        OutboxEvent.available_at <= now,
+        or_(
+            OutboxEvent.locked_until.is_(None),
+            OutboxEvent.locked_until <= now,
+        ),
+    )
+    if event_type_prefix is not None:
+        stmt = stmt.where(OutboxEvent.event_type.startswith(event_type_prefix))
+    return stmt.order_by(OutboxEvent.available_at, OutboxEvent.created_at).limit(limit)

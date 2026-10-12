@@ -1,6 +1,6 @@
 {"id": "echo-exact", "input": {"messages": [{"role": "user", "content": "hello"}]}, "expected": "echo: hello", "metadata": {"evaluator": "exact"}}
 {"id": "echo-exact-multiword", "input": {"messages": [{"role": "user", "content": "xin chao template"}]}, "expected": "echo: xin chao template", "metadata": {"evaluator": "exact"}}
-{"id": "echo-contains-last-turn", "input": {"messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "second turn wins"}]}, "expected": "second turn wins", "metadata": {"evaluator": "contains"}}
+{"id": "echo-contains-last-turn", "input": {"messages": [{"role": "user", "content": "first turn"}, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "second turn wins"}]}, "expected": "second turn wins", "metadata": {"evaluator": "contains"}}
 {"id": "echo-contains-unicode", "input": {"messages": [{"role": "user", "content": "tiếng Việt có dấu"}]}, "expected": "tiếng Việt có dấu", "metadata": {"evaluator": "contains"}}
 {"id": "echo-prefix-contract", "input": {"messages": [{"role": "user", "content": "prefix check"}]}, "expected": "echo:", "metadata": {"evaluator": "contains"}}
 {"id": "judge-verbatim", "input": {"messages": [{"role": "user", "content": "repeat me"}]}, "expected": "The output repeats the user's message verbatim after an 'echo: ' prefix.", "metadata": {"evaluator": "judge"}}

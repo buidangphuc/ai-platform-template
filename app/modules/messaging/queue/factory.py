@@ -1,8 +1,8 @@
-"""Select a ``QueueGateway`` implementation based on ``Settings.QUEUE_BACKEND``."""
+"""Open a ``QueueGateway`` implementation based on ``Settings.QUEUE_BACKEND``."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from app.core.config import Settings
 from app.modules.messaging.queue.gateway import QueueGateway
@@ -11,47 +11,63 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
 
 
-def build_queue_gateway(
+ClientlessQueueBackend = Literal["memory", "sqs", "rabbitmq"]
+
+
+async def open_queue_gateway(
     settings: Settings,
-    *,
-    redis: Redis | None = None,
+    backend: ClientlessQueueBackend,
 ) -> QueueGateway:
-    backend = settings.QUEUE_BACKEND
+    """Backends that need no injected client; redis uses its own builder.
 
-    if backend == "memory":
-        from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
+    The SQS and RabbitMQ gateways connect here, so an unreachable broker fails
+    startup instead of the first request.
+    """
+    match backend:
+        case "memory":
+            from app.modules.messaging.queue.adapters.memory import (
+                InMemoryQueueGateway,
+            )
 
-        return InMemoryQueueGateway(name=settings.QUEUE_NAME)
+            return InMemoryQueueGateway(name=settings.QUEUE_NAME)
+        case "sqs":
+            from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
 
-    if backend == "redis":
-        if redis is None:
-            raise RuntimeError("redis client is required for redis queue backend")
-        from app.modules.messaging.queue.adapters.redis_stream import (
-            RedisStreamQueueGateway,
-        )
+            return await SQSQueueGateway(
+                queue_url=settings.SQS_QUEUE_URL,
+                region_name=settings.SQS_REGION,
+                endpoint_url=settings.SQS_ENDPOINT_URL or None,
+                visibility_timeout=(
+                    settings.SQS_VISIBILITY_TIMEOUT_SECONDS
+                    if settings.SQS_VISIBILITY_TIMEOUT_SECONDS > 0
+                    else None
+                ),
+                dead_letter_queue_url=settings.SQS_DEAD_LETTER_QUEUE_URL or None,
+            ).open()
+        case "rabbitmq":
+            from app.modules.messaging.queue.adapters.rabbitmq import (
+                RabbitMQQueueGateway,
+            )
 
-        return RedisStreamQueueGateway(redis=redis, stream=settings.QUEUE_NAME)
+            return await RabbitMQQueueGateway(
+                url=settings.RABBITMQ_URL,
+                queue_name=settings.QUEUE_NAME,
+                dead_letter_enabled=settings.RABBITMQ_DEAD_LETTER_ENABLED,
+                dead_letter_exchange=settings.RABBITMQ_DEAD_LETTER_EXCHANGE,
+                dead_letter_queue=settings.RABBITMQ_DEAD_LETTER_QUEUE,
+            ).open()
 
-    if backend == "sqs":
-        from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
 
-        return SQSQueueGateway(
-            queue_url=settings.SQS_QUEUE_URL,
-            region_name=settings.SQS_REGION,
-            endpoint_url=settings.SQS_ENDPOINT_URL or None,
-            visibility_timeout=(
-                settings.SQS_VISIBILITY_TIMEOUT_SECONDS
-                if settings.SQS_VISIBILITY_TIMEOUT_SECONDS > 0
-                else None
-            ),
-        )
+def build_redis_queue_gateway(settings: Settings, redis: Redis) -> QueueGateway:
+    from app.modules.messaging.queue.adapters.redis_stream import (
+        RedisStreamQueueGateway,
+    )
 
-    if backend == "rabbitmq":
-        from app.modules.messaging.queue.adapters.rabbitmq import RabbitMQQueueGateway
-
-        return RabbitMQQueueGateway(
-            url=settings.RABBITMQ_URL,
-            queue_name=settings.QUEUE_NAME,
-        )
-
-    raise ValueError(f"Unknown QUEUE_BACKEND={backend!r}")
+    return RedisStreamQueueGateway(
+        redis=redis,
+        stream=settings.QUEUE_NAME,
+        consumer_name=settings.QUEUE_REDIS_CONSUMER_NAME or None,
+        min_idle_seconds=settings.QUEUE_REDIS_MIN_IDLE_SECONDS,
+        max_deliveries=settings.QUEUE_REDIS_MAX_DELIVERIES,
+        dead_letter_maxlen=settings.QUEUE_REDIS_DEAD_LETTER_MAXLEN,
+    )

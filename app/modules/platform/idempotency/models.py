@@ -2,11 +2,19 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, TimestampMixin
+from app.core.database.model import Base, TimestampMixin
 
 JSONB_TYPE = JSON().with_variant(JSONB, "postgresql")
 
@@ -19,6 +27,11 @@ class IdempotencyKey(Base, TimestampMixin):
             "key",
             name="uq_idempotency_keys_principal_key",
         ),
+        Index("ix_idempotency_keys_expires_at", "expires_at"),
+        CheckConstraint(
+            "status IN ('in_progress', 'completed')",
+            name="ck_idempotency_keys_status",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -27,11 +40,14 @@ class IdempotencyKey(Base, TimestampMixin):
         default=lambda: str(uuid4()),
     )
     key: Mapped[str] = mapped_column(String(255), nullable=False)
-    principal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="in_progress"
     )
+    # Fresh per claim/reclaim; completion is fenced on it. NULL only on rows
+    # claimed before the column existed (they can only expire or be reclaimed).
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     response_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB_TYPE,

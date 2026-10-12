@@ -7,7 +7,7 @@ from app.core.errors import ServiceUnavailableError
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from app.bootstrap.resources import ApplicationResources
+    from app.bootstrap.resources import ApplicationResources, TaskServices
     from app.core.config import Settings
     from app.core.health import HealthService
     from app.core.middleware import InFlightTracker
@@ -49,18 +49,12 @@ def get_mongo_gateway(app: FastAPI) -> MongoGateway:
     )
 
 
-def get_service_resource(app: FastAPI, key: str, expected_type: type[T]) -> T:
-    value = require(
-        get_app_resources(app).services.get(key),
-        code=f"{key}_not_configured",
-        message=f"{key} service is not configured",
+def get_task_services(app: FastAPI) -> TaskServices:
+    return require(
+        get_app_resources(app).tasks,
+        code="task_service_not_configured",
+        message="Async task service is disabled or lifespan has not opened it",
     )
-    if not isinstance(value, expected_type):
-        raise ServiceUnavailableError(
-            code=f"{key}_misconfigured",
-            message=f"{key} service is misconfigured",
-        )
-    return value
 
 
 def require(value: T | None, *, code: str, message: str) -> T:

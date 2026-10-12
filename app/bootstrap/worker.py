@@ -1,51 +1,73 @@
+"""Standalone async worker: same resource graph and handler factory as the API."""
+
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any
 
 from loguru import logger
 
-from app.bootstrap.resources import validate_core_resource_requirements
+from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
+from app.bootstrap.resources import ApplicationResources, TaskServices, opened
+from app.bootstrap.services import (
+    CompletionGuardsFactory,
+    CompletionHandlerFactory,
+    default_completion_guards_factory,
+    default_completion_handler_factory,
+    open_runtime,
+)
 from app.core.config import Settings, get_settings
-from app.core.database import build_engine, build_sessionmaker
-from app.core.redis import build_redis_client
-from app.modules.business.completions.handlers.echo import EchoCompletionHandler
-from app.modules.business.completions.pipeline import CompletionPipeline
-from app.modules.business.completions.ports import CompletionHandler
+from app.core.request_context import reset_request_id, set_request_id
 from app.modules.business.completions.schemas import CompletionRequest
-from app.modules.messaging.queue.factory import build_queue_gateway
+from app.modules.business.completions.service import CompletionService
+from app.modules.messaging.outbox.publisher import OutboxPublisher
 from app.modules.messaging.queue.gateway import QueueMessage
-from app.modules.messaging.queue.worker import AsyncPollingWorker
-from app.modules.messaging.tasks.factory import build_task_store
+from app.modules.messaging.queue.worker import (
+    AsyncPollingWorker,
+    NonRetryableMessageError,
+)
+from app.modules.messaging.tasks.message import TaskMessage
+from app.modules.messaging.tasks.outbox import TASK_EVENT_PREFIX, TaskQueueOutboxSink
+from app.modules.messaging.tasks.relay import (
+    run_cleanup_loop,
+    run_outbox_relay,
+    run_reclaim_loop,
+)
 from app.modules.messaging.tasks.service import TaskService
 
-if TYPE_CHECKING:
-    from redis.asyncio import Redis
-    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
-    from app.modules.messaging.queue.gateway import QueueGateway
-    from app.modules.messaging.tasks.store import TaskStore
-
-
-@dataclass
-class WorkerResources:
-    queue: QueueGateway
-    store: TaskStore
-    service: TaskService
-    engine: AsyncEngine | None = None
-    sessionmaker: async_sessionmaker[AsyncSession] | None = None
-    redis: Redis | None = None
+# A background loop runs until the stop event is set.
+BackgroundLoop = Callable[[asyncio.Event], Coroutine[Any, Any, None]]
 
 
 @dataclass
 class WorkerContext:
     settings: Settings
     worker: AsyncPollingWorker
-    handler: CompletionHandler
-    pipeline: CompletionPipeline
-    resources: WorkerResources
+    resources: ApplicationResources
+    tasks: TaskServices
+    loops: tuple[BackgroundLoop, ...]
+
+    async def run(self) -> None:
+        """Run the polling worker and the task housekeeping loops until shutdown.
+
+        The loops stop when the worker stops (SIGTERM/SIGINT or a crash), so the
+        process owns one lifetime for all of them.
+        """
+        stop = asyncio.Event()
+
+        async def run_worker() -> None:
+            try:
+                await self.worker.run()
+            finally:
+                stop.set()
+
+        async with asyncio.TaskGroup() as group:
+            group.create_task(run_worker())
+            for loop in self.loops:
+                group.create_task(loop(stop))
 
 
 def validate_worker_runtime_settings(settings: Settings) -> None:
@@ -53,150 +75,157 @@ def validate_worker_runtime_settings(settings: Settings) -> None:
         raise RuntimeError("Worker requires QUEUE_ENABLED")
     if not settings.TASKS_ENABLED:
         raise RuntimeError("Worker requires TASKS_ENABLED")
-    validate_core_resource_requirements(settings=settings, init_resources=True)
 
 
-def build_worker_resources(settings: Settings) -> WorkerResources:
-    validate_worker_runtime_settings(settings)
-    engine = None
-    sessionmaker = None
-    redis = None
-
-    if _worker_needs_database(settings):
-        engine = build_engine(settings)
-        sessionmaker = build_sessionmaker(engine)
-
-    if _worker_needs_redis(settings):
-        redis = build_redis_client(settings)
-
-    queue = build_queue_gateway(settings, redis=redis)
-    store = build_task_store(settings, sessionmaker=sessionmaker, redis=redis)
-    from app.modules.messaging.tasks.factory import build_task_dispatcher
-
-    outbox_store = None
-    if settings.TASKS_DISPATCH_BACKEND == "outbox":
-        if not settings.OUTBOX_ENABLED:
-            raise RuntimeError("TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED")
-        from app.modules.messaging.outbox.factory import build_outbox_store
-
-        outbox_store = build_outbox_store(settings, sessionmaker=sessionmaker)
-
-    dispatcher = build_task_dispatcher(settings, queue=queue, outbox=outbox_store)
-    service = TaskService(
-        store=store,
-        dispatcher=dispatcher,
-        ttl_seconds=settings.TASK_TTL_SECONDS,
-        lease_seconds=settings.TASKS_LEASE_SECONDS,
-    )
-    return WorkerResources(
-        engine=engine,
-        sessionmaker=sessionmaker,
-        redis=redis,
-        queue=queue,
-        store=store,
-        service=service,
-    )
-
-
-async def close_worker_resources(resources: WorkerResources) -> None:
-    await resources.queue.close()
-    await resources.store.close()
-    if resources.redis is not None:
-        await resources.redis.aclose()
-    if resources.engine is not None:
-        await resources.engine.dispose()
-
-
-def build_worker_context(
-    settings: Settings | None = None,
+def build_polling_worker(
+    settings: Settings,
     *,
-    handler: CompletionHandler | None = None,
-) -> WorkerContext:
-    resolved = settings or get_settings()
-    resources = build_worker_resources(resolved)
-    resolved_handler: CompletionHandler = handler or EchoCompletionHandler()
-    pipeline = CompletionPipeline(resolved_handler)
-    worker = AsyncPollingWorker(
-        gateway=resources.queue,
+    tasks: TaskServices,
+    completion_service: CompletionService,
+) -> AsyncPollingWorker:
+    return AsyncPollingWorker(
+        gateway=tasks.queue,
         handler=build_worker_message_handler(
-            service=resources.service,
-            pipeline=pipeline,
+            service=tasks.service,
+            completion_service=completion_service,
         ),
-        max_concurrent=resolved.WORKER_MAX_CONCURRENT,
-        max_attempts=resolved.WORKER_MAX_ATTEMPTS,
-        poll_interval_seconds=resolved.WORKER_POLL_INTERVAL_SECONDS,
-        receive_batch_size=resolved.WORKER_RECEIVE_BATCH_SIZE,
-        receive_wait_seconds=resolved.WORKER_RECEIVE_WAIT_SECONDS,
-    )
-    return WorkerContext(
-        settings=resolved,
-        worker=worker,
-        handler=resolved_handler,
-        pipeline=pipeline,
-        resources=resources,
+        max_concurrent=settings.WORKER_MAX_CONCURRENT,
+        max_attempts=settings.WORKER_MAX_ATTEMPTS,
+        poll_interval_seconds=settings.WORKER_POLL_INTERVAL_SECONDS,
+        receive_batch_size=settings.WORKER_RECEIVE_BATCH_SIZE,
+        receive_wait_seconds=settings.WORKER_RECEIVE_WAIT_SECONDS,
     )
 
 
 def build_worker_message_handler(
     *,
     service: TaskService,
-    pipeline: CompletionPipeline,
+    completion_service: CompletionService,
 ) -> Callable[[QueueMessage], Awaitable[None]]:
     async def process_message(message: QueueMessage) -> None:
-        task_id = message.body.get("task_id")
-        if not task_id:
-            logger.warning("worker.skip message_without_task_id={}", message.body)
+        task_message = TaskMessage.from_body(message.body)
+        if task_message.request_id is None:
+            await process_task(task_message.task_id)
             return
+        token = set_request_id(task_message.request_id)
+        try:
+            await process_task(task_message.task_id)
+        finally:
+            reset_request_id(token)
 
+    async def process_task(task_id: str) -> None:
         try:
             task = await service.require(task_id)
         except Exception:
             logger.exception("worker.task_lookup_failed task_id={}", task_id)
             raise
 
-        await service.mark_processing(task_id)
+        if not await service.mark_processing(task_id):
+            logger.info("worker.skip task_id={} reason=not_claimable", task_id)
+            return
+
         try:
             payload = CompletionRequest(**task.payload)
-            result = await pipeline.complete(payload)
-            await service.mark_completed(
-                task_id,
-                {
-                    "content": result.content,
-                    "model": result.model,
-                    "metadata": result.metadata,
-                },
-            )
-            logger.info("worker.task_completed task_id={}", task_id)
+            result = await completion_service.complete(payload)
         except Exception as exc:
             logger.exception("worker.task_failed task_id={}", task_id)
-            await service.mark_failed(task_id, str(exc))
-            raise
+            await service.mark_failed(task_id, _safe_error(exc))
+            # FAILED is terminal: a redelivery would be skipped, so dead-letter now.
+            raise NonRetryableMessageError(f"task {task_id} failed") from exc
+
+        await service.mark_completed(task_id, result.model_dump(mode="json"))
+        logger.info("worker.task_completed task_id={}", task_id)
 
     return process_message
+
+
+def _safe_error(exc: Exception) -> str:
+    """What the API may show: the class name only; the detail stays in the logs."""
+    return f"{type(exc).__name__}: task failed (see worker logs)"
+
+
+def build_background_loops(
+    settings: Settings,
+    *,
+    resources: ApplicationResources,
+    tasks: TaskServices,
+) -> tuple[BackgroundLoop, ...]:
+    async def reclaim(stop: asyncio.Event) -> None:
+        await run_reclaim_loop(
+            tasks.service,
+            interval_seconds=settings.TASKS_RECLAIM_INTERVAL_SECONDS,
+            batch_size=settings.TASKS_RECLAIM_BATCH_SIZE,
+            max_attempts=settings.TASKS_MAX_ATTEMPTS,
+            stop=stop,
+        )
+
+    async def cleanup(stop: asyncio.Event) -> None:
+        await run_cleanup_loop(
+            tasks.store,
+            resources.outbox_store,
+            resources.idempotency_store,
+            interval_seconds=settings.TASKS_CLEANUP_INTERVAL_SECONDS,
+            batch_size=settings.TASKS_CLEANUP_BATCH_SIZE,
+            outbox_retention_seconds=settings.OUTBOX_RETENTION_SECONDS,
+            stop=stop,
+        )
+
+    match settings.TASKS_DISPATCH_BACKEND:
+        case "queue":
+            return (reclaim, cleanup)
+        case "outbox":
+            publisher = OutboxPublisher(
+                store=opened(resources.outbox_store, "outbox store"),
+                sink=TaskQueueOutboxSink(tasks.queue),
+                event_type_prefix=TASK_EVENT_PREFIX,
+            )
+
+            async def relay(stop: asyncio.Event) -> None:
+                await run_outbox_relay(
+                    publisher,
+                    interval_seconds=settings.TASKS_OUTBOX_RELAY_INTERVAL_SECONDS,
+                    batch_size=settings.TASKS_OUTBOX_RELAY_BATCH_SIZE,
+                    stop=stop,
+                )
+
+            return (relay, reclaim, cleanup)
 
 
 @asynccontextmanager
 async def worker_context(
     settings: Settings | None = None,
     *,
-    handler: CompletionHandler | None = None,
+    completion_handler_factory: CompletionHandlerFactory = (
+        default_completion_handler_factory
+    ),
+    completion_guards_factory: CompletionGuardsFactory = (
+        default_completion_guards_factory
+    ),
+    addons: tuple[BootstrapAddon, ...] | None = None,
 ) -> AsyncIterator[WorkerContext]:
-    ctx = build_worker_context(settings, handler=handler)
-    try:
-        yield ctx
-    finally:
-        await close_worker_resources(ctx.resources)
+    resolved = settings or get_settings()
+    validate_worker_runtime_settings(resolved)
+    async with open_runtime(
+        resolved,
+        init_resources=True,
+        addons=default_resource_addons() if addons is None else addons,
+        completion_handler_factory=completion_handler_factory,
+        completion_guards_factory=completion_guards_factory,
+    ) as resources:
+        # Guaranteed by validate_worker_runtime_settings (TASKS_ENABLED).
+        tasks = opened(resources.tasks, "tasks")
+        yield WorkerContext(
+            settings=resolved,
+            worker=build_polling_worker(
+                resolved,
+                tasks=tasks,
+                completion_service=resources.completion_service,
+            ),
+            resources=resources,
+            tasks=tasks,
+            loops=build_background_loops(resolved, resources=resources, tasks=tasks),
+        )
 
 
 def check_worker_configuration(settings: Settings | None = None) -> None:
     validate_worker_runtime_settings(settings or get_settings())
-
-
-def _worker_needs_database(settings: Settings) -> bool:
-    return settings.DATABASE_ENABLED and settings.TASK_STORE_BACKEND == "postgres"
-
-
-def _worker_needs_redis(settings: Settings) -> bool:
-    return settings.REDIS_ENABLED and (
-        settings.QUEUE_BACKEND == "redis" or settings.TASK_STORE_BACKEND == "redis"
-    )

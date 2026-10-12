@@ -7,8 +7,9 @@ flattens them back into one schema.
 
 To add a new section: create a new ``BaseModel`` mixin and add it to the
 ``Settings`` inheritance list. To add a new adapter / backend for an existing
-section: just register it in that module's ``factory.py`` — the config layer
-does not maintain an allowlist (factory raises ``ValueError`` on unknown).
+section: add the value to that section's ``*Backend`` ``Literal`` alias and a
+``case`` to the dispatching ``match`` — pyright (``reportMatchNotExhaustive``)
+fails until every backend is handled, and Settings rejects unknown values.
 
 Numeric range validation is expressed via ``Field(gt=, ge=, le=)`` so the
 mixins don't need explicit ``@field_validator`` for the common cases. Add a
@@ -29,17 +30,10 @@ from app.core.config.messaging import MessagingSettingsMixin
 from app.core.config.mongo import MongoSettingsMixin
 from app.core.config.platform import PlatformSettingsMixin
 from app.core.config.runtime import (
-    WEAK_AUTH_TOKENS,
-    Environment,
+    WEAK_AUTH_DIGESTS,
     RuntimeSettingsMixin,
 )
-
-__all__ = [
-    "WEAK_AUTH_TOKENS",
-    "Environment",
-    "Settings",
-    "get_settings",
-]
+from app.core.config.telemetry import TelemetrySettingsMixin
 
 _SECRET_MARKERS = ("PASSWORD", "SECRET", "TOKEN", "KEY", "PEPPER")
 
@@ -53,6 +47,7 @@ class Settings(
     AISettingsMixin,
     MessagingSettingsMixin,
     PlatformSettingsMixin,
+    TelemetrySettingsMixin,
 ):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -62,8 +57,8 @@ class Settings(
 
     @model_validator(mode="after")
     def validate_runtime_safety(self) -> Settings:
-        if not self.ENVIRONMENT.is_local and not self.AUTH_BEARER_TOKEN:
-            raise ValueError("AUTH_BEARER_TOKEN is required outside dev/local/test")
+        if not self.ENVIRONMENT.is_local and not self.auth_api_keys:
+            raise ValueError("AUTH_API_KEYS is required outside dev/local/test")
         if not self.ENVIRONMENT.is_production:
             return self
 
@@ -75,11 +70,8 @@ class Settings(
         ):
             if "*" in parsed:
                 raise ValueError(f"{field_name} must not contain '*' in production")
-        if (
-            self.AUTH_BEARER_TOKEN in WEAK_AUTH_TOKENS
-            or len(self.AUTH_BEARER_TOKEN) < 24
-        ):
-            raise ValueError("AUTH_BEARER_TOKEN is too weak for production")
+        if any(key.digest in WEAK_AUTH_DIGESTS for key in self.auth_api_keys):
+            raise ValueError("AUTH_API_KEYS contains a key for a known weak token")
         return self
 
     def redacted_summary(self) -> dict[str, object]:

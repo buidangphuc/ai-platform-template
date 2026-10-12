@@ -15,6 +15,6 @@ logs/
 data/
 docs/
 tests/
-scripts/
+scripts/smoke/
 *.md
 !README.md

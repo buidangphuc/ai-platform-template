@@ -1,6 +1,6 @@
 """Eval gate for the completions surface.
 
-Runs the JSONL dataset against the real CompletionPipeline (echo handler by
+Runs the JSONL dataset against the real CompletionService (echo handler by
 default — swap in your product handler when you fork) and FAILS (exit != 0)
 when the pass rate drops below --min-score.
 
@@ -32,17 +32,17 @@ from app.modules.ai.evals.runner import (
     load_jsonl_cases,
 )
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
-from app.modules.business.completions.pipeline import CompletionPipeline
 from app.modules.business.completions.schemas import CompletionRequest
+from app.modules.business.completions.service import CompletionService
 
 DEFAULT_CASES = "evals/completions_smoke.jsonl"
 
 # The eval target — swap the handler for your product's when you fork.
-_pipeline = CompletionPipeline(EchoCompletionHandler())
+_completion_service = CompletionService(EchoCompletionHandler())
 
 
 async def _target(case: EvalCase) -> EvalTargetResult:
-    result = await _pipeline.complete(CompletionRequest(**case.input))
+    result = await _completion_service.complete(CompletionRequest(**case.input))
     return EvalTargetResult(output=result.content)
 
 

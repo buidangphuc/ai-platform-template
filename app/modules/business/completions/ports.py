@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Protocol
 
 from app.modules.business.completions.schemas import (
@@ -14,4 +14,4 @@ class CompletionHandler(Protocol):
     def stream(
         self,
         request: CompletionRequest,
-    ) -> AsyncIterator[CompletionStreamChunk | str]: ...
+    ) -> AsyncGenerator[CompletionStreamChunk, None]: ...

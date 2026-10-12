@@ -23,6 +23,14 @@ if TYPE_CHECKING:
 MessageHandler = Callable[["QueueMessage"], Awaitable[None]]
 
 
+class NonRetryableMessageError(Exception):
+    """Raised by a handler for a message no redelivery can fix.
+
+    The worker nacks it with ``requeue=False`` on the first delivery so it lands
+    in the backend's dead-letter destination instead of being retried or acked.
+    """
+
+
 class TypedMessageDispatcher:
     """Routes ``QueueMessage`` to a handler keyed by ``body['type']``.
 
@@ -148,16 +156,17 @@ class AsyncPollingWorker:
                 await self.handler(message)
                 await self.gateway.ack(message)
             except Exception as exc:
+                requeue = (
+                    not isinstance(exc, NonRetryableMessageError)
+                    and message.receive_count < self.max_attempts
+                )
                 logger.exception(
                     "worker.handler_error message_id={} error={} requeue={}",
                     message.id,
                     exc,
-                    message.receive_count < self.max_attempts,
+                    requeue,
                 )
-                await self.gateway.nack(
-                    message,
-                    requeue=message.receive_count < self.max_attempts,
-                )
+                await self.gateway.nack(message, requeue=requeue)
 
     async def _drain_active_tasks(self) -> None:
         if not self._active:

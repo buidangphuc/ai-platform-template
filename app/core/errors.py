@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from loguru import logger
 from starlette.exceptions import HTTPException
 from starlette.types import ExceptionHandler
 
@@ -266,11 +267,17 @@ def _http_error_code(status_code: int) -> str:
     return _HTTP_STATUS_CODE_MAP.get(status_code, "http_error")
 
 
-def _envelope(*, code: str, message: str, data: Any = None) -> dict[str, Any]:
+def _envelope(
+    *,
+    code: str,
+    message: str,
+    data: Any = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "code": code,
         "message": message,
-        "request_id": get_request_id(),
+        "request_id": request_id or get_request_id(),
     }
     if data is not None:
         payload["data"] = data
@@ -311,6 +318,31 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     )
 
 
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all: log with stack trace, answer with the standard 500 envelope.
+
+    Runs in ``ServerErrorMiddleware``, outside ``RequestIdMiddleware``: its
+    contextvar is already reset and it cannot add the response header, so the id
+    comes from request state and the header is set here.
+    """
+    request_id = request.scope.get("state", {}).get("request_id") or get_request_id()
+    logger.opt(exception=exc).error(
+        "unhandled_exception method={} path={} request_id={}",
+        request.method,
+        request.url.path,
+        request_id,
+    )
+    return JSONResponse(
+        status_code=500,
+        headers={"X-Request-ID": request_id},
+        content=_envelope(
+            code="internal_server_error",
+            message="Internal server error",
+            request_id=request_id,
+        ),
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, cast(ExceptionHandler, app_error_handler))
     app.add_exception_handler(
@@ -320,4 +352,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(
         HTTPException,
         cast(ExceptionHandler, http_exception_handler),
+    )
+    app.add_exception_handler(
+        Exception,
+        cast(ExceptionHandler, unhandled_exception_handler),
     )

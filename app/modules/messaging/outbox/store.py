@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 
 class OutboxStatus(StrEnum):
@@ -27,7 +27,6 @@ class OutboxRecord:
     error: str | None = None
 
 
-@runtime_checkable
 class OutboxStore(Protocol):
     async def enqueue(
         self,
@@ -51,6 +50,7 @@ class OutboxStore(Protocol):
         limit: int = 100,
         now: datetime | None = None,
         lock_seconds: float = 60.0,
+        event_type_prefix: str | None = None,
     ) -> Sequence[OutboxRecord]: ...
 
     async def mark_published(
@@ -64,5 +64,12 @@ class OutboxStore(Protocol):
         error: str,
         available_at: datetime | None = None,
     ) -> None: ...
+
+    async def delete_published_before(self, before: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` PUBLISHED events published before ``before``.
+
+        Returns the number deleted; pending and failed events are never touched.
+        """
+        ...
 
     async def close(self) -> None: ...

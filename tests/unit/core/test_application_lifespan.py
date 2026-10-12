@@ -1,5 +1,6 @@
 import sys
 import types
+from contextlib import asynccontextmanager
 
 import pytest
 from fastapi import FastAPI
@@ -10,8 +11,19 @@ from app.bootstrap import (
 )
 from app.bootstrap.application import _build_lifespan, create_app
 from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.services import (
+    default_completion_guards_factory,
+    default_completion_handler_factory,
+)
 from app.core.config import Settings
 from app.core.health import HealthService
+
+
+def _async_returning(value):
+    async def opener(settings, backend):
+        return value
+
+    return opener
 
 
 class _FakeLangfuseClient:
@@ -39,14 +51,11 @@ def _bare_app() -> FastAPI:
 
 
 def _patch_resource_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _noop_open(app, settings, *, init_resources, addons=()):
-        return app.state.resources
+    @asynccontextmanager
+    async def _noop_runtime(settings, **_kwargs):
+        yield ApplicationResources()
 
-    async def _noop_close(app):
-        return None
-
-    monkeypatch.setattr(application_module, "open_application_resources", _noop_open)
-    monkeypatch.setattr(application_module, "close_application_resources", _noop_close)
+    monkeypatch.setattr(application_module, "open_runtime", _noop_runtime)
 
 
 async def test_lifespan_flushes_langfuse_client_when_enabled(
@@ -57,7 +66,13 @@ async def test_lifespan_flushes_langfuse_client_when_enabled(
     _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=True, addons=())
+    lifespan = _build_lifespan(
+        settings,
+        init_resources=True,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+        completion_guards_factory=default_completion_guards_factory,
+    )
 
     async with lifespan(_bare_app()):
         assert fake_client.flushed is False
@@ -82,7 +97,13 @@ async def test_lifespan_skips_flush_when_init_resources_is_false(
     _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=False, addons=())
+    lifespan = _build_lifespan(
+        settings,
+        init_resources=False,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+        completion_guards_factory=default_completion_guards_factory,
+    )
 
     async with lifespan(_bare_app()):
         pass
@@ -103,7 +124,13 @@ async def test_lifespan_skips_flush_when_langfuse_disabled(
     )
     _patch_resource_lifecycle(monkeypatch)
 
-    lifespan = _build_lifespan(test_settings, init_resources=True, addons=())
+    lifespan = _build_lifespan(
+        test_settings,
+        init_resources=True,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+        completion_guards_factory=default_completion_guards_factory,
+    )
 
     async with lifespan(_bare_app()):
         pass
@@ -119,7 +146,13 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
     _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=True, addons=())
+    lifespan = _build_lifespan(
+        settings,
+        init_resources=True,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+        completion_guards_factory=default_completion_guards_factory,
+    )
 
     async with lifespan(_bare_app()):
         pass
@@ -202,14 +235,14 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     )
     monkeypatch.setattr(
         resources_module,
-        "build_queue_gateway",
-        lambda settings, *, redis=None: queue,
+        "open_queue_gateway",
+        _async_returning(queue),
         raising=False,
     )
     monkeypatch.setattr(
         resources_module,
-        "build_task_store",
-        lambda settings, *, sessionmaker=None, redis=None: task_store,
+        "build_memory_task_store",
+        lambda: task_store,
         raising=False,
     )
 
@@ -229,8 +262,7 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     assert resources_before.sessionmaker is None
     assert resources_before.redis is None
     assert resources_before.queue_gateway is None
-    assert resources_before.task_store is None
-    assert resources_before.task_service is None
+    assert resources_before.tasks is None
 
     async with app.router.lifespan_context(app):
         resources_open = app.state.resources
@@ -238,8 +270,8 @@ async def test_app_lifespan_owns_database_and_redis_resources(
         assert resources_open.sessionmaker is sessionmaker
         assert resources_open.redis is redis
         assert resources_open.queue_gateway is queue
-        assert resources_open.task_store is task_store
-        assert resources_open.task_service is not None
+        assert resources_open.tasks is not None
+        assert resources_open.tasks.store is task_store
         assert engine.disposed is False
         assert redis.closed is False
         assert queue.closed is False
@@ -253,7 +285,7 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     assert resources_closed.engine is None
     assert resources_closed.redis is None
     assert resources_closed.queue_gateway is None
-    assert resources_closed.task_store is None
+    assert resources_closed.tasks is None
     assert app.state.health_service is not None
 
 
@@ -307,16 +339,20 @@ async def test_app_lifespan_honors_resource_flags(
         lambda settings: build_calls.append("redis"),
         raising=False,
     )
+
+    async def spy_open_queue(settings, backend):
+        build_calls.append("queue")
+
     monkeypatch.setattr(
         resources_module,
-        "build_queue_gateway",
-        lambda settings, *, redis=None: build_calls.append("queue"),
+        "open_queue_gateway",
+        spy_open_queue,
         raising=False,
     )
     monkeypatch.setattr(
         resources_module,
-        "build_task_store",
-        lambda settings, *, sessionmaker=None, redis=None: build_calls.append("store"),
+        "build_memory_task_store",
+        lambda: build_calls.append("store"),
         raising=False,
     )
     settings = test_settings.model_copy(
@@ -335,8 +371,7 @@ async def test_app_lifespan_honors_resource_flags(
         assert resources_open.sessionmaker is None
         assert resources_open.redis is None
         assert resources_open.queue_gateway is None
-        assert resources_open.task_store is None
-        assert resources_open.task_service is None
+        assert resources_open.tasks is None
         assert app.state.health_service is not None
 
     assert build_calls == []
@@ -376,126 +411,45 @@ def test_resource_lifecycle_uses_named_open_steps():
         "_open_redis",
         "_open_queue",
         "_open_tasks",
-        "_install_health_service",
+        "build_health_service",
     ):
         assert callable(getattr(resources_module, name))
 
 
-async def test_app_lifespan_fails_fast_when_redis_queue_backend_has_no_redis(
+async def test_openers_register_readiness_checks_with_the_configured_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+):
+    monkeypatch.setattr(resources_module, "build_engine", lambda s: _FakeEngine())
+    monkeypatch.setattr(resources_module, "build_sessionmaker", lambda e: object())
+    monkeypatch.setattr(resources_module, "build_redis_client", lambda s: _FakeRedis())
+    settings = test_settings.model_copy(
+        update={
+            "DATABASE_ENABLED": True,
+            "REDIS_ENABLED": True,
+            "QUEUE_ENABLED": False,
+            "TASKS_ENABLED": False,
+            "HEALTH_CHECK_TIMEOUT_SECONDS": 0.75,
+        }
+    )
+
+    async with resources_module.open_application_resources(
+        settings, init_resources=True
+    ) as resources:
+        service = resources_module.build_health_service(resources, init_resources=True)
+
+        assert [name for name, _ in service.checks] == ["postgres", "redis"]
+        assert service.check_timeout_seconds == 0.75
+
+
+async def test_no_readiness_checks_for_resources_that_are_not_opened(
     test_settings: Settings,
 ):
     settings = test_settings.model_copy(
-        update={
-            "QUEUE_ENABLED": True,
-            "REDIS_ENABLED": False,
-            "QUEUE_BACKEND": "redis",
-        }
+        update={"DATABASE_ENABLED": False, "REDIS_ENABLED": False}
     )
-    app = create_app(settings=settings, init_resources=True)
 
-    with pytest.raises(
-        RuntimeError, match="QUEUE_BACKEND=redis requires REDIS_ENABLED"
-    ):
-        async with app.router.lifespan_context(app):
-            pass
-
-
-async def test_app_lifespan_fails_fast_when_postgres_task_store_has_no_database(
-    test_settings: Settings,
-):
-    settings = test_settings.model_copy(
-        update={
-            "QUEUE_ENABLED": True,
-            "TASKS_ENABLED": True,
-            "DATABASE_ENABLED": False,
-            "TASK_STORE_BACKEND": "postgres",
-        }
-    )
-    app = create_app(settings=settings, init_resources=True)
-
-    with pytest.raises(
-        RuntimeError,
-        match="TASK_STORE_BACKEND=postgres requires DATABASE_ENABLED",
-    ):
-        async with app.router.lifespan_context(app):
-            pass
-
-
-@pytest.mark.parametrize(
-    ("updates", "message"),
-    [
-        (
-            {
-                "RATE_LIMIT_ENABLED": True,
-                "REDIS_ENABLED": False,
-                "RATE_LIMIT_BACKEND": "redis",
-            },
-            "RATE_LIMIT_BACKEND=redis requires REDIS_ENABLED",
-        ),
-        (
-            {
-                "REDIS_ENABLED": False,
-                "RATE_LIMIT_ENABLED": False,
-                "CACHE_ENABLED": True,
-                "CACHE_BACKEND": "redis",
-            },
-            "CACHE_BACKEND=redis requires REDIS_ENABLED",
-        ),
-        (
-            {
-                "DATABASE_ENABLED": False,
-                "IDEMPOTENCY_ENABLED": True,
-            },
-            "IDEMPOTENCY_BACKEND=postgres requires DATABASE_ENABLED",
-        ),
-        (
-            {
-                "DATABASE_ENABLED": False,
-                "OUTBOX_ENABLED": True,
-            },
-            "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
-        ),
-        (
-            {
-                "DATABASE_ENABLED": False,
-                "QUOTA_ENABLED": True,
-                "QUOTA_BACKEND": "postgres",
-            },
-            "QUOTA_BACKEND=postgres requires DATABASE_ENABLED",
-        ),
-    ],
-)
-async def test_app_lifespan_fails_fast_for_invalid_addon_backend_combinations(
-    test_settings: Settings,
-    updates: dict[str, object],
-    message: str,
-):
-    settings = test_settings.model_copy(update=updates)
-    app = create_app(settings=settings, init_resources=True)
-
-    with pytest.raises(RuntimeError, match=message):
-        async with app.router.lifespan_context(app):
-            pass
-
-
-async def test_object_s3_backend_fails_fast_without_bucket(test_settings: Settings):
-    settings = test_settings.model_copy(
-        update={
-            "OBJECTS_ENABLED": True,
-            "OBJECT_BACKEND": "s3",
-        }
-    )
-    app = create_app(settings=settings, init_resources=False)
-
-    with pytest.raises(RuntimeError, match="OBJECT_S3_BUCKET is required"):
-        async with app.router.lifespan_context(app):
-            pass
-
-
-async def test_webhooks_fail_fast_without_signing_secret(test_settings: Settings):
-    settings = test_settings.model_copy(update={"WEBHOOKS_ENABLED": True})
-    app = create_app(settings=settings, init_resources=False)
-
-    with pytest.raises(RuntimeError, match="WEBHOOK_SIGNING_SECRET is required"):
-        async with app.router.lifespan_context(app):
-            pass
+    async with resources_module.open_application_resources(
+        settings, init_resources=True
+    ) as resources:
+        assert resources.health_checks.checks == ()

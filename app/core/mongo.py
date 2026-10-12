@@ -7,6 +7,7 @@ run without Mongo support installed when ``MONGO_ENABLED=false``.
 from __future__ import annotations
 
 import importlib
+from datetime import UTC
 from typing import Any
 
 from app.core.config import Settings
@@ -21,8 +22,12 @@ def build_mongo_client(settings: Settings) -> Any:
         ) from exc
     client_cls = motor_asyncio.__dict__["AsyncIOMotorClient"]
 
+    # tz_aware: Mongo stores UTC; without it reads come back naive and break
+    # comparisons against datetime.now(UTC).
     return client_cls(
         settings.MONGODB_URI,
+        tz_aware=True,
+        tzinfo=UTC,
         connectTimeoutMS=settings.MONGODB_CONNECT_TIMEOUT_MS,
         serverSelectionTimeoutMS=settings.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
     )

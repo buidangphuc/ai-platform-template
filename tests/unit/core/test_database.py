@@ -6,7 +6,7 @@ from fastapi.params import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bootstrap.resources import ApplicationResources
-from app.core.database import DbSession, build_engine, get_db
+from app.core.database.engine import DbSession, build_engine, get_db
 from tests.factories import build_test_settings
 
 

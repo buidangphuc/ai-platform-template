@@ -1,7 +1,11 @@
+import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
-import pytest
+import httpx
 
+from app.bootstrap.addons.webhooks import WebhookAddon
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy, TimeoutPolicy
 from app.modules.messaging.webhooks.dispatcher import (
@@ -9,9 +13,8 @@ from app.modules.messaging.webhooks.dispatcher import (
     HttpWebhookDispatcher,
 )
 from app.modules.messaging.webhooks.envelope import WebhookEnvelope
-from app.modules.messaging.webhooks.factory import WebhookAddon
 from app.modules.messaging.webhooks.signing import WebhookSigner
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 
 def _settings(**overrides: object) -> Settings:
@@ -72,7 +75,9 @@ def test_webhook_retry_policy_retries_transient_statuses_only():
         max_attempts=3,
         retry_status_codes=(408, 429, 500, 502, 503, 504),
         retry_exceptions=True,
-        backoff_seconds=(1.0, 2.0, 4.0),
+        base_delay_seconds=1.0,
+        max_delay_seconds=4.0,
+        rng=lambda: 1.0,
     )
 
     assert policy.decision(attempt=1, status_code=503).should_retry
@@ -83,65 +88,100 @@ def test_webhook_retry_policy_retries_transient_statuses_only():
 
 def test_default_webhook_retry_policy_has_sensible_backoff():
     assert DEFAULT_WEBHOOK_RETRY_POLICY.max_attempts == 3
-    assert DEFAULT_WEBHOOK_RETRY_POLICY.backoff_seconds == (1.0, 5.0, 30.0)
+    assert (
+        DEFAULT_WEBHOOK_RETRY_POLICY.base_delay_seconds,
+        DEFAULT_WEBHOOK_RETRY_POLICY.max_delay_seconds,
+    ) == (1.0, 30.0)
 
 
-async def test_http_webhook_dispatcher_uses_injected_post_callable():
-    calls: list[dict[str, object]] = []
-
-    async def post(url: str, *, body: bytes, headers: dict[str, str]) -> int:
-        calls.append({"url": url, "body": body, "headers": headers})
-        return 202
-
-    signer = WebhookSigner(secret="secret", tolerance_seconds=300)
-    dispatcher = HttpWebhookDispatcher(signer=signer, post=post)
-    envelope = WebhookEnvelope(
+def _envelope() -> WebhookEnvelope:
+    return WebhookEnvelope(
         id="evt_1",
         type="generic.event",
         occurred_at=datetime.now(UTC),
         payload={"value": 1},
     )
 
-    result = await dispatcher.dispatch("https://example.test/webhooks", envelope)
+
+async def test_http_webhook_dispatcher_posts_signed_body_through_the_client():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202)
+
+    signer = WebhookSigner(secret="secret", tolerance_seconds=300)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        dispatcher = HttpWebhookDispatcher(signer=signer, client=client)
+
+        result = await dispatcher.dispatch("https://example.test/webhooks", _envelope())
 
     assert result.status_code == 202
-    assert calls[0]["url"] == "https://example.test/webhooks"
-    assert "x-webhook-signature" in calls[0]["headers"]
+    assert str(seen[0].url) == "https://example.test/webhooks"
+    assert "x-webhook-signature" in seen[0].headers
+    assert json.loads(seen[0].content)["id"] == "evt_1"
+
+
+async def test_http_webhook_dispatcher_reports_transport_errors():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    signer = WebhookSigner(secret="secret", tolerance_seconds=300)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        dispatcher = HttpWebhookDispatcher(signer=signer, client=client)
+
+        result = await dispatcher.dispatch("https://example.test/webhooks", _envelope())
+
+    assert result.status_code is None
+    assert result.error == "refused"
 
 
 async def test_http_webhook_dispatcher_applies_timeout_policy_to_send():
-    async def slow_post(url: str, *, body: bytes, headers: dict[str, str]) -> int:
-        import asyncio
-
+    async def handler(request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(0.05)
-        return 202
+        return httpx.Response(202)
 
     signer = WebhookSigner(secret="secret", tolerance_seconds=300)
-    dispatcher = HttpWebhookDispatcher(
-        signer=signer,
-        post=slow_post,
-        timeout_policy=TimeoutPolicy(timeout_seconds=0.01),
-    )
-    envelope = WebhookEnvelope(
-        id="evt_1",
-        type="generic.event",
-        occurred_at=datetime.now(UTC),
-        payload={"value": 1},
-    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        dispatcher = HttpWebhookDispatcher(
+            signer=signer,
+            client=client,
+            timeout_policy=TimeoutPolicy(timeout_seconds=0.01),
+        )
 
-    result = await dispatcher.dispatch("https://example.test/webhooks", envelope)
+        result = await dispatcher.dispatch("https://example.test/webhooks", _envelope())
 
     assert result.status_code is None
     assert result.error == "Webhook dispatch timed out"
 
 
-def test_webhook_addon_requires_secret_when_enabled():
+async def test_webhook_addon_owns_the_http_client_and_closes_it_on_the_stack():
+    resources = ApplicationResources()
+    secret = "secret"  # pragma: allowlist secret
+
+    stack = await open_addon(
+        WebhookAddon(),
+        resources,
+        _settings(WEBHOOKS_ENABLED=True, WEBHOOK_SIGNING_SECRET=secret),
+    )
+
+    assert resources.webhook_dispatcher is not None
+    client = resources.webhook_dispatcher._client
+    assert client.is_closed is False
+
+    await stack.aclose()
+
+    assert client.is_closed is True
+
+
+def test_webhook_addon_respects_enabled_flag():
     addon = WebhookAddon()
+    secret = "secret"  # pragma: allowlist secret
 
     assert addon.is_enabled(_settings(WEBHOOKS_ENABLED=False)) is False
-    assert addon.is_enabled(_settings(WEBHOOKS_ENABLED=True)) is True
-    with pytest.raises(RuntimeError, match="WEBHOOK_SIGNING_SECRET"):
-        addon.build_components(_settings(WEBHOOKS_ENABLED=True))
+    assert addon.is_enabled(
+        _settings(WEBHOOKS_ENABLED=True, WEBHOOK_SIGNING_SECRET=secret)
+    )
 
 
 def test_webhook_signer_accepts_recent_past_timestamp():

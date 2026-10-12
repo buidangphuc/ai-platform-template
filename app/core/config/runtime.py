@@ -4,16 +4,21 @@ graceful shutdown, docs toggle."""
 from __future__ import annotations
 
 from enum import StrEnum
+from hashlib import sha256
 
 from pydantic import BaseModel, Field, field_validator
 
-WEAK_AUTH_TOKENS = frozenset(
-    {
+# SHA-256 digests of the placeholder tokens shipped in examples and tests: a
+# production ``AUTH_API_KEYS`` holding one of them is a leaked default. Only
+# hashes are configured, so token length/entropy cannot be checked here.
+WEAK_AUTH_DIGESTS = frozenset(
+    sha256(token.encode()).digest()
+    for token in (
         "change-me-local-bearer-token",
         "test-token",
         "local-token",
         "dev-token",
-    }
+    )
 )
 
 
@@ -46,8 +51,11 @@ class RuntimeSettingsMixin(BaseModel):
     LOG_JSON: bool = False
     LOG_ENQUEUE: bool = False
 
-    GRACEFUL_SHUTDOWN_ENABLED: bool = False
+    GRACEFUL_SHUTDOWN_ENABLED: bool = True
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: int = Field(default=30, ge=0)
+    # Seconds ``python -m app.serve`` keeps serving after SIGTERM with /readyz at
+    # 503, so load balancers stop routing before the listener closes. 0 disables.
+    SHUTDOWN_READINESS_DELAY_SECONDS: float = Field(default=5, ge=0)
 
     @field_validator("ENVIRONMENT", mode="before")
     @classmethod

@@ -6,12 +6,15 @@ from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 
 from app.api.router import build_api_router
-from app.bootstrap.addons import BootstrapAddon, default_resource_addons
+from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
 from app.bootstrap.middleware import install_core_middlewares
-from app.bootstrap.resources import (
-    ApplicationResources,
-    close_application_resources,
-    open_application_resources,
+from app.bootstrap.resources import ApplicationResources, build_health_service
+from app.bootstrap.services import (
+    CompletionGuardsFactory,
+    CompletionHandlerFactory,
+    default_completion_guards_factory,
+    default_completion_handler_factory,
+    open_runtime,
 )
 from app.bootstrap.state import get_in_flight_tracker
 from app.core.config import Settings, get_settings
@@ -19,14 +22,18 @@ from app.core.errors import register_exception_handlers
 from app.core.health import HealthService
 from app.core.logging import configure_logging
 from app.core.middleware import InFlightTracker
-from app.modules.business.completions.pipeline import CompletionPipeline
-from app.modules.business.completions.ports import CompletionHandler
+from app.core.telemetry import require_otel
 
 
 def create_app(
     *,
     settings: Settings | None = None,
-    completion_handler: CompletionHandler | None = None,
+    completion_handler_factory: CompletionHandlerFactory = (
+        default_completion_handler_factory
+    ),
+    completion_guards_factory: CompletionGuardsFactory = (
+        default_completion_guards_factory
+    ),
     init_resources: bool = True,
     resource_addons: tuple[BootstrapAddon, ...] = (),
 ) -> FastAPI:
@@ -48,6 +55,8 @@ def create_app(
             resolved_settings,
             init_resources=init_resources,
             addons=addons,
+            completion_handler_factory=completion_handler_factory,
+            completion_guards_factory=completion_guards_factory,
         ),
         docs_url=docs_url,
         redoc_url=redoc_url,
@@ -59,13 +68,12 @@ def create_app(
     app.state.in_flight_tracker = (
         InFlightTracker() if resolved_settings.GRACEFUL_SHUTDOWN_ENABLED else None
     )
-    resources = ApplicationResources()
-    if completion_handler is not None:
-        resources.completion_pipeline = CompletionPipeline(completion_handler)
-    app.state.resources = resources
+    app.state.resources = ApplicationResources()
     install_core_middlewares(app, resolved_settings)
     register_exception_handlers(app)
     app.include_router(build_api_router(resolved_settings))
+    if resolved_settings.OTEL_ENABLED:
+        _instrument_fastapi(app)
     return app
 
 
@@ -74,22 +82,33 @@ def _build_lifespan(
     *,
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
+    completion_handler_factory: CompletionHandlerFactory,
+    completion_guards_factory: CompletionGuardsFactory,
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        try:
-            await open_application_resources(
-                app,
-                settings,
+        async with open_runtime(
+            settings,
+            init_resources=init_resources,
+            addons=addons,
+            completion_handler_factory=completion_handler_factory,
+            completion_guards_factory=completion_guards_factory,
+        ) as resources:
+            app.state.resources = resources
+            health_service = build_health_service(
+                resources,
                 init_resources=init_resources,
-                addons=addons,
             )
-            yield
-        finally:
-            await _drain_in_flight(app, settings.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
-            if init_resources and settings.LANGFUSE_ENABLED:
-                await asyncio.to_thread(_flush_langfuse_client)
-            await close_application_resources(app)
+            app.state.health_service = health_service
+            try:
+                yield
+            finally:
+                health_service.begin_draining()
+                await _drain_in_flight(app, settings.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
+                if init_resources and settings.LANGFUSE_ENABLED:
+                    await asyncio.to_thread(_flush_langfuse_client)
+        app.state.resources = ApplicationResources()
+        app.state.health_service = HealthService(check_external_dependencies=False)
 
     return lifespan
 
@@ -108,6 +127,13 @@ def _flush_langfuse_client() -> None:
         from langfuse import get_client
     except ImportError:
         return
-    client = get_client()
-    if client is not None and hasattr(client, "flush"):
-        client.flush()
+    get_client().flush()
+
+
+def _instrument_fastapi(app: FastAPI) -> None:
+    # Needs the app object, so it cannot live in the addon; the providers the
+    # addon installs globally at startup are picked up lazily.
+    require_otel()
+    from app.core.telemetry_otel import instrument_fastapi
+
+    instrument_fastapi(app)
