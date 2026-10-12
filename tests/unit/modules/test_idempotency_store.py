@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.bootstrap.addons.idempotency import IdempotencyAddon
 from app.core.config import Settings
@@ -44,13 +46,15 @@ class _FakeSession:
         self.insert_inserted_id = insert_inserted_id
         self.existing = existing
         self.flushed = False
-        self.execute_calls: list[object] = []
+        self.execute_calls: list[Any] = []
+        self.scalar_statements: list[Any] = []
 
     async def execute(self, statement):
         self.execute_calls.append(statement)
         return _InsertResult(self.insert_inserted_id)
 
     async def scalar(self, statement):
+        self.scalar_statements.append(statement)
         return self.existing
 
     async def flush(self):
@@ -218,28 +222,65 @@ async def test_check_or_store_reclaims_stuck_in_progress_record():
     assert stuck.response_body is None
 
 
-async def test_store_idempotency_response_marks_record_completed():
-    record = IdempotencyKey(
-        key="job-1",
-        principal_id="svc-local",
-        request_hash="hash",
-        status="in_progress",
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-    session = _FakeSession(existing=record)
+async def test_store_idempotency_response_is_a_fenced_update():
+    session = _FakeSession(insert_inserted_id="id-1")
 
-    await store_idempotency_response(
+    stored = await store_idempotency_response(
         session,
         key="job-1",
         principal_id="svc-local",
+        request_hash="hash",
         status_code=201,
         response_body={"id": "created"},
     )
 
-    assert record.status == "completed"
-    assert record.response_status_code == 201
-    assert record.response_body == {"id": "created"}
+    sql = str(session.execute_calls[0].compile(dialect=postgresql.dialect()))
+    assert stored is True
     assert session.flushed is True
+    assert "request_hash = %(request_hash_1)s" in sql
+    assert "status = %(status_1)s" in sql
+    assert "RETURNING" in sql
+
+
+async def test_store_idempotency_response_reports_fenced_off_write():
+    session = _FakeSession(insert_inserted_id=None)
+
+    stored = await store_idempotency_response(
+        session,
+        key="job-1",
+        principal_id="svc-local",
+        request_hash="stale-hash",
+        status_code=201,
+        response_body={"id": "created"},
+    )
+
+    assert stored is False
+
+
+async def test_conflict_path_reads_the_record_under_a_row_lock():
+    now = datetime(2026, 5, 23, 10, 0, tzinfo=UTC)
+    stuck = IdempotencyKey(
+        key="job-1",
+        principal_id="svc-local",
+        request_hash="old",
+        status="in_progress",
+        expires_at=now + timedelta(hours=1),
+    )
+    stuck.updated_at = now - timedelta(hours=1)
+    session = _FakeSession(insert_inserted_id=None, existing=stuck)
+
+    await check_or_store_idempotency_key(
+        session,
+        key="job-1",
+        principal_id="svc-local",
+        request_hash="new",
+        expires_at=now + timedelta(hours=2),
+        in_progress_timeout_seconds=60,
+        now=lambda: now,
+    )
+
+    assert session.scalar_statements[-1]._for_update_arg is not None
+    assert stuck.updated_at == now
 
 
 async def test_delete_expired_returns_row_count():
@@ -272,7 +313,7 @@ def test_build_idempotency_store_uses_postgres_adapter():
     )
 
     assert isinstance(store, PostgresIdempotencyStore)
-    assert store.in_progress_timeout_seconds == 60
+    assert store.in_progress_timeout_seconds == 600
 
 
 def test_idempotency_addon_respects_enabled_flag():

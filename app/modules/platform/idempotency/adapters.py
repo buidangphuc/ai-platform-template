@@ -48,14 +48,16 @@ class PostgresIdempotencyStore:
         *,
         key: str,
         principal_id: str,
+        request_hash: str,
         status_code: int,
         response_body: Mapping[str, Any],
-    ) -> None:
+    ) -> bool:
         async with self.sessionmaker() as session, session.begin():
-            await store_idempotency_response(
+            return await store_idempotency_response(
                 session,
                 key=key,
                 principal_id=principal_id,
+                request_hash=request_hash,
                 status_code=status_code,
                 response_body=response_body,
             )

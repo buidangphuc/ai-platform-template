@@ -27,9 +27,12 @@ class IdempotencyStore(Protocol):
         *,
         key: str,
         principal_id: str,
+        request_hash: str,
         status_code: int,
         response_body: Mapping[str, Any],
-    ) -> None: ...
+    ) -> bool:
+        """Complete the claim; ``False`` when it was fenced off (reclaimed/completed)."""
+        ...
 
     async def delete_expired(self, *, before: datetime) -> int: ...
 

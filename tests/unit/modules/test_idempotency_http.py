@@ -3,11 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.modules.platform.idempotency.http import (
+    IdempotentCall,
     get_idempotency_key,
     replay_or_start_idempotent_request,
     store_idempotent_response,
@@ -106,17 +108,23 @@ class _FakeIdempotencyStore:
         *,
         key: str,
         principal_id: str,
+        request_hash: str,
         status_code: int,
         response_body: dict,
-    ) -> None:
+    ) -> bool:
         self.store_calls.append(
             {
                 "key": key,
                 "principal_id": principal_id,
+                "request_hash": request_hash,
                 "status_code": status_code,
                 "response_body": response_body,
             }
         )
+        return True
+
+    async def delete_expired(self, *, before: datetime) -> int:
+        return 0
 
     async def close(self) -> None:
         return None
@@ -160,7 +168,7 @@ async def test_idempotency_boundary_replays_cached_response():
         expires_at=datetime(2026, 5, 22, tzinfo=UTC),
     )
 
-    assert response is not None
+    assert isinstance(response, JSONResponse)
     assert response.status_code == 202
     assert response.body == b'{"task_id":"t1"}'
     assert request.state.idempotency_key == "job-1"
@@ -174,19 +182,20 @@ async def test_idempotency_boundary_stores_success_response_after_start():
         app=_app_with_idempotency(store),
     )
 
-    response = await replay_or_start_idempotent_request(
+    call = await replay_or_start_idempotent_request(
         request,
         principal_id="user-1",
         body=b'{"input":"hello"}',
         expires_at=expires_at,
     )
-    await store_idempotent_response(
-        request,
+    assert isinstance(call, IdempotentCall)
+    stored = await store_idempotent_response(
+        call,
         status_code=201,
         response_body={"id": "created"},
     )
 
-    assert response is None
+    assert stored is True
     assert store.check_calls[0]["key"] == "job-1"
     assert store.check_calls[0]["principal_id"] == "user-1"
     assert store.check_calls[0]["expires_at"] == expires_at
@@ -194,6 +203,7 @@ async def test_idempotency_boundary_stores_success_response_after_start():
         {
             "key": "job-1",
             "principal_id": "user-1",
+            "request_hash": store.check_calls[0]["request_hash"],
             "status_code": 201,
             "response_body": {"id": "created"},
         }

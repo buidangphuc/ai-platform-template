@@ -54,7 +54,10 @@ class PlatformSettingsMixin(BaseModel):
     IDEMPOTENCY_ENABLED: bool = False
     IDEMPOTENCY_BACKEND: IdempotencyBackend = "postgres"
     IDEMPOTENCY_TTL_SECONDS: int = Field(default=86_400, gt=0)
-    IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS: int = Field(default=60, gt=0)
+    # Must exceed the slowest handler (LLM calls can take minutes): an
+    # in-progress record older than this is reclaimed and the handler re-runs.
+    # The age is measured from the claim, it is never refreshed.
+    IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS: int = Field(default=600, gt=0)
     IDEMPOTENCY_KEY_MAX_LENGTH: int = Field(default=64, gt=0)
 
     # Durable quota / entitlement counters

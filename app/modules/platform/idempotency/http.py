@@ -24,10 +24,13 @@ IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 
 
 @dataclass(frozen=True, slots=True)
-class IdempotencyRequestState:
+class IdempotentCall:
+    """Handle for a claimed key; pass it to ``store_idempotent_response``."""
+
     key: str
     principal_id: str
     request_hash: str
+    store: IdempotencyStore
 
 
 def get_idempotency_key(request: Request) -> str | None:
@@ -61,7 +64,14 @@ async def replay_or_start_idempotent_request(
     principal_id: str,
     body: bytes,
     expires_at: datetime,
-) -> JSONResponse | None:
+) -> JSONResponse | IdempotentCall | None:
+    """Claim the request's key.
+
+    Returns ``None`` when no ``Idempotency-Key`` header is present, a
+    ``JSONResponse`` to return as-is when a completed response is replayed, or
+    an ``IdempotentCall`` once the key is claimed (run the handler, then pass
+    the call to ``store_idempotent_response``).
+    """
     idempotency_key = get_idempotency_key(request)
     if idempotency_key is None:
         return None
@@ -79,29 +89,27 @@ async def replay_or_start_idempotent_request(
         request_hash=request_hash,
         expires_at=expires_at,
     )
-    request.state.idempotency_request = IdempotencyRequestState(
+    if cached is not None:
+        return JSONResponse(status_code=cached.status_code, content=cached.body)
+    return IdempotentCall(
         key=idempotency_key,
         principal_id=principal_id,
         request_hash=request_hash,
+        store=store,
     )
-    if cached is None:
-        return None
-    return JSONResponse(status_code=cached.status_code, content=cached.body)
 
 
 async def store_idempotent_response(
-    request: Request,
+    call: IdempotentCall,
     *,
     status_code: int,
     response_body: Mapping[str, Any],
-) -> None:
-    state = getattr(request.state, "idempotency_request", None)
-    if state is None:
-        return
-    store = _require_enabled_store(request)
-    await store.store_response(
-        key=state.key,
-        principal_id=state.principal_id,
+) -> bool:
+    """Cache the response; ``False`` if the claim was reclaimed meanwhile."""
+    return await call.store.store_response(
+        key=call.key,
+        principal_id=call.principal_id,
+        request_hash=call.request_hash,
         status_code=status_code,
         response_body=response_body,
     )

@@ -1,9 +1,9 @@
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,7 +66,9 @@ async def check_or_store_idempotency_key(
     if inserted:
         return None
 
-    record = await _find_record(db, key=key, principal_id=principal_id)
+    # Row lock: concurrent retries of an expired/stuck key serialize here, so
+    # only the first one reclaims it; the rest re-read the refreshed record.
+    record = await _find_record(db, key=key, principal_id=principal_id, for_update=True)
     if record is None:
         raise AppError(
             code="idempotency_internal_error",
@@ -79,7 +81,12 @@ async def check_or_store_idempotency_key(
     if record.expires_at <= current_now or _is_stuck_in_progress(
         record, now=current_now, timeout_seconds=in_progress_timeout_seconds
     ):
-        _reset_expired_record(record, request_hash=request_hash, expires_at=expires_at)
+        _reset_expired_record(
+            record,
+            request_hash=request_hash,
+            expires_at=expires_at,
+            now=current_now,
+        )
         await db.flush()
         return None
 
@@ -108,17 +115,35 @@ async def store_idempotency_response(
     *,
     key: str,
     principal_id: str,
+    request_hash: str,
     status_code: int,
     response_body: Mapping[str, Any],
-) -> None:
-    record = await _find_record(db, key=key, principal_id=principal_id)
-    if record is None:
-        raise ValueError("Idempotency record does not exist")
+) -> bool:
+    """Complete the record only if it is still the caller's in-progress claim.
 
-    record.status = "completed"
-    record.response_status_code = status_code
-    record.response_body = dict(response_body)
+    The fence (``request_hash`` and ``status = 'in_progress'``) stops a late
+    original request from overwriting a record that was reclaimed for a
+    different request or already completed. Returns ``False`` when the fence
+    rejected the write (the stored response is left untouched).
+    """
+    statement = (
+        update(IdempotencyKey)
+        .where(
+            IdempotencyKey.key == key,
+            IdempotencyKey.principal_id == principal_id,
+            IdempotencyKey.request_hash == request_hash,
+            IdempotencyKey.status == "in_progress",
+        )
+        .values(
+            status="completed",
+            response_status_code=status_code,
+            response_body=dict(response_body),
+        )
+        .returning(IdempotencyKey.id)
+    )
+    completed = (await db.execute(statement)).scalar_one_or_none() is not None
     await db.flush()
+    return completed
 
 
 async def delete_expired_idempotency_keys(
@@ -130,7 +155,7 @@ async def delete_expired_idempotency_keys(
     statement = delete(IdempotencyKey).where(IdempotencyKey.expires_at < before)
     result = await db.execute(statement)
     await db.flush()
-    return result.rowcount or 0
+    return cast(CursorResult[Any], result).rowcount
 
 
 async def _try_insert(
@@ -170,11 +195,14 @@ async def _find_record(
     *,
     key: str,
     principal_id: str,
+    for_update: bool = False,
 ) -> IdempotencyKey | None:
     statement = select(IdempotencyKey).where(
         IdempotencyKey.key == key,
         IdempotencyKey.principal_id == principal_id,
     )
+    if for_update:
+        statement = statement.with_for_update()
     return await db.scalar(statement)
 
 
@@ -194,9 +222,11 @@ def _reset_expired_record(
     *,
     request_hash: str,
     expires_at: datetime,
+    now: datetime,
 ) -> None:
     record.request_hash = request_hash
     record.status = "in_progress"
     record.response_status_code = None
     record.response_body = None
     record.expires_at = expires_at
+    record.updated_at = now
