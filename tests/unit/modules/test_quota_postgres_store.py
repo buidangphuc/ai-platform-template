@@ -18,7 +18,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.database import Base
+from app.core.database.model import Base
 from app.modules.platform.quota.adapters.postgres import PostgresQuotaStore
 from app.modules.platform.quota.models import ReserveQuota
 from app.modules.platform.quota.records import QuotaCounter, QuotaReservationRecord
