@@ -119,7 +119,7 @@ async def test_access_log_records_request_context(caplog):
     assert any("path=/api/v1/completions" in message for message in messages)
     assert any("status=200" in message for message in messages)
     assert any("request_id=req-log" in message for message in messages)
-    assert any("principal=local-user" in message for message in messages)
+    assert any("principal=test-user" in message for message in messages)
 
 
 async def test_security_headers_are_disabled_by_default():

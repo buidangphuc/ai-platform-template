@@ -10,7 +10,7 @@ This repository currently covers the local application foundation:
 - Pydantic settings and `.env` workflow.
 - Health/readiness endpoints.
 - Request ID middleware, logging context, and standard error envelope.
-- Static Bearer token authentication.
+- API-key Bearer authentication (hashed keys, per-client principals) and per-owner task access.
 - Central application composition root for project services that are built from
   platform resources.
 - Lean product primitives: per-concern request dependencies, explicit DB
@@ -64,7 +64,7 @@ Useful endpoints:
 - `POST /api/v1/completions/stream`
 
 All `/api/v1/*` platform endpoints except health checks require
-`Authorization: Bearer <AUTH_BEARER_TOKEN>`.
+`Authorization: Bearer <api-key>` (see [Bearer Auth](#bearer-auth)).
 
 The completions endpoints are intentionally thin transport skeletons. They
 accept chat messages, call an injected `CompletionHandler`, and return either
@@ -137,7 +137,7 @@ app/
       tasks/            Durable async task dispatch
       webhooks/         Outbound webhook delivery
     platform/
-      identity/         Static Bearer principal and auth dependency
+      identity/         API-key principal and auth dependency
       audit/            Product audit events for actor/resource/action history
       idempotency/      Concrete idempotency-key persistence helpers
       rate_limit/       Rate limit service contracts and implementations
@@ -175,14 +175,12 @@ LlamaIndex services where it actually needs them.
 The values below are what `.env.example` ships for the local golden path — they
 are **not** the code defaults. In code every capability `*_ENABLED` flag
 defaults to `false` (`LANGFUSE_ENABLED` included, `app/core/config/ai.py`),
-`AUTH_BEARER_TOKEN` defaults to `""`, and `LANGFUSE_BASE_URL` defaults to
+`AUTH_API_KEYS` defaults to `""` (no keys, no implicit admin), and `LANGFUSE_BASE_URL` defaults to
 `https://cloud.langfuse.com`. `.env.example` pre-enables Langfuse with dummy
 local keys only so `make docker-run-langfuse` works out of the box.
 
 - `CHAT_MODEL=`
-- `AUTH_BEARER_TOKEN=change-me-local-bearer-token`
-- `AUTH_SUBJECT=local-user`
-- `AUTH_ROLES=admin`
+- `AUTH_API_KEYS=local-user:admin:<sha256 of change-me-local-bearer-token>`
 - `MONGO_ENABLED=false`
 - `IDEMPOTENCY_ENABLED=false`
 - `CORS_ALLOW_ORIGINS=*`
@@ -336,19 +334,40 @@ readiness checks.
 
 ## Bearer Auth
 
-Set `AUTH_BEARER_TOKEN` in `.env`, then call a protected endpoint with:
+Clients authenticate with an API key sent as `Authorization: Bearer <token>`.
+The server stores only SHA-256 digests, in `AUTH_API_KEYS`: comma-separated
+entries of
+
+```
+subject:scope|scope:sha256hex      # e.g. billing-svc:tasks:read|tasks:write:3f2a...c9
+```
+
+(`subject` is everything before the first `:`, the digest everything after the
+last; scopes may contain `:` and may be empty, which grants nothing.)
 
 ```bash
+python -m scripts.hash_api_key --generate   # prints a random token and its digest
+# AUTH_API_KEYS=billing-svc:admin:<digest>
 curl -X POST http://localhost:8000/api/v1/completions \
-  -H "Authorization: Bearer $AUTH_BEARER_TOKEN" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-The template intentionally does not create users, passwords, sessions, or API
-key tables. `AUTH_SUBJECT` and `AUTH_ROLES` (`app/core/config/platform.py`)
-define the `Principal` built by `require_principal`
-(`app/modules/platform/identity/auth.py`) as
-`{"id": "...", "type": "service", "scopes": [...]}`, which guards every
-`/api/v1/completions*` route. There is no `/auth/me` endpoint — its absence is
+Tokens must be randomly generated (the digest is unsalted, so a guessable token
+is brute-forceable from a leaked config). The presented token's digest is
+compared in constant time against every entry.
+
+**Rotation (overlap).** Several entries may share a subject. Add a second entry
+for the same subject, roll the client over to the new token, then remove the old
+entry. The principal (`subject`) is unchanged throughout, so rate limits, audit
+and task ownership carry over.
+
+The subject is the principal id: per-principal rate limiting is therefore
+per-client, and `GET /api/v1/completions/tasks/{id}` returns a task only to the
+principal that submitted it (404 otherwise). The `Principal` built by
+`require_principal` (`app/modules/platform/identity/auth.py`) is
+`{"id": subject, "type": "service", "scopes": [...]}` and guards every
+`/api/v1/completions*` route. The template intentionally does not create users,
+passwords, sessions, or key-management tables. There is no `/auth/me` endpoint — its absence is
 pinned by `tests/unit/core/test_application_wiring.py`.

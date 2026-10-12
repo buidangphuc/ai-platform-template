@@ -39,7 +39,7 @@ services:
       - .env
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-dev}
-      AUTH_BEARER_TOKEN: ${AUTH_BEARER_TOKEN:-change-me-local-bearer-token}
+      AUTH_API_KEYS: "${AUTH_API_KEYS:-local-user:admin:2a61522f4af871304802321c6a35fcf5d0aa49e2d9dc4aedf9cf1c7fdb78b906}"
       # Standard stack: database + redis + async tasks (see x-task-env).
       <<: *task-env
     ports:
@@ -63,7 +63,7 @@ services:
       - .env
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-dev}
-      AUTH_BEARER_TOKEN: ${AUTH_BEARER_TOKEN:-change-me-local-bearer-token}
+      AUTH_API_KEYS: "${AUTH_API_KEYS:-local-user:admin:2a61522f4af871304802321c6a35fcf5d0aa49e2d9dc4aedf9cf1c7fdb78b906}"
       <<: *task-env
     healthcheck:
       disable: true  # the image's HTTP healthcheck targets the api

@@ -50,6 +50,28 @@ class TaskStoreConformance:
         assert fetched.status == TaskStatus.QUEUED
         assert fetched.payload == {"prompt": "hello"}
 
+    async def test_principal_id_round_trips(self, store: TaskStore):
+        task = _make_task(principal_id="alice")
+        await store.create(task)
+
+        fetched = await store.get(task.id)
+        assert fetched is not None
+        assert fetched.principal_id == "alice"
+
+    async def test_get_scoped_to_principal_hides_other_owners_tasks(
+        self, store: TaskStore
+    ):
+        task = _make_task(principal_id="alice")
+        await store.create(task)
+
+        mine = await store.get(task.id, principal_id="alice")
+        theirs = await store.get(task.id, principal_id="mallory")
+        worker = await store.get(task.id)
+
+        assert mine is not None and mine.id == task.id
+        assert theirs is None
+        assert worker is not None  # unscoped (worker) reads see every task
+
     async def test_get_returns_none_for_unknown_id(self, store: TaskStore):
         assert await store.get("does-not-exist") is None
 

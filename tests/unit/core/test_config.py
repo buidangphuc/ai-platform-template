@@ -4,7 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
-from tests.factories import build_test_settings
+from tests.factories import api_key_entry, build_test_settings, sha256_hex
+
+PROD_KEYS = api_key_entry("svc", "prod-token-with-enough-entropy", "admin")
 
 
 def test_settings_defaults_are_local_safe():
@@ -41,8 +43,6 @@ def test_settings_defaults_are_local_safe():
     assert settings.SECURITY_HSTS_MAX_AGE_SECONDS == 31536000
     assert settings.CHAT_FALLBACK_MODELS == ""
     assert settings.JUDGE_CHAT_MODEL == ""
-    assert settings.AUTH_SUBJECT == "local-user"
-    assert settings.auth_roles == ["admin"]
     assert "API_KEY_PEPPER" not in Settings.model_fields
     assert "API_KEY_BOOTSTRAP_TOKEN" not in Settings.model_fields
 
@@ -50,14 +50,13 @@ def test_settings_defaults_are_local_safe():
 def test_settings_redacts_secret_values():
     settings = build_test_settings(
         REDIS_PASSWORD="redis-secret",  # pragma: allowlist secret
-        AUTH_BEARER_TOKEN="bearer-secret",  # pragma: allowlist secret
         LANGFUSE_SECRET_KEY="langfuse-secret",  # pragma: allowlist secret
     )
 
     summary = settings.redacted_summary()
 
     assert summary["REDIS_PASSWORD"] == "***"
-    assert summary["AUTH_BEARER_TOKEN"] == "***"
+    assert summary["AUTH_API_KEYS"] == "***"
     assert summary["LANGFUSE_SECRET_KEY"] == "***"
     assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
@@ -145,16 +144,54 @@ def test_cache_and_webhook_settings_are_validated():
         build_test_settings(WEBHOOK_TIMEOUT_SECONDS=0)
 
 
-def test_auth_bearer_token_is_required_outside_dev_and_test():
-    with pytest.raises(ValidationError):
-        build_test_settings(ENVIRONMENT="prod", AUTH_BEARER_TOKEN="")
+def test_auth_api_keys_are_required_outside_dev_and_test():
+    with pytest.raises(ValidationError, match="AUTH_API_KEYS"):
+        build_test_settings(ENVIRONMENT="prod", AUTH_API_KEYS="")
+
+
+def test_auth_api_keys_are_parsed_into_subject_scopes_and_digest():
+    settings = build_test_settings(
+        AUTH_API_KEYS=", ".join(
+            (
+                api_key_entry("alice", "t1", "tasks:read", "admin"),
+                api_key_entry("bob", "t2"),
+            )
+        )
+    )
+
+    alice, bob = settings.auth_api_keys
+    assert (alice.subject, alice.scopes) == ("alice", ("tasks:read", "admin"))
+    assert alice.digest == bytes.fromhex(sha256_hex("t1"))
+    assert (bob.subject, bob.scopes) == ("bob", ())
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "alice",  # no fields
+        "alice:admin",  # no digest
+        ":admin:" + "a" * 64,  # empty subject
+        "alice:admin:nothex" + "0" * 57,  # digest not hex
+        "alice:admin:" + "a" * 63,  # digest wrong length
+    ],
+)
+def test_malformed_auth_api_keys_fail_fast(bad):
+    with pytest.raises(ValidationError, match="AUTH_API_KEYS"):
+        build_test_settings(AUTH_API_KEYS=bad)
+
+
+def test_auth_api_keys_default_to_no_keys_and_no_scopes():
+    settings = build_test_settings(AUTH_API_KEYS="")
+
+    assert settings.auth_api_keys == ()
+    assert Settings.model_fields["AUTH_API_KEYS"].default == ""
 
 
 def test_production_rejects_openapi_docs():
     with pytest.raises(ValidationError, match="DOCS_ENABLED must be false"):
         build_test_settings(
             ENVIRONMENT="prod",
-            AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
+            AUTH_API_KEYS=PROD_KEYS,
             DOCS_ENABLED=True,
             CORS_ALLOW_ORIGINS="https://app.example.com",
             TRUSTED_HOSTS="api.example.com",
@@ -165,7 +202,7 @@ def test_production_rejects_wildcard_cors_and_trusted_hosts():
     for field in ("CORS_ALLOW_ORIGINS", "TRUSTED_HOSTS"):
         values = {
             "ENVIRONMENT": "prod",
-            "AUTH_BEARER_TOKEN": "prod-token-with-enough-entropy",
+            "AUTH_API_KEYS": PROD_KEYS,
             "DOCS_ENABLED": False,
             "CORS_ALLOW_ORIGINS": "https://app.example.com",
             "TRUSTED_HOSTS": "api.example.com",
@@ -175,12 +212,12 @@ def test_production_rejects_wildcard_cors_and_trusted_hosts():
             build_test_settings(**values)
 
 
-def test_production_rejects_default_or_weak_auth_tokens():
-    for token in ("change-me-local-bearer-token", "short-token"):
-        with pytest.raises(ValidationError, match="AUTH_BEARER_TOKEN"):
+def test_production_rejects_api_keys_hashing_a_known_weak_token():
+    for token in ("change-me-local-bearer-token", "test-token"):
+        with pytest.raises(ValidationError, match="AUTH_API_KEYS"):
             build_test_settings(
                 ENVIRONMENT="prod",
-                AUTH_BEARER_TOKEN=token,  # pragma: allowlist secret
+                AUTH_API_KEYS=api_key_entry("svc", token, "admin"),
                 DOCS_ENABLED=False,
                 CORS_ALLOW_ORIGINS="https://app.example.com",
                 TRUSTED_HOSTS="api.example.com",
@@ -190,19 +227,13 @@ def test_production_rejects_default_or_weak_auth_tokens():
 def test_production_accepts_locked_down_runtime_settings():
     settings = build_test_settings(
         ENVIRONMENT="production",
-        AUTH_BEARER_TOKEN="prod-token-with-enough-entropy",
+        AUTH_API_KEYS=PROD_KEYS,
         DOCS_ENABLED=False,
         CORS_ALLOW_ORIGINS="https://app.example.com",
         TRUSTED_HOSTS="api.example.com",
     )
 
     assert settings.ENVIRONMENT == "production"
-
-
-def test_auth_roles_are_parsed_from_comma_separated_string():
-    settings = build_test_settings(AUTH_ROLES="admin, developer, , viewer")
-
-    assert settings.auth_roles == ["admin", "developer", "viewer"]
 
 
 def test_cors_and_trusted_hosts_are_parsed_from_comma_separated_strings():
@@ -237,8 +268,8 @@ def test_env_example_includes_app_settings_defaults():
     assert public_key_line in env_example
     assert secret_key_line in env_example
     assert "LANGFUSE_BASE_URL=http://localhost:3000" in env_example
-    assert "AUTH_BEARER_TOKEN=change-me-local-bearer-token" in env_example
-    assert "AUTH_SUBJECT=local-user" in env_example
+    assert "AUTH_API_KEYS=local-user:admin:" in env_example
+    assert "AUTH_BEARER_TOKEN" not in env_example
     assert "CHAT_MODEL=" in env_example
     assert "CORS_ALLOW_ORIGINS=*" in env_example
     assert "TRUSTED_HOSTS=*" in env_example

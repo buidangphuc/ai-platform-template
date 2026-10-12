@@ -12,7 +12,7 @@ instead of, the template skill.
 
 ## 0. Fork checklist
 
-1. Clone/fork, then `cp .env.example .env` and set `AUTH_BEARER_TOKEN`.
+1. Clone/fork, then `cp .env.example .env` and set `AUTH_API_KEYS` (hash tokens with `python -m scripts.hash_api_key --generate`).
 2. `make dev` → `curl localhost:8000/healthz` — you have a running core.
 3. Rename the project in `pyproject.toml` + `PROJECT_NAME` default.
 4. Delete what you won't use: `app/modules/ai/` (and the `[ai]` extra) if the

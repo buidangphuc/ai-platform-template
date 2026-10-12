@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Literal, Self
 
 from pydantic import BaseModel, Field, computed_field, model_validator
@@ -13,6 +15,43 @@ IdempotencyBackend = Literal["postgres"]
 QuotaBackend = Literal["memory", "postgres", "mongo"]
 
 
+@dataclass(frozen=True)
+class ApiKey:
+    """One configured API key: who it authenticates as and the SHA-256 of the token."""
+
+    subject: str
+    scopes: tuple[str, ...]
+    digest: bytes
+
+
+@lru_cache(maxsize=8)
+def parse_api_keys(raw: str) -> tuple[ApiKey, ...]:
+    """Parse ``AUTH_API_KEYS``: comma-separated ``subject:scope|scope:sha256hex``.
+
+    The subject is everything before the first ``:``, the digest everything after
+    the last one, so scopes may themselves contain ``:`` (``tasks:read``).
+    Cached by the raw string, so a ``model_copy`` with new keys never goes stale.
+    """
+    keys: list[ApiKey] = []
+    for entry in (part.strip() for part in raw.split(",")):
+        if not entry:
+            continue
+        fields = entry.split(":")
+        subject, scopes_part, digest_hex = fields[0], ":".join(fields[1:-1]), fields[-1]
+        try:
+            digest = bytes.fromhex(digest_hex)
+        except ValueError:
+            digest = b""
+        if len(fields) < 3 or not subject.strip() or len(digest) != 32:
+            raise ValueError(
+                "AUTH_API_KEYS entries must look like "
+                "'subject:scope|scope:sha256hex' (64 hex chars; scopes may be empty)"
+            )
+        scopes = tuple(s.strip() for s in scopes_part.split("|") if s.strip())
+        keys.append(ApiKey(subject=subject.strip(), scopes=scopes, digest=digest))
+    return tuple(keys)
+
+
 class PlatformSettingsMixin(BaseModel):
     # Backing-service flags owned by the infra / mongo mixins; re-declared here
     # (same type and default) so the cross-setting rules below can read them.
@@ -21,9 +60,10 @@ class PlatformSettingsMixin(BaseModel):
     MONGO_ENABLED: bool = False
 
     # Auth / identity
-    AUTH_BEARER_TOKEN: str = ""
-    AUTH_SUBJECT: str = "local-user"
-    AUTH_ROLES: str = "admin"
+    # Comma-separated ``subject:scope|scope:sha256hex`` entries (see parse_api_keys).
+    # Several entries may share a subject (overlap rotation). Hash tokens with
+    # ``python -m scripts.hash_api_key``.
+    AUTH_API_KEYS: str = ""
 
     # Rate limit (2 layers: IP + principal)
     RATE_LIMIT_ENABLED: bool = False
@@ -104,10 +144,14 @@ class PlatformSettingsMixin(BaseModel):
                 raise ValueError(message)
         return self
 
-    @computed_field
+    @model_validator(mode="after")
+    def _validate_api_keys(self) -> Self:
+        parse_api_keys(self.AUTH_API_KEYS)  # a bad entry fails at boot
+        return self
+
     @property
-    def auth_roles(self) -> list[str]:
-        return [v.strip() for v in self.AUTH_ROLES.split(",") if v.strip()]
+    def auth_api_keys(self) -> tuple[ApiKey, ...]:
+        return parse_api_keys(self.AUTH_API_KEYS)
 
     @computed_field
     @property

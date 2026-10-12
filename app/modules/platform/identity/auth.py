@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -7,6 +8,7 @@ from fastapi.security.utils import get_authorization_scheme_param
 
 from app.bootstrap.state import get_app_resources, get_app_settings
 from app.core.config import Settings
+from app.core.config.platform import ApiKey
 from app.core.errors import ForbiddenError, RateLimitError, UnauthorizedError
 from app.modules.platform.identity.schemas import Principal
 
@@ -16,9 +18,10 @@ async def authenticate_bearer_token(
     *,
     settings: Settings,
 ) -> Principal:
-    if not settings.AUTH_BEARER_TOKEN:
+    keys = settings.auth_api_keys
+    if not keys:
         raise ForbiddenError(
-            "Bearer token authentication is not configured",
+            "API key authentication is not configured",
             code="auth_not_configured",
         )
 
@@ -26,14 +29,17 @@ async def authenticate_bearer_token(
     if not authorization or scheme.lower() != "bearer":
         raise UnauthorizedError("Missing bearer token")
 
-    if not hmac.compare_digest(token, settings.AUTH_BEARER_TOKEN):
+    presented = hashlib.sha256(token.encode()).digest()
+    # Compare against every key (no early exit) so timing does not reveal which
+    # key, or how many, matched.
+    matched: ApiKey | None = None
+    for key in keys:
+        if hmac.compare_digest(presented, key.digest):
+            matched = key
+    if matched is None:
         raise UnauthorizedError("Invalid bearer token")
 
-    return Principal(
-        id=settings.AUTH_SUBJECT,
-        type="service",
-        scopes=tuple(settings.auth_roles),
-    )
+    return Principal(id=matched.subject, type="service", scopes=matched.scopes)
 
 
 async def _enforce_rate_limit(request: Request, principal: Principal) -> None:

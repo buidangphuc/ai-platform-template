@@ -17,7 +17,7 @@ async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops():
         ttl_seconds=3600,
         lease_seconds=1,
     )
-    task = await service.submit(type="completion", payload={})
+    task = await service.submit(type="completion", payload={}, principal_id="alice")
     await service.mark_processing(task.id)
     await queue.receive()  # drain the submit announcement
 

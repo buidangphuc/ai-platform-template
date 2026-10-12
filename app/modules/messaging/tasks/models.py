@@ -56,6 +56,12 @@ class Task(Base, TimestampMixin):
         default=TaskStatus.QUEUED,
         server_default=TaskStatus.QUEUED.value,
     )
+    # Non-null with a '' server default: pre-existing rows get '' (owned by no
+    # one, so unreachable through the API) with no backfill, and they are
+    # short-lived anyway (TTL-purged).
+    principal_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB_TYPE, nullable=False)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB_TYPE, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

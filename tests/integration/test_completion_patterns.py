@@ -11,7 +11,7 @@ from app.modules.business.completions.schemas import (
     CompletionResult,
     CompletionStreamChunk,
 )
-from tests.factories import api_client_for
+from tests.factories import api_client_for, api_key_entry
 
 
 class RecordingCompletionHandler:
@@ -152,6 +152,58 @@ async def test_task_completion_submit_and_poll(test_settings: Settings):
     assert poll.status_code == 200
     assert poll.json()["id"] == task_id
     assert poll.json()["type"] == "completion"
+
+
+async def test_task_poll_is_scoped_to_the_submitting_principal(
+    test_settings: Settings,
+):
+    settings = test_settings.model_copy(
+        update={
+            "AUTH_API_KEYS": ",".join(
+                (
+                    api_key_entry("alice", "alice-token", "tasks"),
+                    api_key_entry("alice", "alice-rotated-token", "tasks"),
+                    api_key_entry("mallory", "mallory-token", "tasks"),
+                )
+            ),
+            "QUEUE_ENABLED": True,
+            "TASKS_ENABLED": True,
+            "QUEUE_BACKEND": "memory",
+            "TASK_STORE_BACKEND": "memory",
+        }
+    )
+    app = create_app(
+        completion_handler_factory=lambda resources, settings: (
+            RecordingCompletionHandler()
+        ),
+        settings=settings,
+        init_resources=True,
+    )
+
+    def bearer(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    async with api_client_for(app) as client:
+        submit = await client.post(
+            "/api/v1/completions/tasks",
+            headers=bearer("alice-token"),
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+        url = f"/api/v1/completions/tasks/{submit.json()['task_id']}"
+        owner = await client.get(url, headers=bearer("alice-token"))
+        rotated_key = await client.get(url, headers=bearer("alice-rotated-token"))
+        other = await client.get(url, headers=bearer("mallory-token"))
+        missing = await client.get(
+            "/api/v1/completions/tasks/nope", headers=bearer("mallory-token")
+        )
+
+    assert submit.status_code == 202
+    assert owner.status_code == 200
+    assert rotated_key.status_code == 200  # same subject, second key
+    assert other.status_code == 404
+    assert missing.status_code == 404
+    assert other.json()["error"]["code"] == "task_not_found"
+    assert missing.json()["error"]["code"] == "task_not_found"
 
 
 async def test_task_routes_are_not_mounted_when_tasks_disabled(

@@ -24,9 +24,14 @@ class PostgresTaskStore:
         async with self.sessionmaker() as session, session.begin():
             session.add(new_task_row(task))
 
-    async def get(self, task_id: str) -> TaskRecord | None:
+    async def get(
+        self, task_id: str, *, principal_id: str | None = None
+    ) -> TaskRecord | None:
+        stmt = select(Task).where(Task.id == task_id)
+        if principal_id is not None:
+            stmt = stmt.where(Task.principal_id == principal_id)
         async with self.sessionmaker() as session:
-            row = await session.get(Task, task_id)
+            row = await session.scalar(stmt)
             return _to_record(row) if row else None
 
     async def mark_processing(
@@ -128,6 +133,7 @@ def new_task_row(task: TaskRecord) -> Task:
     return Task(
         id=task.id,
         type=task.type,
+        principal_id=task.principal_id,
         status=str(task.status),
         payload=task.payload,
         result=task.result,
@@ -188,6 +194,7 @@ def _to_record(task: Task) -> TaskRecord:
     return TaskRecord(
         id=task.id,
         type=task.type,
+        principal_id=task.principal_id,
         status=TaskStatus(task.status),
         payload=task.payload,
         result=task.result,

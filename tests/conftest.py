@@ -8,10 +8,7 @@ from tests.factories import api_client_for, build_test_settings
 
 @pytest.fixture()
 def test_settings() -> Settings:
-    return build_test_settings(
-        AUTH_SUBJECT="test-user",
-        AUTH_ROLES="admin,developer",
-    )
+    return build_test_settings()
 
 
 @pytest.fixture()

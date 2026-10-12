@@ -71,6 +71,7 @@ class _ExampleService:
         task = await resources.tasks.service.submit(
             type="service-smoke",
             payload={"input": "ok"},
+            principal_id="smoke",
         )
         messages = await resources.queue_gateway.receive(
             max_messages=1, wait_seconds=0.01

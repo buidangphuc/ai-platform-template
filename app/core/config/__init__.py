@@ -30,7 +30,7 @@ from app.core.config.messaging import MessagingSettingsMixin
 from app.core.config.mongo import MongoSettingsMixin
 from app.core.config.platform import PlatformSettingsMixin
 from app.core.config.runtime import (
-    WEAK_AUTH_TOKENS,
+    WEAK_AUTH_DIGESTS,
     RuntimeSettingsMixin,
 )
 from app.core.config.telemetry import TelemetrySettingsMixin
@@ -57,8 +57,8 @@ class Settings(
 
     @model_validator(mode="after")
     def validate_runtime_safety(self) -> Settings:
-        if not self.ENVIRONMENT.is_local and not self.AUTH_BEARER_TOKEN:
-            raise ValueError("AUTH_BEARER_TOKEN is required outside dev/local/test")
+        if not self.ENVIRONMENT.is_local and not self.auth_api_keys:
+            raise ValueError("AUTH_API_KEYS is required outside dev/local/test")
         if not self.ENVIRONMENT.is_production:
             return self
 
@@ -70,11 +70,8 @@ class Settings(
         ):
             if "*" in parsed:
                 raise ValueError(f"{field_name} must not contain '*' in production")
-        if (
-            self.AUTH_BEARER_TOKEN in WEAK_AUTH_TOKENS
-            or len(self.AUTH_BEARER_TOKEN) < 24
-        ):
-            raise ValueError("AUTH_BEARER_TOKEN is too weak for production")
+        if any(key.digest in WEAK_AUTH_DIGESTS for key in self.auth_api_keys):
+            raise ValueError("AUTH_API_KEYS contains a key for a known weak token")
         return self
 
     def redacted_summary(self) -> dict[str, object]:

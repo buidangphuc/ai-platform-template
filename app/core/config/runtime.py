@@ -4,16 +4,21 @@ graceful shutdown, docs toggle."""
 from __future__ import annotations
 
 from enum import StrEnum
+from hashlib import sha256
 
 from pydantic import BaseModel, Field, field_validator
 
-WEAK_AUTH_TOKENS = frozenset(
-    {
+# SHA-256 digests of the placeholder tokens shipped in examples and tests: a
+# production ``AUTH_API_KEYS`` holding one of them is a leaked default. Only
+# hashes are configured, so token length/entropy cannot be checked here.
+WEAK_AUTH_DIGESTS = frozenset(
+    sha256(token.encode()).digest()
+    for token in (
         "change-me-local-bearer-token",
         "test-token",
         "local-token",
         "dev-token",
-    }
+    )
 )
 
 

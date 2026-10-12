@@ -30,8 +30,15 @@ class InMemoryTaskStore:
             task.updated_at = now
             self._tasks[task.id] = task
 
-    async def get(self, task_id: str) -> TaskRecord | None:
-        return self._tasks.get(task_id)
+    async def get(
+        self, task_id: str, *, principal_id: str | None = None
+    ) -> TaskRecord | None:
+        task = self._tasks.get(task_id)
+        if task is None or (
+            principal_id is not None and task.principal_id != principal_id
+        ):
+            return None
+        return task
 
     async def mark_processing(
         self,

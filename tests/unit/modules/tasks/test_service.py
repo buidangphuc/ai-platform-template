@@ -23,7 +23,9 @@ def _service() -> tuple[TaskService, InMemoryQueueGateway, InMemoryTaskStore]:
 async def test_submit_creates_task_and_enqueues_message():
     service, queue, store = _service()
 
-    task = await service.submit(type="completion", payload={"prompt": "hi"})
+    task = await service.submit(
+        type="completion", payload={"prompt": "hi"}, principal_id="alice"
+    )
 
     assert task.status == TaskStatus.QUEUED
     assert (await store.get(task.id)) is not None
@@ -41,9 +43,45 @@ async def test_require_raises_not_found_for_unknown_task():
     assert excinfo.value.status_code == 404
 
 
+async def test_submit_records_the_owning_principal():
+    service, _, store = _service()
+
+    task = await service.submit(type="completion", payload={}, principal_id="alice")
+
+    assert task.principal_id == "alice"
+    stored = await store.get(task.id)
+    assert stored is not None and stored.principal_id == "alice"
+
+
+async def test_require_owned_returns_the_owners_task():
+    service, _, _ = _service()
+    task = await service.submit(type="completion", payload={}, principal_id="alice")
+
+    assert (await service.require_owned(task.id, principal_id="alice")).id == task.id
+
+
+async def test_require_owned_hides_another_principals_task_as_not_found():
+    service, _, _ = _service()
+    task = await service.submit(type="completion", payload={}, principal_id="alice")
+
+    with pytest.raises(AppError) as excinfo:
+        await service.require_owned(task.id, principal_id="mallory")
+    assert excinfo.value.code == "task_not_found"
+    assert excinfo.value.status_code == 404
+
+
+async def test_worker_require_is_owner_agnostic():
+    service, _, _ = _service()
+    task = await service.submit(type="completion", payload={}, principal_id="alice")
+
+    assert (await service.require(task.id)).principal_id == "alice"
+
+
 async def test_full_state_transitions_via_service():
     service, _, store = _service()
-    task = await service.submit(type="completion", payload={"q": 1})
+    task = await service.submit(
+        type="completion", payload={"q": 1}, principal_id="alice"
+    )
 
     await service.mark_processing(task.id)
     in_progress = await store.get(task.id)
@@ -69,7 +107,7 @@ async def test_reclaim_stale_processing_via_service():
         lease_seconds=1,
     )
 
-    task = await service.submit(type="completion", payload={})
+    task = await service.submit(type="completion", payload={}, principal_id="alice")
     await service.mark_processing(task.id)
     await queue.receive()  # drain the submit announcement
 
@@ -90,7 +128,10 @@ async def test_submit_forwards_request_id_into_the_queue_message():
     service, queue, _ = _service()
 
     task = await service.submit(
-        type="completion", payload={"q": 1}, request_id="req_abc"
+        type="completion",
+        payload={"q": 1},
+        principal_id="alice",
+        request_id="req_abc",
     )
 
     [message] = await queue.receive()

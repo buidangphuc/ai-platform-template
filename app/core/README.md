@@ -81,8 +81,8 @@ if settings.ENVIRONMENT.is_production:
 `@model_validator(mode="after")` runs after all fields are validated. Refuses to start a production environment with:
 - `DOCS_ENABLED=True`
 - `*` in `CORS_ALLOW_ORIGINS` / `TRUSTED_HOSTS`
-- Weak `AUTH_BEARER_TOKEN` (in `WEAK_AUTH_TOKENS` set or shorter than 24 chars)
-- Missing `AUTH_BEARER_TOKEN` outside dev/local/test
+- An `AUTH_API_KEYS` entry whose digest is a known placeholder token (`WEAK_AUTH_DIGESTS`)
+- Missing `AUTH_API_KEYS` outside dev/local/test (a malformed entry fails in every environment)
 
 ---
 

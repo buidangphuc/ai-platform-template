@@ -27,6 +27,9 @@ class TaskRecord:
     updated_at: datetime | None = None
     locked_until: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Authenticated subject that submitted the task. "" only for rows created
+    # before ownership existed (no principal matches it, so the API never serves them).
+    principal_id: str = ""
 
 
 # Stored as ``TaskRecord.error`` when reclaim gives up on a task that keeps
@@ -45,7 +48,15 @@ class TaskRef:
 class TaskStore(Protocol):
     async def create(self, task: TaskRecord) -> None: ...
 
-    async def get(self, task_id: str) -> TaskRecord | None: ...
+    async def get(
+        self, task_id: str, *, principal_id: str | None = None
+    ) -> TaskRecord | None:
+        """Fetch a task; with ``principal_id`` only if that principal owns it.
+
+        ``None`` (the worker's read) is owner-agnostic. A task owned by someone
+        else is indistinguishable from a missing one.
+        """
+        ...
 
     async def mark_processing(
         self,

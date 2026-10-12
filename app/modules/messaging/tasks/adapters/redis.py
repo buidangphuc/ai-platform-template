@@ -34,11 +34,16 @@ class RedisTaskStore:
         ttl = max(int((task.expires_at - now).total_seconds()), 1)
         await self.redis.setex(self._key(task.id), ttl, _serialize(task))
 
-    async def get(self, task_id: str) -> TaskRecord | None:
+    async def get(
+        self, task_id: str, *, principal_id: str | None = None
+    ) -> TaskRecord | None:
         raw = await self.redis.get(self._key(task_id))
         if raw is None:
             return None
-        return _deserialize(_decode(raw))
+        task = _deserialize(_decode(raw))
+        if principal_id is not None and task.principal_id != principal_id:
+            return None
+        return task
 
     async def mark_processing(
         self,
@@ -188,6 +193,7 @@ def _serialize(task: TaskRecord) -> str:
     payload = {
         "id": task.id,
         "type": task.type,
+        "principal_id": task.principal_id,
         "status": str(task.status),
         "payload": task.payload,
         "result": task.result,
@@ -206,6 +212,7 @@ def _deserialize(raw: str) -> TaskRecord:
     return TaskRecord(
         id=data["id"],
         type=data["type"],
+        principal_id=data.get("principal_id", ""),
         status=TaskStatus(data["status"]),
         payload=data["payload"],
         result=data.get("result"),

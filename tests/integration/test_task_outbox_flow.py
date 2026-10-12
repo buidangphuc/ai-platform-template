@@ -97,7 +97,9 @@ class _Stack:
 
 async def test_submitted_task_is_relayed_processed_and_completed(sessionmaker):
     stack = _Stack(sessionmaker)
-    task = await stack.service.submit(type="completion", payload=PAYLOAD)
+    task = await stack.service.submit(
+        type="completion", payload=PAYLOAD, principal_id="alice"
+    )
     stop = asyncio.Event()
 
     relay = asyncio.create_task(
@@ -117,6 +119,7 @@ async def test_submitted_task_is_relayed_processed_and_completed(sessionmaker):
     assert done is not None
     assert done.result == {"content": "echo: hello", "model": "echo", "metadata": {}}
     assert done.attempts == 1
+    assert done.principal_id == "alice"  # stored by the task+outbox insert
     assert stack.queue.dead_letter_count() == 0
     assert stack.queue.pending_count() == 0 and stack.queue.inflight_count() == 0
 
@@ -130,7 +133,9 @@ async def test_task_row_and_outbox_event_commit_atomically(sessionmaker, monkeyp
     monkeypatch.setattr("app.modules.messaging.tasks.outbox.new_outbox_row", _boom)
 
     with pytest.raises(RuntimeError, match="outbox insert failed"):
-        await stack.service.submit(type="completion", payload=PAYLOAD)
+        await stack.service.submit(
+            type="completion", payload=PAYLOAD, principal_id="alice"
+        )
 
     async with sessionmaker() as session:
         assert (await session.scalars(select(Task))).all() == []
@@ -139,7 +144,9 @@ async def test_task_row_and_outbox_event_commit_atomically(sessionmaker, monkeyp
 
 async def test_reclaimed_task_is_announced_again_in_the_same_transaction(sessionmaker):
     stack = _Stack(sessionmaker)
-    task = await stack.service.submit(type="completion", payload=PAYLOAD)
+    task = await stack.service.submit(
+        type="completion", payload=PAYLOAD, principal_id="alice"
+    )
     await stack.publisher.publish_pending()
     [first] = await stack.queue.receive()
     await stack.queue.ack(first)
@@ -162,7 +169,9 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
     sessionmaker,
 ):
     stack = _Stack(sessionmaker)
-    task = await stack.service.submit(type="completion", payload=PAYLOAD)
+    task = await stack.service.submit(
+        type="completion", payload=PAYLOAD, principal_id="alice"
+    )
     await stack.publisher.publish_pending()
     # The same announcement delivered twice (at-least-once queue).
     await stack.queue.send({"task_id": task.id, "type": "completion"})
@@ -185,7 +194,9 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
 
 async def test_poison_task_is_failed_without_a_new_outbox_event(sessionmaker):
     stack = _Stack(sessionmaker)
-    task = await stack.service.submit(type="completion", payload=PAYLOAD)
+    task = await stack.service.submit(
+        type="completion", payload=PAYLOAD, principal_id="alice"
+    )
     await stack.publisher.publish_pending()
     assert await stack.service.mark_processing(task.id) is True  # attempts = 1
 
