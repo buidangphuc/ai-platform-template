@@ -11,12 +11,12 @@
 
 - [x] 2.1 `open_application_resources` (async CM on `AsyncExitStack`) + `open_runtime` in `bootstrap/services.py`, shared by API lifespan and worker; addon `open/close` drop the unused `app` param; delete `WorkerResources`/`_worker_needs_*` (fixes outbox + non-postgres store crash); verify `test_worker_context_uses_the_same_handler_factory_as_the_api`, `test_worker_opens_outbox_dispatch_with_non_postgres_task_store`, `test_failed_open_closes_what_was_already_opened`
 - [x] 2.2 Outbox store built once: tasks open after addons and reuse `OutboxAddon`'s store; verify `test_outbox_store_is_built_once_and_shared_with_dispatcher`
-- [ ] 2.3 Health checks registered at open time
+- [ ] 2.3 Health checks registered at open time (deferred: `build_health_service` derives checks from opened resources; low value)
 
 ## 3. Addons and factories (step 3, parallel per addon)
 
 - [x] 3.1 Move addon classes into `app/bootstrap/addons/<name>.py` (protocol + registry in `addons/base.py`); factories no longer import bootstrap or FastAPI; verify `rg "app.bootstrap.resources|fastapi" app/modules/*/*/factory.py` is empty
-- [ ] 3.2 Cross-setting "X requires Y" rules in one `Settings` model validator; remove repeated checks
-- [ ] 3.3 `MongoQuotaStore.ensure_indexes()` called at open (from quota-db-correctness)
-- [ ] 3.4 Factories take non-optional dependencies (per-backend constructors); addons pass them; drop `if dep is None: raise` guards
-- [ ] 3.5 Addon `close` only closes what it opened (exit stack owns order); drop `= None` resets and `is not None` guards
+- [x] 3.2 Cross-setting "X requires Y" rules live in `@model_validator`s on `MessagingSettingsMixin` and `PlatformSettingsMixin` (fire at Settings construction); `validate_core_resource_requirements` and addon-level checks removed; verify `tests/unit/core/test_config_{messaging,platform}_rules.py`
+- [x] 3.3 `QuotaAddon` awaits `MongoQuotaStore.ensure_indexes()` at open; verify `test_quota_addon_ensures_mongo_indexes_when_opening`
+- [x] 3.4 Factories take required dependencies (per-backend builders); narrowing of Optional resources goes through one helper `resources.opened()`; verify `rg "is None" app/modules/*/*/factory.py` empty
+- [x] 3.5 Addon contract is `open(resources, settings, stack)`: each addon pushes the close of what it built onto the exit stack; `close` methods, `= None` resets and `is not None` guards are gone; verify `test_addons_close_in_reverse_order`, `test_failed_open_closes_what_was_already_opened`

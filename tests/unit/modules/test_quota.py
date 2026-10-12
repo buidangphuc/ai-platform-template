@@ -19,7 +19,7 @@ from app.modules.platform.quota.models import (
 )
 from app.modules.platform.quota.service import QuotaService, resolve_fixed_window
 from app.modules.platform.quota.store import StaticQuotaPolicyStore
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 RESOURCE = "legacy.description.generate"
 
@@ -185,7 +185,7 @@ async def test_quota_addon_attaches_and_closes_service():
     resources = ApplicationResources()
     addon = QuotaAddon()
 
-    await addon.open(resources, build_test_settings(QUOTA_ENABLED=True))
+    stack = await open_addon(addon, resources, build_test_settings(QUOTA_ENABLED=True))
     assert isinstance(resources.quota, QuotaService)
 
-    await addon.close(resources)
+    await stack.aclose()

@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -34,3 +34,10 @@ async def api_client_for(app: FastAPI) -> AsyncIterator[AsyncClient]:
             base_url="http://test",
         ) as client:
             yield client
+
+
+async def open_addon(addon, resources, settings: Settings) -> AsyncExitStack:
+    """Open one addon outside the app; ``await stack.aclose()`` closes it."""
+    stack = AsyncExitStack()
+    await addon.open(resources, settings, stack)
+    return stack

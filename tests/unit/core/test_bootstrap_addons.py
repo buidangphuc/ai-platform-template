@@ -1,3 +1,4 @@
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 
 import pytest
@@ -21,10 +22,12 @@ class _RecordingAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
         self.opened = True
+        stack.callback(self._close)
 
-    async def close(self, resources: ApplicationResources) -> None:
+    def _close(self) -> None:
         self.closed = True
 
 
@@ -71,10 +74,11 @@ async def test_addon_self_validates_required_resources_in_open(
             self,
             resources: ApplicationResources,
             settings: Settings,
+            stack: AsyncExitStack,
         ) -> None:
             if not settings.DATABASE_ENABLED:
                 raise RuntimeError("NeedsDatabaseAddon requires DATABASE_ENABLED")
-            await super().open(resources, settings)
+            await super().open(resources, settings, stack)
 
     addon = _NeedsDatabaseAddon(name="needs-db")
     settings = test_settings.model_copy(update={"DATABASE_ENABLED": False})
@@ -102,10 +106,11 @@ async def test_disabled_addon_skips_self_validation(
             self,
             resources: ApplicationResources,
             settings: Settings,
+            stack: AsyncExitStack,
         ) -> None:
             if not settings.DATABASE_ENABLED:
                 raise RuntimeError("should not be reached when disabled")
-            await super().open(resources, settings)
+            await super().open(resources, settings, stack)
 
     addon = _DisabledNeedsDatabaseAddon(name="needs-db", enabled=False)
     settings = test_settings.model_copy(update={"DATABASE_ENABLED": False})

@@ -16,7 +16,7 @@ from app.modules.ai.rag.service import (
     KnowledgeRetrievalService,
     build_rag_node_parser,
 )
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 
 def build_knowledge_service(
@@ -215,7 +215,7 @@ async def test_rag_addon_attaches_service_when_enabled():
     resources = ApplicationResources()
     addon = RagAddon()
 
-    await addon.open(resources, _rag_settings())
+    await open_addon(addon, resources, _rag_settings())
 
     assert isinstance(resources.rag_service, KnowledgeRetrievalService)
 

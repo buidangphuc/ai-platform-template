@@ -1,6 +1,8 @@
-"""Lifecycle addon for rag; bootstrap owns open/close."""
+"""Lifecycle addon for rag: opens it and registers its close on the stack."""
 
 from __future__ import annotations
+
+from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
@@ -17,8 +19,7 @@ class RagAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
+        # The retrieval service holds no connection; nothing to register.
         resources.rag_service = build_rag_service(settings)
-
-    async def close(self, resources: ApplicationResources) -> None:
-        """Nothing to release: the retrieval service holds no connection."""

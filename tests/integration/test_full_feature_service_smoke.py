@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -111,14 +112,16 @@ class _ExampleServiceAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
         if not settings.DATABASE_ENABLED or not settings.TASKS_ENABLED:
             raise RuntimeError(
                 "_ExampleServiceAddon requires DATABASE_ENABLED and TASKS_ENABLED"
             )
         self.service = _ExampleService(opened_at=datetime.now(UTC))
+        stack.callback(self._close)
 
-    async def close(self, resources: ApplicationResources) -> None:
+    def _close(self) -> None:
         self.service = None
 
 

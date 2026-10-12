@@ -10,7 +10,7 @@ from app.modules.platform.cache.factory import (
     build_memory_cache_gateway,
     build_redis_cache_gateway,
 )
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 
 def _settings(**overrides: object) -> Settings:
@@ -34,11 +34,12 @@ async def test_cache_addon_selects_backend_and_closes_gateway():
     resources = ApplicationResources(redis=aioredis.FakeRedis(decode_responses=False))
     addon = CacheAddon()
 
-    await addon.open(resources, _settings(CACHE_ENABLED=True))
+    stack = await open_addon(addon, resources, _settings(CACHE_ENABLED=True))
     assert isinstance(resources.cache, MemoryCacheGateway)
-    await addon.close(resources)
+    await stack.aclose()
 
-    await addon.open(
+    stack = await open_addon(
+        addon,
         resources,
         _settings(CACHE_ENABLED=True, CACHE_BACKEND="redis", REDIS_ENABLED=True),
     )
@@ -47,8 +48,8 @@ async def test_cache_addon_selects_backend_and_closes_gateway():
 
 async def test_cache_addon_rejects_unknown_backend():
     with pytest.raises(ValueError, match="Unknown CACHE_BACKEND"):
-        await CacheAddon().open(
-            ApplicationResources(), _settings(CACHE_BACKEND="bogus")
+        await open_addon(
+            CacheAddon(), ApplicationResources(), _settings(CACHE_BACKEND="bogus")
         )
 
 

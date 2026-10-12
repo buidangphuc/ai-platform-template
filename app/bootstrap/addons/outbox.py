@@ -1,6 +1,8 @@
-"""Lifecycle addon for outbox; bootstrap owns open/close."""
+"""Lifecycle addon for outbox: opens it and registers its close on the stack."""
 
 from __future__ import annotations
+
+from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
@@ -17,11 +19,11 @@ class OutboxAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
-        resources.outbox_store = build_outbox_store(
+        store = build_outbox_store(
             settings,
             opened(resources.sessionmaker, "sessionmaker"),
         )
-
-    async def close(self, resources: ApplicationResources) -> None:
-        await opened(resources.outbox_store, "outbox store").close()
+        stack.push_async_callback(store.close)
+        resources.outbox_store = store

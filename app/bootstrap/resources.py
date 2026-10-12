@@ -122,8 +122,7 @@ async def open_application_resources(
 
         for addon in addons:
             if addon.is_enabled(settings):
-                await addon.open(resources, settings)
-                stack.push_async_callback(addon.close, resources)
+                await addon.open(resources, settings, stack)
                 resources.addons.append(addon)
 
         if init_resources:

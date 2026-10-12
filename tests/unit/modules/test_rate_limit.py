@@ -13,7 +13,7 @@ from app.modules.platform.rate_limit.service import (
     InMemoryRateLimiter,
     RedisRateLimiter,
 )
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 # ----------------------------------------------------- InMemoryRateLimiter
 
@@ -231,7 +231,8 @@ async def test_rate_limit_addon_attaches_both_limiters_when_enabled():
     resources = ApplicationResources(redis=FakeRedis())
     addon = RateLimitAddon()
 
-    await addon.open(
+    await open_addon(
+        addon,
         resources,
         _settings(
             RATE_LIMIT_ENABLED=True,
@@ -251,7 +252,8 @@ async def test_rate_limit_addon_skips_disabled_layers():
     resources = ApplicationResources()
     addon = RateLimitAddon()
 
-    await addon.open(
+    await open_addon(
+        addon,
         resources,
         _settings(RATE_LIMIT_IP_ENABLED=False, RATE_LIMIT_PRINCIPAL_ENABLED=True),
     )
@@ -263,9 +265,9 @@ async def test_rate_limit_addon_skips_disabled_layers():
 async def test_rate_limit_addon_close_is_a_no_op():
     resources = ApplicationResources()
     addon = RateLimitAddon()
-    await addon.open(resources, _settings())
+    stack = await open_addon(addon, resources, _settings())
 
-    await addon.close(resources)
+    await stack.aclose()
 
     assert resources.principal_rate_limiter is not None
 

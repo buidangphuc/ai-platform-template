@@ -1,15 +1,12 @@
-"""Lifecycle addon for mongo; bootstrap owns open/close."""
+"""Lifecycle addon for mongo: opens it and registers its close on the stack."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from contextlib import AsyncExitStack
 
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.mongo.factory import build_mongo_gateway
-from app.modules.platform.mongo.gateway import MongoGateway
-
-if TYPE_CHECKING:
-    from app.bootstrap.resources import ApplicationResources
 
 
 class MongoAddon:
@@ -22,14 +19,8 @@ class MongoAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
-        resources.mongo = build_mongo_gateway(settings)
-
-    async def close(self, resources: ApplicationResources) -> None:
-        await _mongo(resources).close()
-
-
-def _mongo(resources: ApplicationResources) -> MongoGateway:
-    if resources.mongo is None:
-        raise RuntimeError("MongoAddon has no open gateway")
-    return resources.mongo
+        gateway = build_mongo_gateway(settings)
+        stack.push_async_callback(gateway.close)
+        resources.mongo = gateway

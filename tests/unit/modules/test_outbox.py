@@ -17,7 +17,7 @@ from app.modules.messaging.outbox.publisher import (
 )
 from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus
 from app.modules.messaging.webhooks.dispatcher import WebhookDeliveryResult
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 
 def _settings(**overrides: object) -> Settings:
@@ -58,7 +58,9 @@ async def test_outbox_addon_attaches_store_when_enabled():
     resources = ApplicationResources(sessionmaker=object())
     addon = OutboxAddon()
 
-    await addon.open(resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True))
+    await open_addon(
+        addon, resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True)
+    )
 
     assert isinstance(resources.outbox_store, PostgresOutboxStore)
 

@@ -5,7 +5,7 @@ from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.objects.adapters.memory import MemoryObjectGateway
 from app.modules.platform.objects.factory import build_object_gateway
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 
 
 def _settings(**overrides: object) -> Settings:
@@ -23,11 +23,11 @@ async def test_object_addon_attaches_gateway_when_enabled():
     resources = ApplicationResources()
     addon = ObjectAddon()
 
-    await addon.open(resources, _settings(OBJECTS_ENABLED=True))
+    stack = await open_addon(addon, resources, _settings(OBJECTS_ENABLED=True))
 
     assert isinstance(resources.objects, MemoryObjectGateway)
 
-    await addon.close(resources)
+    await stack.aclose()
 
 
 def test_object_addon_respects_enabled_flag():

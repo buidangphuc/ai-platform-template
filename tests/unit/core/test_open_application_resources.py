@@ -1,3 +1,4 @@
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 
 import pytest
@@ -32,13 +33,16 @@ class _Addon:
     def is_enabled(self, settings: Settings) -> bool:
         return self.enabled
 
-    async def open(self, resources: ApplicationResources, settings: Settings) -> None:
+    async def open(
+        self,
+        resources: ApplicationResources,
+        settings: Settings,
+        stack: AsyncExitStack,
+    ) -> None:
         if self.fail_on_open:
             raise RuntimeError(f"{self.name} failed")
         self.log.append(f"open:{self.name}")
-
-    async def close(self, resources: ApplicationResources) -> None:
-        self.log.append(f"close:{self.name}")
+        stack.callback(self.log.append, f"close:{self.name}")
 
 
 async def test_outbox_store_is_built_once_and_shared_with_dispatcher():

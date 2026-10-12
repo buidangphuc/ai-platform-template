@@ -1,8 +1,10 @@
-"""Lifecycle addon for webhooks; bootstrap owns open/close."""
+"""Lifecycle addon for webhooks: opens it and registers its close on the stack."""
 
 from __future__ import annotations
 
-from app.bootstrap.resources import ApplicationResources, opened
+from contextlib import AsyncExitStack
+
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import TimeoutPolicy
 from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
@@ -19,18 +21,18 @@ class WebhookAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
         signer = WebhookSigner(
             secret=settings.WEBHOOK_SIGNING_SECRET,
             tolerance_seconds=settings.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
         )
-        resources.webhook_signer = signer
-        resources.webhook_dispatcher = HttpWebhookDispatcher(
+        dispatcher = HttpWebhookDispatcher(
             signer=signer,
             timeout_policy=TimeoutPolicy(
                 timeout_seconds=settings.WEBHOOK_TIMEOUT_SECONDS
             ),
         )
-
-    async def close(self, resources: ApplicationResources) -> None:
-        await opened(resources.webhook_dispatcher, "webhook dispatcher").close()
+        stack.push_async_callback(dispatcher.close)
+        resources.webhook_signer = signer
+        resources.webhook_dispatcher = dispatcher

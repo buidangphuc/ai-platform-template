@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from contextlib import AsyncExitStack
+
     from app.bootstrap.resources import ApplicationResources
     from app.core.config import Settings
 
@@ -16,9 +18,10 @@ class BootstrapAddon(Protocol):
         self,
         resources: ApplicationResources,
         settings: Settings,
-    ) -> None: ...
-
-    async def close(self, resources: ApplicationResources) -> None: ...
+        stack: AsyncExitStack,
+    ) -> None:
+        """Open the capability onto ``resources``; push its close onto ``stack``."""
+        ...
 
 
 def default_resource_addons() -> tuple[BootstrapAddon, ...]:

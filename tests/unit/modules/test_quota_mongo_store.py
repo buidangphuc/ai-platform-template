@@ -19,7 +19,7 @@ from app.modules.platform.quota.models import (
     ReserveQuota,
 )
 from app.modules.platform.quota.service import QuotaService
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
 from tests.mongo_fake import FakeCollection, FakeMongoGateway, _matches
 
 
@@ -215,7 +215,8 @@ async def test_quota_addon_ensures_mongo_indexes_when_opening():
     gateway = RacyGateway()
     resources = ApplicationResources(mongo=gateway)  # type: ignore[arg-type]
 
-    await QuotaAddon().open(
+    await open_addon(
+        QuotaAddon(),
         resources,
         build_test_settings(
             QUOTA_ENABLED=True, QUOTA_BACKEND="mongo", MONGO_ENABLED=True

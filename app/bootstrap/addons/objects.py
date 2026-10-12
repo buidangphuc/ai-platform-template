@@ -1,11 +1,12 @@
-"""Lifecycle addon for objects; bootstrap owns open/close."""
+"""Lifecycle addon for objects: opens it and registers its close on the stack."""
 
 from __future__ import annotations
+
+from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.objects.factory import build_object_gateway
-from app.modules.platform.objects.gateway import ObjectGateway
 
 
 class ObjectAddon:
@@ -18,14 +19,8 @@ class ObjectAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
-        resources.objects = build_object_gateway(settings)
-
-    async def close(self, resources: ApplicationResources) -> None:
-        await _objects(resources).close()
-
-
-def _objects(resources: ApplicationResources) -> ObjectGateway:
-    if resources.objects is None:
-        raise RuntimeError("ObjectAddon has no open gateway")
-    return resources.objects
+        gateway = build_object_gateway(settings)
+        stack.push_async_callback(gateway.close)
+        resources.objects = gateway

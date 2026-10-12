@@ -1,19 +1,16 @@
-"""Lifecycle addon for cache; bootstrap owns open/close."""
+"""Lifecycle addon for cache: opens it and registers its close on the stack."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from contextlib import AsyncExitStack
 
-from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
 from app.modules.platform.cache.factory import (
     build_memory_cache_gateway,
     build_redis_cache_gateway,
 )
 from app.modules.platform.cache.gateway import CacheGateway
-
-if TYPE_CHECKING:
-    from redis.asyncio import Redis
 
 
 class CacheAddon:
@@ -26,26 +23,17 @@ class CacheAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
+        cache: CacheGateway
         backend = settings.CACHE_BACKEND
         if backend == "memory":
-            resources.cache = build_memory_cache_gateway(settings)
+            cache = build_memory_cache_gateway(settings)
         elif backend == "redis":
-            resources.cache = build_redis_cache_gateway(settings, _redis(resources))
+            cache = build_redis_cache_gateway(
+                settings, opened(resources.redis, "redis")
+            )
         else:
             raise ValueError(f"Unknown CACHE_BACKEND={backend!r}")
-
-    async def close(self, resources: ApplicationResources) -> None:
-        await _cache(resources).close()
-
-
-def _redis(resources: ApplicationResources) -> Redis:
-    if resources.redis is None:
-        raise RuntimeError("CacheAddon needs an open Redis client")
-    return resources.redis
-
-
-def _cache(resources: ApplicationResources) -> CacheGateway:
-    if resources.cache is None:
-        raise RuntimeError("CacheAddon has no open cache gateway")
-    return resources.cache
+        stack.push_async_callback(cache.close)
+        resources.cache = cache

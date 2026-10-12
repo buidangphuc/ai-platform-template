@@ -1,10 +1,10 @@
-"""Lifecycle addon for rate_limit; bootstrap owns open/close."""
+"""Lifecycle addon for rate_limit: opens it and registers its close on the stack."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from contextlib import AsyncExitStack
 
-from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
 from app.modules.platform.rate_limit.factory import (
     build_memory_rate_limiter,
@@ -14,9 +14,6 @@ from app.modules.platform.rate_limit.service import (
     InMemoryRateLimiter,
     RedisRateLimiter,
 )
-
-if TYPE_CHECKING:
-    from redis.asyncio import Redis
 
 
 class RateLimitAddon:
@@ -29,7 +26,9 @@ class RateLimitAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
+        # Limiters hold no connection of their own; Redis is closed by its owner.
         if settings.RATE_LIMIT_PRINCIPAL_ENABLED:
             resources.principal_rate_limiter = _build_limiter(
                 resources,
@@ -44,9 +43,6 @@ class RateLimitAddon:
                 limit=settings.RATE_LIMIT_IP_PER_MINUTE,
                 scope="ip",
             )
-
-    async def close(self, resources: ApplicationResources) -> None:
-        """Limiters hold no connection of their own (Redis is closed by its owner)."""
 
 
 def _build_limiter(
@@ -64,15 +60,9 @@ def _build_limiter(
         )
     if backend == "redis":
         return build_redis_rate_limiter(
-            _redis(resources),
+            opened(resources.redis, "redis"),
             limit=limit,
             window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
             prefix=f"{settings.RATE_LIMIT_REDIS_PREFIX}:{scope}",
         )
     raise ValueError(f"Unknown RATE_LIMIT_BACKEND={backend!r}")
-
-
-def _redis(resources: ApplicationResources) -> Redis:
-    if resources.redis is None:
-        raise RuntimeError("RateLimitAddon needs an open Redis client")
-    return resources.redis

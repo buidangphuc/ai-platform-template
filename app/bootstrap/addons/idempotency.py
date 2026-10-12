@@ -1,16 +1,12 @@
-"""Lifecycle addon for idempotency; bootstrap owns open/close."""
+"""Lifecycle addon for idempotency: opens it and registers its close on the stack."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from contextlib import AsyncExitStack
 
-from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
 from app.modules.platform.idempotency.factory import build_idempotency_store
-from app.modules.platform.idempotency.store import IdempotencyStore
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class IdempotencyAddon:
@@ -23,25 +19,11 @@ class IdempotencyAddon:
         self,
         resources: ApplicationResources,
         settings: Settings,
+        stack: AsyncExitStack,
     ) -> None:
-        resources.idempotency_store = build_idempotency_store(
+        store = build_idempotency_store(
             settings,
-            sessionmaker=_sessionmaker(resources),
+            sessionmaker=opened(resources.sessionmaker, "sessionmaker"),
         )
-
-    async def close(self, resources: ApplicationResources) -> None:
-        await _store(resources).close()
-
-
-def _sessionmaker(
-    resources: ApplicationResources,
-) -> async_sessionmaker[AsyncSession]:
-    if resources.sessionmaker is None:
-        raise RuntimeError("IdempotencyAddon needs an open database sessionmaker")
-    return resources.sessionmaker
-
-
-def _store(resources: ApplicationResources) -> IdempotencyStore:
-    if resources.idempotency_store is None:
-        raise RuntimeError("IdempotencyAddon has no open store")
-    return resources.idempotency_store
+        stack.push_async_callback(store.close)
+        resources.idempotency_store = store

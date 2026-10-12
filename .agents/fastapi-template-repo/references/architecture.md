@@ -42,6 +42,11 @@ Important anchors:
 - `app/bootstrap/addons.py`: `BootstrapAddon` protocol and default addon order.
 - `app/bootstrap/state.py`: typed resource helpers such as `get_app_resources(...)`, `get_task_services(...)`.
 - `app/bootstrap/services.py`: `compose_business_services`, handler factories.
+- `app/bootstrap/addons/<name>.py`: one addon per capability. Contract (`addons/base.py`):
+  `open(resources, settings, stack)` builds the capability with factory functions that take
+  required dependencies, stores it on `resources`, and pushes its close onto `stack`. No `close`
+  method. Cross-setting rules ("X requires Y") belong in a `@model_validator` on the owning
+  settings mixin, not in addons or factories.
 
 Use this layer when a service needs app-lifetime dependencies such as shared HTTP clients, LLM instances, Mongo gateway, quota service, task service, cache, object storage, or webhook dispatcher.
 
