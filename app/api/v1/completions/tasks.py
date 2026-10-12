@@ -10,7 +10,8 @@ from app.modules.messaging.tasks.schemas import TaskResponse, TaskSubmitResponse
 from app.modules.platform.identity.auth import require_principal
 from app.modules.platform.identity.schemas import Principal
 
-router = APIRouter()
+# Mounted only when TASKS_ENABLED (see app/api/router.py).
+router = APIRouter(prefix="/completions", tags=["completions"])
 
 
 @router.post("/tasks", response_model=TaskSubmitResponse, status_code=202)
@@ -26,11 +27,7 @@ async def submit_completion(
         principal_id=principal.id,
         request_id=get_request_id(),
     )
-    return TaskSubmitResponse(
-        task_id=task.id,
-        status=task.status,
-        expires_at=task.expires_at,
-    )
+    return TaskSubmitResponse.model_validate(task)
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)

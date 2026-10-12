@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.modules.messaging.tasks.models import TaskStatus
 
@@ -16,7 +16,7 @@ class SchemaBase(BaseModel):
 
 
 class TaskSubmitResponse(SchemaBase):
-    task_id: str
+    task_id: str = Field(validation_alias=AliasChoices("task_id", "id"))
     status: TaskStatus
     expires_at: datetime
 

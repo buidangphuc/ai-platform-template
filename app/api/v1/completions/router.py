@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.sse import ServerSentEvent, event_stream_response
-from app.api.v1.completions import tasks
 from app.bootstrap.state import get_app_resources
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -20,10 +19,6 @@ router = APIRouter(
     tags=["completions"],
     dependencies=[Depends(require_principal)],
 )
-
-# Mounted only when TASKS_ENABLED (see app/api/router.py).
-tasks_router = APIRouter(prefix="/completions", tags=["completions"])
-tasks_router.include_router(tasks.router)
 
 
 @router.post("", response_model=CompletionResponse)

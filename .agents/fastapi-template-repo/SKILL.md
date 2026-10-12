@@ -81,22 +81,27 @@ Adding a new endpoint usually should not touch bootstrap. Touch bootstrap only w
 service rules above (`<Domain>Service`, one bootstrap instance, `get_app_resources`).
 
 - API package `app/api/v1/<domain>/`: an empty `__init__.py` and `router.py`, which declares
-  `APIRouter(prefix=..., tags=..., dependencies=[Depends(require_principal)])` once. A feature behind a
-  `*_ENABLED` flag adds a second file (e.g. `tasks.py`) with a plain `APIRouter()`, mounted in
-  `app/api/router.py` only when enabled; its routes take `principal: Principal = Depends(require_principal)`
-  as a parameter when they need the id.
+  `APIRouter(prefix=..., tags=..., dependencies=[Depends(require_principal)])` once. Every router file
+  declares its own prefix/tags (no wrapper router in `app/api/router.py`). A feature behind a `*_ENABLED`
+  flag adds a second file (e.g. `tasks.py`, `APIRouter(prefix="/<domain>", tags=["<domain>"])`) that
+  `app/api/router.py` imports and mounts only when enabled; its routes take
+  `principal: Principal = Depends(require_principal)` as a parameter when they need the id.
 - View: `get_app_resources(request.app).<domain>_service`, one service call,
   `<Response>.model_validate(result, from_attributes=True)`. Response ids default in the response schema
   (`Field(default_factory=...)`). A view does not time, log, record telemetry, apply deadlines or mint ids.
 - Streaming: the view passes an async generator of `ServerSentEvent` to `event_stream_response(request, events)`
   from `app/api/sse.py`, which owns headers, heartbeat, first-event priming (errors before it stay JSON
   errors), `event: error` frames and shielded close. The generator closes the service stream with
-  `contextlib.aclosing`. A feature owns no SSE engine, heartbeat or deadline code.
+  `contextlib.aclosing`. A feature owns no SSE engine, heartbeat or deadline code. Frames: each non-empty
+  delta yields `ServerSentEvent({"type": "content.delta", "delta": ..., "metadata": ...})`; the stream ends
+  with `ServerSentEvent({"type": "done", **summary.model_dump(exclude_none=True)})`.
 - Timing, deadlines, outcome labels and telemetry live in the business service, behind ports
   (`CompletionSink`, `StreamPolicy`) that `compose_business_services` in `app/bootstrap/services.py`
   builds once. The API and the worker share that instance, so both are observed.
-- Task routes: the task type constant lives in the business schemas (`COMPLETION_TASK_TYPE`); reads use
-  `require_owned(task_id, principal_id=..., type=...)`; responses use `TaskResponse.model_validate(task)`.
+- Task routes: the task type constant lives in the business schemas (`COMPLETION_TASK_TYPE`). Submit calls
+  `service.submit(type=..., payload=payload.model_dump(mode="json"), principal_id=principal.id,
+  request_id=get_request_id())` and returns `202`; reads use `require_owned(task_id, principal_id=..., type=...)`.
+  Both responses are `TaskSubmitResponse.model_validate(task)` / `TaskResponse.model_validate(task)`.
 
 Reference views (`app/api/v1/completions/router.py`):
 

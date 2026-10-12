@@ -1,9 +1,7 @@
 from fastapi import APIRouter
 
-from app.api.v1.completions.router import (
-    router as completions_router,
-    tasks_router as completion_tasks_router,
-)
+from app.api.v1.completions.router import router as completions_router
+from app.api.v1.completions.tasks import router as completion_tasks_router
 from app.api.v1.health.router import router as health_router
 from app.core.config import Settings
 

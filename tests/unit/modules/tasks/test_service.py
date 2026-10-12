@@ -6,6 +6,7 @@ from app.core.errors import AppError
 from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
 from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
 from app.modules.messaging.tasks.models import TaskStatus
+from app.modules.messaging.tasks.schemas import TaskSubmitResponse
 from app.modules.messaging.tasks.service import QueueTaskDispatcher, TaskService
 
 
@@ -190,3 +191,14 @@ async def test_reclaimed_task_is_announced_with_its_original_request_id():
         "type": "completion",
         "request_id": "req_abc",
     }
+
+
+async def test_submit_response_validates_from_the_task_record():
+    service, _, _ = _service()
+    task = await service.submit(
+        type="completion", payload={"prompt": "hi"}, principal_id="alice"
+    )
+
+    response = TaskSubmitResponse.model_validate(task)
+
+    assert response.model_dump()["task_id"] == task.id

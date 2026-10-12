@@ -70,6 +70,6 @@ class TaskSubmitResponse(SchemaBase):
     task_id: str = Field(validation_alias=AliasChoices("task_id", "id"))
 ```
 
-- [ ] 5.1 `tasks.py` declares its own prefix router; delete `tasks_router` from `router.py`; `app/api/router.py` imports `tasks.router`; verify `test_task_routes_mount_only_when_tasks_enabled`, `test_task_routes_are_not_mounted_when_tasks_disabled`
-- [ ] 5.2 `TaskSubmitResponse` accepts the record's `id`; submit view returns `TaskSubmitResponse.model_validate(task)`; verify `test_task_completion_submit_and_poll` (JSON key `task_id` unchanged)
-- [ ] 5.3 SKILL.md: every router file declares its own prefix/tags; SSE frame shapes (`content.delta` `{type, delta, metadata}` only for non-empty deltas, `done` = `{type: "done", **summary.model_dump(exclude_none=True)}`); task submit = `payload.model_dump(mode="json")`, `request_id=get_request_id()`, `202`, both task responses via `model_validate`
+- [x] 5.1 `tasks.py` declares its own prefix router; delete `tasks_router` from `router.py`; `app/api/router.py` imports `tasks.router`; verify `test_task_routes_mount_only_when_tasks_enabled`, `test_task_routes_are_not_mounted_when_tasks_disabled`
+- [x] 5.2 `TaskSubmitResponse` accepts the record's `id`; submit view returns `TaskSubmitResponse.model_validate(task)`; verify `test_task_completion_submit_and_poll` (JSON key `task_id` unchanged)
+- [x] 5.3 SKILL.md: every router file declares its own prefix/tags; SSE frame shapes (`content.delta` `{type, delta, metadata}` only for non-empty deltas, `done` = `{type: "done", **summary.model_dump(exclude_none=True)}`); task submit = `payload.model_dump(mode="json")`, `request_id=get_request_id()`, `202`, both task responses via `model_validate`
