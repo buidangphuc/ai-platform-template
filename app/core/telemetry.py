@@ -8,8 +8,11 @@ With telemetry off it is ``NOOP_SINK``; with it on, the OTel-backed handle in
 from __future__ import annotations
 
 import importlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
+
+from loguru import logger
 
 _HINT = "install the OTel extra: `uv sync --extra otel` (or `pip install '.[otel]'`)"
 
@@ -29,6 +32,7 @@ class CompletionObservation:
     finish_reason: str | None
     input_tokens: int | None
     output_tokens: int | None
+    total_tokens: int | None = None
 
 
 class CompletionSink(Protocol):
@@ -41,6 +45,49 @@ class _NoopSink:
 
 
 NOOP_SINK: CompletionSink = _NoopSink()
+
+
+class LogCompletionSink:
+    """One structured log line per completion: metadata only, never content."""
+
+    def record_completion(self, observation: CompletionObservation) -> None:
+        duration_ms = observation.duration_s * 1000
+        ttft_ms = (
+            None if observation.ttft_s is None else round(observation.ttft_s * 1000, 1)
+        )
+        logger.bind(
+            event="completion",
+            mode=observation.mode,
+            outcome=observation.outcome,
+            model=observation.model,
+            duration_ms=round(duration_ms, 1),
+            ttft_ms=ttft_ms,
+            finish_reason=observation.finish_reason,
+            input_tokens=observation.input_tokens,
+            output_tokens=observation.output_tokens,
+            total_tokens=observation.total_tokens,
+        ).info(
+            "completion mode={} outcome={} model={} duration_ms={:.1f} ttft_ms={} "
+            "finish_reason={} input_tokens={} output_tokens={} total_tokens={}",
+            observation.mode,
+            observation.outcome,
+            observation.model,
+            duration_ms,
+            ttft_ms,
+            observation.finish_reason,
+            observation.input_tokens,
+            observation.output_tokens,
+            observation.total_tokens,
+        )
+
+
+class FanOutSink:
+    def __init__(self, sinks: Sequence[CompletionSink]) -> None:
+        self.sinks = tuple(sinks)
+
+    def record_completion(self, observation: CompletionObservation) -> None:
+        for sink in self.sinks:
+            sink.record_completion(observation)
 
 
 def require_otel() -> None:

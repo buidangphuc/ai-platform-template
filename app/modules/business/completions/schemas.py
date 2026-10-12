@@ -1,5 +1,6 @@
 import json
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -45,6 +46,19 @@ class CompletionUsage(BaseModel):
     total_tokens: int = Field(ge=0)
 
 
+class StreamSummary(BaseModel):
+    """What a stream reports about itself: the latest non-empty value of each field."""
+
+    model: str | None = None
+    usage: CompletionUsage | None = None
+    finish_reason: str | None = None
+
+    def merge(self, chunk: "CompletionStreamChunk | CompletionResult") -> None:
+        self.model = chunk.model or self.model
+        self.usage = chunk.usage or self.usage
+        self.finish_reason = chunk.finish_reason or self.finish_reason
+
+
 class CompletionResult(BaseModel):
     content: str
     model: str | None = None
@@ -54,7 +68,7 @@ class CompletionResult(BaseModel):
 
 
 class CompletionResponse(BaseModel):
-    id: str
+    id: str = Field(default_factory=lambda: f"cmpl_{uuid4().hex}")
     object: Literal["completion"] = "completion"
     content: str
     model: str | None = None

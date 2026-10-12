@@ -7,15 +7,21 @@ so the completion must still be recorded and the handler must still close.
 import asyncio
 
 import anyio
+from fastapi import FastAPI, Request
 
-from app.api.v1.completions.observability import CompletionTimer, Outcome
-from app.api.v1.completions.streaming import StreamLimits, open_event_stream
+from app.api.sse import event_stream_response
+from app.api.v1.completions.router import _events
+from app.core.telemetry import CompletionObservation
 from app.modules.business.completions.schemas import (
     CompletionRequest,
     CompletionResult,
     CompletionStreamChunk,
 )
-from app.modules.business.completions.service import CompletionService
+from app.modules.business.completions.service import (
+    CompletionService,
+    StreamPolicy,
+)
+from tests.factories import build_test_settings
 
 
 class _SlowHandler:
@@ -34,28 +40,36 @@ class _SlowHandler:
             self.closed = True
 
 
-class _RecordingTimer(CompletionTimer):
+class _RecordingSink:
     def __init__(self) -> None:
-        super().__init__(mode="stream")
-        self.outcomes: list[Outcome] = []
+        self.outcomes: list[str] = []
 
-    def emit(self, outcome: Outcome) -> None:
-        self.outcomes.append(outcome)
+    def record_completion(self, observation: CompletionObservation) -> None:
+        self.outcomes.append(observation.outcome)
 
 
 async def test_client_disconnect_records_outcome_and_closes_handler() -> None:
     handler = _SlowHandler()
-    timer = _RecordingTimer()
-    frames = await open_event_stream(
-        CompletionService(handler),
-        CompletionRequest(messages=[{"role": "user", "content": "hi"}]),
-        StreamLimits(first_token_timeout=5, idle_timeout=30, heartbeat=10),
-        timer,
+    sink = _RecordingSink()
+    service = CompletionService(
+        handler,
+        sink=sink,
+        policy=StreamPolicy(first_token_timeout=5, idle_timeout=30),
+    )
+    app = FastAPI()
+    app.state.settings = build_test_settings()
+    response = await event_stream_response(
+        Request({"type": "http", "app": app}),
+        _events(
+            service.stream(
+                CompletionRequest(messages=[{"role": "user", "content": "hi"}])
+            )
+        ),
     )
 
     with anyio.move_on_after(0.2):
-        async for _ in frames:
+        async for _ in response.body_iterator:
             pass
 
-    assert timer.outcomes == ["disconnected"]
+    assert sink.outcomes == ["disconnected"]
     assert handler.closed is True
