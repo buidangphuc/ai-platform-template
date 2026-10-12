@@ -4,7 +4,30 @@ on:
   push:
   pull_request:
 
+# Settings requires POSTGRES_* and REDIS_HOST at import time; .env.example holds
+# valid defaults (all optional capabilities disabled), so jobs load it via
+# `uv run --env-file`.
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install (all extras)
+        run: uv sync --dev --all-extras
+      - name: Ruff format
+        run: uv run ruff format --check app tests scripts alembic
+      - name: Ruff lint
+        run: uv run ruff check app tests scripts alembic
+      - name: Pyright
+        run: uv run --all-extras pyright
+      - name: Pre-commit hooks (commit-msg stage skipped)
+        run: uv run pre-commit run --all-files --hook-stage pre-commit
+        env:
+          SKIP: commitizen
+
   pytest:
     runs-on: ubuntu-latest
     steps:
@@ -14,7 +37,46 @@ jobs:
           enable-cache: true
       - name: Install (all extras)
         run: uv sync --dev --all-extras
-      - name: Run tests
-        run: uv run --all-extras pytest -q
+      - name: Run tests with coverage
+        run: uv run --all-extras pytest -q --cov=app --cov-report=term-missing --cov-fail-under=80
       - name: Eval gate (deterministic cases — judge cases skip without JUDGE_CHAT_MODEL)
-        run: uv run --all-extras python -m scripts.run_eval --min-score 0.8
+        run: uv run --env-file .env.example --all-extras python -m scripts.run_eval --min-score 0.8
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres # pragma: allowlist secret
+          POSTGRES_DB: ai_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # pragma: allowlist secret
+      POSTGRES_DB: ai_platform
+      REDIS_HOST: localhost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install (all extras)
+        run: uv sync --dev --all-extras
+      - name: Apply migrations
+        run: uv run --all-extras alembic upgrade head
+      - name: Check models match migrations
+        # Known drift today: alembic/env.py does not import the quota models and
+        # the tasks/outbox indexes are not declared on the models, so `check`
+        # fails. Advisory until that is fixed; then drop continue-on-error.
+        continue-on-error: true
+        run: uv run --all-extras alembic check

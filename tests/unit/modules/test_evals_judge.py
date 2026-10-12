@@ -44,6 +44,7 @@ async def test_judge_fails_below_threshold() -> None:
 async def test_judge_prompt_carries_output_and_criteria() -> None:
     fake = _FakeChatModel('{"score": 1.0, "reason": "ok"}')
     await LlmJudgeEvaluator(fake).evaluate(output="OUT-123", expected="CRIT-456")
+    assert fake.last_messages is not None
     text = fake.last_messages[0]["content"]
     assert "OUT-123" in text
     assert "CRIT-456" in text
