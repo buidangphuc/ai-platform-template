@@ -165,7 +165,7 @@ through `create_app(completion_guards_factory=...)` (input/output guards, fail-c
 ## Ship checklist for an AI feature
 
 - [ ] Model accessed via `LLMInstance` / handler dependency, not the SDK directly.
-- [ ] Outcome reported to `ModelRouter` (`record_success` / `record_error`).
+- [ ] Model called via `LLMInstance.ainvoke` (reports outcomes + one-shot failover); raw `chat_model(role)` users report to the router themselves.
 - [ ] Bounded timeout + fallback path defined.
 - [ ] Trace config passed; sensitive data redacted.
 - [ ] Eval cases added; gating (A) or monitoring (B) chosen deliberately.
