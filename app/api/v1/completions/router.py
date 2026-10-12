@@ -16,7 +16,10 @@ router.include_router(
     tags=["completions"],
     dependencies=[Depends(require_principal)],
 )
-router.include_router(
+
+# Mounted only when TASKS_ENABLED (see app/api/router.py).
+tasks_router = APIRouter()
+tasks_router.include_router(
     tasks.router,
     prefix="/completions",
     tags=["completions"],

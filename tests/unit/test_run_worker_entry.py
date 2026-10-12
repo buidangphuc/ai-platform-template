@@ -124,8 +124,10 @@ async def test_worker_message_handler_marks_task_completed():
             pytest.fail("success path should not mark failed")
 
     service = _Service()
-    pipeline = worker_module.CompletionPipeline(EchoCompletionHandler())
-    process_message = build_worker_message_handler(service=service, pipeline=pipeline)
+    completion_service = worker_module.CompletionService(EchoCompletionHandler())
+    process_message = build_worker_message_handler(
+        service=service, completion_service=completion_service
+    )
 
     await process_message(QueueMessage(id="msg-1", body={"task_id": "task-1"}))
 

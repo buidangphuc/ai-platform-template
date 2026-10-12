@@ -22,7 +22,7 @@ Not allowed:
 
 Dependency adapters:
 
-- Put API-specific dependency adapters under the owning API surface, for example `app/api/v1/completions/dependencies.py` (the live reference) or `app/api/v1/<surface>/dependencies.py`.
+- Views read services from `get_app_resources(request.app)` (the deliberate `app.state` seam). Feature-gated groups use one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
 - Avoid generic `app/api/deps.py` files that become unrelated wiring dumps.
 
 ### Bootstrap Layer
@@ -33,14 +33,15 @@ Responsibilities:
 
 - Open lifecycle-owned platform resources.
 - Compose application services from already-open platform resources.
-- Register composed services in `ApplicationResources.services`.
+- Store each composed business service on its typed `ApplicationResources` field (one instance per app, built in `app/bootstrap/services.py`).
 - Close resources in reverse lifecycle order.
 
 Important anchors:
 
 - `app/bootstrap/resources.py`: `ApplicationResources`, open/close lifecycle.
 - `app/bootstrap/addons.py`: `BootstrapAddon` protocol and default addon order.
-- `app/bootstrap/state.py`: typed resource helpers such as `get_service_resource(...)`.
+- `app/bootstrap/state.py`: typed resource helpers such as `get_app_resources(...)`, `get_task_services(...)`.
+- `app/bootstrap/services.py`: `compose_business_services`, handler factories.
 
 Use this layer when a service needs app-lifetime dependencies such as shared HTTP clients, LLM instances, Mongo gateway, quota service, task service, cache, object storage, or webhook dispatcher.
 
@@ -88,16 +89,16 @@ Not allowed:
 
 ## Adding A New Business Service
 
-1. Create service logic under `app/modules/business/<domain>/services`.
+1. Create the `<Domain>Service` class in `app/modules/business/<domain>/service.py`.
 2. Add schemas/types/models/stores/integrations under the same business domain as needed.
 3. Decide whether dependencies are request-scoped or app-lifetime:
    - Request-scoped: use existing FastAPI dependency or session boundary.
-   - App-lifetime: wire in `app/bootstrap` and register in `ApplicationResources.services`.
-4. Add an API dependency adapter under the route surface.
+   - App-lifetime: build it in `app/bootstrap/services.py` and store it on a typed `ApplicationResources` field.
+4. Read the service in the view via `get_app_resources(request.app)`.
 5. Endpoint calls the service and preserves its response contract.
 6. Add tests:
    - unit service test for orchestration and failure modes
-   - adapter/bootstrap test if service is registered in `ApplicationResources.services`
+   - bootstrap test that lifespan composes the service
    - integration test for public endpoint contract
 
 ## Adding A New Endpoint

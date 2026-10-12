@@ -8,7 +8,13 @@ from app.modules.business.completions.schemas import (
 )
 
 
-class CompletionPipeline:
+class CompletionService:
+    """Completion business service; behavior lives in the injected handler.
+
+    Bootstrap builds exactly one instance per app, after resources open, and
+    stores it on ``ApplicationResources.completion_service``.
+    """
+
     def __init__(self, handler: CompletionHandler) -> None:
         self.handler = handler
 

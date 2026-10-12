@@ -27,8 +27,10 @@ def build_test_settings(**overrides: object) -> Settings:
 
 @asynccontextmanager
 async def api_client_for(app: FastAPI) -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as client:
-        yield client
+    """Client for an app with its lifespan running, as in production."""
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            yield client

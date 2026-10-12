@@ -12,9 +12,9 @@ from app.core.config import Settings, get_settings
 from app.core.database.engine import build_engine, build_sessionmaker
 from app.core.redis import build_redis_client
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
-from app.modules.business.completions.pipeline import CompletionPipeline
 from app.modules.business.completions.ports import CompletionHandler
 from app.modules.business.completions.schemas import CompletionRequest
+from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.queue.factory import build_queue_gateway
 from app.modules.messaging.queue.gateway import QueueMessage
 from app.modules.messaging.queue.worker import AsyncPollingWorker
@@ -44,7 +44,7 @@ class WorkerContext:
     settings: Settings
     worker: AsyncPollingWorker
     handler: CompletionHandler
-    pipeline: CompletionPipeline
+    completion_service: CompletionService
     resources: WorkerResources
 
 
@@ -115,12 +115,12 @@ def build_worker_context(
     resolved = settings or get_settings()
     resources = build_worker_resources(resolved)
     resolved_handler: CompletionHandler = handler or EchoCompletionHandler()
-    pipeline = CompletionPipeline(resolved_handler)
+    completion_service = CompletionService(resolved_handler)
     worker = AsyncPollingWorker(
         gateway=resources.queue,
         handler=build_worker_message_handler(
             service=resources.service,
-            pipeline=pipeline,
+            completion_service=completion_service,
         ),
         max_concurrent=resolved.WORKER_MAX_CONCURRENT,
         max_attempts=resolved.WORKER_MAX_ATTEMPTS,
@@ -132,7 +132,7 @@ def build_worker_context(
         settings=resolved,
         worker=worker,
         handler=resolved_handler,
-        pipeline=pipeline,
+        completion_service=completion_service,
         resources=resources,
     )
 
@@ -140,7 +140,7 @@ def build_worker_context(
 def build_worker_message_handler(
     *,
     service: TaskService,
-    pipeline: CompletionPipeline,
+    completion_service: CompletionService,
 ) -> Callable[[QueueMessage], Awaitable[None]]:
     async def process_message(message: QueueMessage) -> None:
         task_id = message.body.get("task_id")
@@ -157,7 +157,7 @@ def build_worker_message_handler(
         await service.mark_processing(task_id)
         try:
             payload = CompletionRequest(**task.payload)
-            result = await pipeline.complete(payload)
+            result = await completion_service.complete(payload)
             await service.mark_completed(
                 task_id,
                 {

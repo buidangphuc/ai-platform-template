@@ -1,21 +1,12 @@
 from fastapi import APIRouter, Request
 
-from app.bootstrap.state import get_app_resources, require
+from app.bootstrap.state import get_task_services
 from app.modules.business.completions.schemas import CompletionRequest
 from app.modules.messaging.tasks.schemas import TaskResponse, TaskSubmitResponse
-from app.modules.messaging.tasks.service import TaskService
 
 TASK_TYPE = "completion"
 
 router = APIRouter()
-
-
-def get_task_service(request: Request) -> TaskService:
-    return require(
-        get_app_resources(request.app).task_service,
-        code="task_service_not_configured",
-        message="Async task service is disabled or lifespan has not opened it",
-    )
 
 
 @router.post("/tasks", response_model=TaskSubmitResponse, status_code=202)
@@ -23,7 +14,7 @@ async def submit_completion(
     payload: CompletionRequest,
     request: Request,
 ) -> TaskSubmitResponse:
-    service = get_task_service(request)
+    service = get_task_services(request.app).service
     task = await service.submit(
         type=TASK_TYPE,
         payload=payload.model_dump(mode="json"),
@@ -40,7 +31,7 @@ async def get_completion_task(
     task_id: str,
     request: Request,
 ) -> TaskResponse:
-    service = get_task_service(request)
+    service = get_task_services(request.app).service
     task = await service.require(task_id)
     return TaskResponse(
         id=task.id,

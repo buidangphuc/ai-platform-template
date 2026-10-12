@@ -10,6 +10,7 @@ from app.bootstrap import (
 )
 from app.bootstrap.application import _build_lifespan, create_app
 from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.services import default_completion_handler_factory
 from app.core.config import Settings
 from app.core.health import HealthService
 
@@ -57,7 +58,12 @@ async def test_lifespan_flushes_langfuse_client_when_enabled(
     _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=True, addons=())
+    lifespan = _build_lifespan(
+        settings,
+        init_resources=True,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+    )
 
     async with lifespan(_bare_app()):
         assert fake_client.flushed is False
@@ -82,7 +88,12 @@ async def test_lifespan_skips_flush_when_init_resources_is_false(
     _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=False, addons=())
+    lifespan = _build_lifespan(
+        settings,
+        init_resources=False,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+    )
 
     async with lifespan(_bare_app()):
         pass
@@ -103,7 +114,12 @@ async def test_lifespan_skips_flush_when_langfuse_disabled(
     )
     _patch_resource_lifecycle(monkeypatch)
 
-    lifespan = _build_lifespan(test_settings, init_resources=True, addons=())
+    lifespan = _build_lifespan(
+        test_settings,
+        init_resources=True,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+    )
 
     async with lifespan(_bare_app()):
         pass
@@ -119,7 +135,12 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
     _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
-    lifespan = _build_lifespan(settings, init_resources=True, addons=())
+    lifespan = _build_lifespan(
+        settings,
+        init_resources=True,
+        addons=(),
+        completion_handler_factory=default_completion_handler_factory,
+    )
 
     async with lifespan(_bare_app()):
         pass
@@ -229,8 +250,7 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     assert resources_before.sessionmaker is None
     assert resources_before.redis is None
     assert resources_before.queue_gateway is None
-    assert resources_before.task_store is None
-    assert resources_before.task_service is None
+    assert resources_before.tasks is None
 
     async with app.router.lifespan_context(app):
         resources_open = app.state.resources
@@ -238,8 +258,8 @@ async def test_app_lifespan_owns_database_and_redis_resources(
         assert resources_open.sessionmaker is sessionmaker
         assert resources_open.redis is redis
         assert resources_open.queue_gateway is queue
-        assert resources_open.task_store is task_store
-        assert resources_open.task_service is not None
+        assert resources_open.tasks is not None
+        assert resources_open.tasks.store is task_store
         assert engine.disposed is False
         assert redis.closed is False
         assert queue.closed is False
@@ -253,7 +273,7 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     assert resources_closed.engine is None
     assert resources_closed.redis is None
     assert resources_closed.queue_gateway is None
-    assert resources_closed.task_store is None
+    assert resources_closed.tasks is None
     assert app.state.health_service is not None
 
 
@@ -335,8 +355,7 @@ async def test_app_lifespan_honors_resource_flags(
         assert resources_open.sessionmaker is None
         assert resources_open.redis is None
         assert resources_open.queue_gateway is None
-        assert resources_open.task_store is None
-        assert resources_open.task_service is None
+        assert resources_open.tasks is None
         assert app.state.health_service is not None
 
     assert build_calls == []

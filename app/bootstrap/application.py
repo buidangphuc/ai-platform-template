@@ -13,20 +13,25 @@ from app.bootstrap.resources import (
     close_application_resources,
     open_application_resources,
 )
+from app.bootstrap.services import (
+    CompletionHandlerFactory,
+    compose_business_services,
+    default_completion_handler_factory,
+)
 from app.bootstrap.state import get_in_flight_tracker
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.health import HealthService
 from app.core.logging import configure_logging
 from app.core.middleware import InFlightTracker
-from app.modules.business.completions.pipeline import CompletionPipeline
-from app.modules.business.completions.ports import CompletionHandler
 
 
 def create_app(
     *,
     settings: Settings | None = None,
-    completion_handler: CompletionHandler | None = None,
+    completion_handler_factory: CompletionHandlerFactory = (
+        default_completion_handler_factory
+    ),
     init_resources: bool = True,
     resource_addons: tuple[BootstrapAddon, ...] = (),
 ) -> FastAPI:
@@ -48,6 +53,7 @@ def create_app(
             resolved_settings,
             init_resources=init_resources,
             addons=addons,
+            completion_handler_factory=completion_handler_factory,
         ),
         docs_url=docs_url,
         redoc_url=redoc_url,
@@ -59,10 +65,7 @@ def create_app(
     app.state.in_flight_tracker = (
         InFlightTracker() if resolved_settings.GRACEFUL_SHUTDOWN_ENABLED else None
     )
-    resources = ApplicationResources()
-    if completion_handler is not None:
-        resources.completion_pipeline = CompletionPipeline(completion_handler)
-    app.state.resources = resources
+    app.state.resources = ApplicationResources()
     install_core_middlewares(app, resolved_settings)
     register_exception_handlers(app)
     app.include_router(build_api_router(resolved_settings))
@@ -74,15 +77,21 @@ def _build_lifespan(
     *,
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
+    completion_handler_factory: CompletionHandlerFactory,
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
-            await open_application_resources(
+            resources = await open_application_resources(
                 app,
                 settings,
                 init_resources=init_resources,
                 addons=addons,
+            )
+            compose_business_services(
+                resources,
+                settings,
+                completion_handler_factory=completion_handler_factory,
             )
             yield
         finally:

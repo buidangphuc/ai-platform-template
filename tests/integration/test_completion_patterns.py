@@ -11,6 +11,7 @@ from app.modules.business.completions.schemas import (
     CompletionResult,
     CompletionStreamChunk,
 )
+from tests.factories import api_client_for
 
 
 class RecordingCompletionHandler:
@@ -48,28 +49,25 @@ async def test_create_completion_requires_authentication(client: AsyncClient):
     assert response.status_code == 401
 
 
-async def test_create_completion_requires_injected_handler(client: AsyncClient):
+async def test_create_completion_uses_default_scaffold_handler(client: AsyncClient):
     response = await client.post(
         "/api/v1/completions",
         headers=await _auth_headers(client),
         json={"messages": [{"role": "user", "content": "hello"}]},
     )
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "completion_handler_not_configured"
+    assert response.status_code == 200
+    assert "hello" in response.json()["content"]
 
 
 async def test_create_completion_calls_injected_handler(test_settings: Settings):
     handler = RecordingCompletionHandler()
     app = create_app(
-        completion_handler=handler,
+        completion_handler_factory=lambda resources, settings: handler,
         settings=test_settings,
         init_resources=False,
     )
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as client:
+    async with api_client_for(app) as client:
         response = await client.post(
             "/api/v1/completions",
             headers=await _auth_headers(client),
@@ -92,14 +90,11 @@ async def test_create_completion_calls_injected_handler(test_settings: Settings)
 async def test_stream_completion_calls_injected_handler(test_settings: Settings):
     handler = RecordingCompletionHandler()
     app = create_app(
-        completion_handler=handler,
+        completion_handler_factory=lambda resources, settings: handler,
         settings=test_settings,
         init_resources=False,
     )
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as client:
+    async with api_client_for(app) as client:
         async with client.stream(
             "POST",
             "/api/v1/completions/stream",
@@ -129,7 +124,9 @@ async def test_task_completion_submit_and_poll(test_settings: Settings):
         }
     )
     app = create_app(
-        completion_handler=RecordingCompletionHandler(),
+        completion_handler_factory=lambda resources, settings: (
+            RecordingCompletionHandler()
+        ),
         settings=settings,
         init_resources=True,
     )
@@ -157,12 +154,14 @@ async def test_task_completion_submit_and_poll(test_settings: Settings):
     assert poll.json()["type"] == "completion"
 
 
-async def test_task_completion_returns_503_when_tasks_disabled(
+async def test_task_routes_are_not_mounted_when_tasks_disabled(
     test_settings: Settings,
 ):
     settings = test_settings.model_copy(update={"TASKS_ENABLED": False})
     app = create_app(
-        completion_handler=RecordingCompletionHandler(),
+        completion_handler_factory=lambda resources, settings: (
+            RecordingCompletionHandler()
+        ),
         settings=settings,
         init_resources=True,
     )
@@ -178,5 +177,4 @@ async def test_task_completion_returns_503_when_tasks_disabled(
                 json={"messages": [{"role": "user", "content": "hello"}]},
             )
 
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "task_service_not_configured"
+    assert response.status_code == 404

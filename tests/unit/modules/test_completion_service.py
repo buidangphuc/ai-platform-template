@@ -1,11 +1,11 @@
 from collections.abc import AsyncIterator
 
-from app.modules.business.completions.pipeline import CompletionPipeline
 from app.modules.business.completions.schemas import (
     CompletionRequest,
     CompletionResult,
     CompletionStreamChunk,
 )
+from app.modules.business.completions.service import CompletionService
 
 
 class _RecordingCompletionHandler:
@@ -29,21 +29,21 @@ def _request() -> CompletionRequest:
     return CompletionRequest(messages=[{"role": "user", "content": "hello"}])
 
 
-async def test_completion_pipeline_delegates_complete_to_handler():
+async def test_completion_service_delegates_complete_to_handler():
     handler = _RecordingCompletionHandler()
-    pipeline = CompletionPipeline(handler)
+    service = CompletionService(handler)
 
-    result = await pipeline.complete(_request())
+    result = await service.complete(_request())
 
     assert result.content == "done"
     assert handler.completed[0].messages[-1].content == "hello"
 
 
-async def test_completion_pipeline_delegates_stream_to_handler():
+async def test_completion_service_delegates_stream_to_handler():
     handler = _RecordingCompletionHandler()
-    pipeline = CompletionPipeline(handler)
+    service = CompletionService(handler)
 
-    chunks = [chunk async for chunk in pipeline.stream(_request())]
+    chunks = [chunk async for chunk in service.stream(_request())]
 
     assert chunks == [CompletionStreamChunk(delta="part")]
     assert handler.streamed[0].messages[-1].content == "hello"

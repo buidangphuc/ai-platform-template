@@ -60,13 +60,18 @@ Avoid:
 
 Use this sequence:
 
-1. Define or update the business service in `app/modules/business/<domain>/services`.
-2. Keep stores and external integrations as constructor dependencies.
-3. If runtime dependencies must be opened once per app lifecycle, wire them in bootstrap from already-open platform resources.
-4. Register app-composed services in `ApplicationResources.services`.
-5. Add a small API dependency adapter under the owning API surface, for example `app/api/<surface>/dependencies.py`.
-6. Endpoint functions should parse HTTP input, call one service method, and return the existing response contract.
-7. Add unit tests for service behavior and integration tests for API contract.
+1. Define one `<Domain>Service` class in `app/modules/business/<domain>/service.py` (e.g. `CompletionService`).
+2. Keep stores, handlers and external integrations as constructor dependencies.
+3. Bootstrap builds exactly one instance per app, in lifespan after resources open
+   (`app/bootstrap/services.py`), and stores it on a typed field of `ApplicationResources`
+   (e.g. `completion_service: CompletionService`). No module-level singletons.
+4. A feature behind a `*_ENABLED` flag gets a feature group (e.g. `TaskServices`) that exists only
+   when enabled; `app/api/router.py` mounts its router only when enabled, and one typed accessor in
+   `app/bootstrap/state.py` (e.g. `get_task_services`) resolves it.
+5. Endpoint functions read the service from `get_app_resources(request.app)`, parse HTTP input, call
+   one service method, and return the existing response contract. No per-surface getter helpers.
+6. Add unit tests for service behavior and integration tests for API contract (tests run the app lifespan,
+   see `tests/factories.py:api_client_for`).
 
 Adding a new endpoint usually should not touch bootstrap. Touch bootstrap only when the endpoint introduces a new app-level service or a new lifecycle-owned runtime dependency.
 

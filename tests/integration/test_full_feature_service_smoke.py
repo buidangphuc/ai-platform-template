@@ -53,7 +53,7 @@ class _ExampleService:
         assert resources.cache is not None
         assert resources.objects is not None
         assert resources.queue_gateway is not None
-        assert resources.task_service is not None
+        assert resources.tasks is not None
         assert resources.webhook_signer is not None
 
         await resources.cache.set("service-smoke/cache-key", b"cache-value")
@@ -67,7 +67,7 @@ class _ExampleService:
         object_value = await resources.objects.get("service-smoke/object.txt")
         object_exists = await resources.objects.exists("service-smoke/object.txt")
 
-        task = await resources.task_service.submit(
+        task = await resources.tasks.service.submit(
             type="service-smoke",
             payload={"input": "ok"},
         )
@@ -149,7 +149,7 @@ async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled
         assert resources_open.engine is not None
         assert resources_open.redis is not None
         assert resources_open.queue_gateway is not None
-        assert resources_open.task_service is not None
+        assert resources_open.tasks is not None
         assert resources_open.cache is not None
         assert resources_open.objects is not None
         assert [addon.name for addon in resources_open.addons][-1] == "example_service"
@@ -182,7 +182,7 @@ async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled
     assert resources_closed.engine is None
     assert resources_closed.redis is None
     assert resources_closed.queue_gateway is None
-    assert resources_closed.task_store is None
+    assert resources_closed.tasks is None
     assert resources_closed.cache is None
     assert resources_closed.objects is None
     assert resources_closed.addons == []

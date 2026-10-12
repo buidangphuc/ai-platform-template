@@ -206,11 +206,10 @@ capabilities such as Mongo, quota, cache, objects, LLM, queues, and task stores;
 Business services should receive explicit constructor dependencies and must not
 read FastAPI `Request`, `app.state`, or a global service locator. When a product
 service needs lifespan-owned runtime dependencies, build it in the bootstrap
-composition root from already-open platform resources, register it on
-`ApplicationResources.services`, and expose a small FastAPI dependency adapter
-that calls `get_service_resource(...)`. API dependency adapters should live
-under the owning API surface, for example `app/api/<surface>/dependencies.py`,
-not inside `app/modules/business`.
+composition root (`app/bootstrap/services.py`) from already-open platform
+resources, as exactly one instance per app stored on a typed
+`ApplicationResources` field (e.g. `completion_service`). Views read it with
+`get_app_resources(request.app)`; no per-surface getter helpers.
 
 Adding a new endpoint usually should not touch bootstrap. Add or extend the
 business service method, then call it from the API router. Update bootstrap only
@@ -261,7 +260,9 @@ per-instance Langfuse tracker. Pass `instance.trace_config(...)` into LangChain
 calls to keep parallel LLM services separated by instance, service, session,
 user, and request metadata.
 
-To use the completions transport, inject business logic at app construction:
+To use the completions transport, pass a handler factory. It runs in lifespan
+with the opened resources, so the handler can take an LLM instance, RAG service
+or stores from them:
 
 ```python
 from collections.abc import AsyncIterator
@@ -272,6 +273,8 @@ from app.modules.business.completions.schemas import (
     CompletionStreamChunk,
 )
 from app.bootstrap.application import create_app
+from app.bootstrap.resources import ApplicationResources
+from app.core.config import Settings
 
 
 class MyCompletionHandler:
@@ -285,11 +288,16 @@ class MyCompletionHandler:
         yield CompletionStreamChunk(delta="...")
 
 
-app = create_app(completion_handler=MyCompletionHandler())
+def build_handler(resources: ApplicationResources, settings: Settings) -> MyCompletionHandler:
+    return MyCompletionHandler()
+
+
+app = create_app(completion_handler_factory=build_handler)
 ```
 
-Without an injected handler, `/api/v1/completions` and
-`/api/v1/completions/stream` return `501 completion_handler_not_configured`.
+Without a factory, the scaffold `EchoCompletionHandler` answers (the worker uses
+the same default). The async task routes (`/api/v1/completions/tasks`) are mounted
+only when `TASKS_ENABLED=true`.
 
 The app factory registers a FastAPI lifespan that calls
 `langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and

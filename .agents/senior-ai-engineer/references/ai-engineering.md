@@ -87,21 +87,24 @@ Factory + bootstrap-addon pattern (`factory.py`):
 - The service carries a `RedactionPolicy` and a `TimeoutPolicy` — retrieval is
   bounded and redacted by construction. Preserve that when extending.
 
-## Completions business pipeline — `app/modules/business/completions/`
+## Completions business service — `app/modules/business/completions/`
 
 - `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`.
-- `pipeline.py`: `CompletionPipeline` wraps one handler and exposes the same two
-  methods. The pipeline is stable; behavior lives in the handler.
+- `service.py`: `CompletionService` wraps one handler and exposes the same two
+  methods. The service is stable; behavior lives in the handler. One instance per
+  app lives on `ApplicationResources.completion_service`.
 - `handlers/echo.py` is the scaffold handler.
 
 To add a real model-backed completion:
 
 1. Implement `CompletionHandler` (e.g. `handlers/<name>.py`), taking an
    `LLMInstance` as a constructor dependency.
-2. Compose it in bootstrap and inject it into `CompletionPipeline`.
+2. Pass a handler factory `create_app(completion_handler_factory=...)`; it runs in
+   lifespan with the opened `ApplicationResources`, so it can take an `LLMInstance`,
+   RAG service or stores from there (`app/bootstrap/services.py`).
 3. Keep the API endpoint thin and the response contract unchanged.
 
-Do not modify `CompletionPipeline` to add behavior — swap the handler.
+Do not modify `CompletionService` to add behavior — swap the handler.
 
 ## Cross-cutting requirements for every AI call
 
