@@ -27,20 +27,20 @@ router = APIRouter(prefix="/completions", tags=["completions"], dependencies=[De
 tasks_router = APIRouter(prefix="/completions", tags=["completions"]); tasks_router.include_router(tasks.router)
 ```
 
-- [ ] 1.1 `LogCompletionSink`, `FanOutSink`; verify a unit test that the log line is unchanged and fan-out reaches every sink
-- [ ] 1.2 `CompletionService` records observations, applies `StreamPolicy` with `asyncio.timeout` per `anext`, outcome `disconnected` on `GeneratorExit`/`CancelledError`; verify `tests/unit/modules/completions/test_service_observation.py` (ok, error, timeout, first-token timeout, TTFT only for stream)
-- [ ] 1.3 Bootstrap composes `FanOutSink([LogCompletionSink(), *([resources.telemetry] if resources.telemetry else [])])` and `StreamPolicy` from settings in `compose_business_services`; verify `tests/integration/test_completion_telemetry.py`
-- [ ] 1.4 `app/api/sse.py` `event_stream_response`; verify `tests/unit/api/test_sse.py` (prime raises before headers, heartbeat, AppError code frame, generic `stream_error`, shielded close)
-- [ ] 1.5 `router.py` holds the sync and stream views (stream view: local `_events(chunks)` yielding `content.delta` frames then the `done` frame from `StreamSummary`); delete the four old files; wire `app/api/router.py`; verify `tests/integration/test_completion_streaming.py`, `test_completion_patterns.py`, `test_completion_safety.py`, `tests/unit/core/test_application_wiring.py`
-- [ ] 1.6 Rewrite `tests/unit/api/test_stream_disconnect.py`: disconnect under an anyio cancel scope → recording sink sees exactly `["disconnected"]`, handler `finally` runs
+- [x] 1.1 `LogCompletionSink`, `FanOutSink`; verify a unit test that the log line is unchanged and fan-out reaches every sink
+- [x] 1.2 `CompletionService` records observations, applies `StreamPolicy` with `asyncio.timeout` per `anext`, outcome `disconnected` on `GeneratorExit`/`CancelledError`; verify `tests/unit/modules/completions/test_service_observation.py` (ok, error, timeout, first-token timeout, TTFT only for stream)
+- [x] 1.3 Bootstrap composes `FanOutSink([LogCompletionSink(), *([resources.telemetry] if resources.telemetry else [])])` and `StreamPolicy` from settings in `compose_business_services`; verify `tests/integration/test_completion_telemetry.py`
+- [x] 1.4 `app/api/sse.py` `event_stream_response`; verify `tests/unit/api/test_sse.py` (prime raises before headers, heartbeat, AppError code frame, generic `stream_error`, shielded close)
+- [x] 1.5 `router.py` holds the sync and stream views (stream view: local `_events(chunks)` yielding `content.delta` frames then the `done` frame from `StreamSummary`); delete the four old files; wire `app/api/router.py`; verify `tests/integration/test_completion_streaming.py`, `test_completion_patterns.py`, `test_completion_safety.py`, `tests/unit/core/test_application_wiring.py`
+- [x] 1.6 Rewrite `tests/unit/api/test_stream_disconnect.py`: disconnect under an anyio cancel scope → recording sink sees exactly `["disconnected"]`, handler `finally` runs
 
 ## 2. Completion tasks (wave 1)
 
 Owns: `app/api/v1/completions/tasks.py`, `app/modules/messaging/tasks/service.py`, `app/bootstrap/worker.py` (message handler), `app/modules/business/completions/schemas.py` (append `COMPLETION_TASK_TYPE = "completion"` at end of file only), `tests/unit/modules/tasks/test_service.py`, task tests in `tests/integration/test_completion_patterns.py`, worker test file.
 
-- [ ] 2.1 `require_owned(task_id, *, principal_id, type)`; verify not-found on type mismatch
-- [ ] 2.2 `tasks.py` uses `COMPLETION_TASK_TYPE`, `TaskResponse.model_validate(task)`, `router = APIRouter()` without prefix or router-level dependency; verify `GET` of another type → 404
-- [ ] 2.3 Worker stores `result.model_dump(mode="json")`; verify stored result has `usage` and `finish_reason`
+- [x] 2.1 `require_owned(task_id, *, principal_id, type)`; verify not-found on type mismatch
+- [x] 2.2 `tasks.py` uses `COMPLETION_TASK_TYPE`, `TaskResponse.model_validate(task)`, `router = APIRouter()` without prefix or router-level dependency; verify `GET` of another type → 404
+- [x] 2.3 Worker stores `result.model_dump(mode="json")`; verify stored result has `usage` and `finish_reason`
 
 ## 3. Docs (wave 2)
 
