@@ -104,7 +104,8 @@ To add a real model-backed completion:
    RAG service or stores from there (`app/bootstrap/services.py`).
 3. Keep the API endpoint thin and the response contract unchanged.
 
-Do not modify `CompletionService` to add behavior — swap the handler.
+Do not modify `CompletionService` to add behavior — swap the handler, or add checks
+through `create_app(completion_guards_factory=...)` (input/output guards, fail-closed).
 
 ## Cross-cutting requirements for every AI call
 

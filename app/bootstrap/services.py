@@ -42,7 +42,7 @@ def compose_business_services(
     settings: Settings,
     *,
     completion_handler_factory: CompletionHandlerFactory,
-    completion_guards_factory: CompletionGuardsFactory = default_completion_guards_factory,
+    completion_guards_factory: CompletionGuardsFactory,
 ) -> None:
     resources.completion_service = CompletionService(
         completion_handler_factory(resources, settings),
@@ -57,7 +57,7 @@ async def open_runtime(
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
     completion_handler_factory: CompletionHandlerFactory,
-    completion_guards_factory: CompletionGuardsFactory = default_completion_guards_factory,
+    completion_guards_factory: CompletionGuardsFactory,
 ) -> AsyncIterator[ApplicationResources]:
     """Open resources and compose business services; used by API and worker."""
     async with open_application_resources(

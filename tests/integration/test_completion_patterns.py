@@ -178,3 +178,31 @@ async def test_task_routes_are_not_mounted_when_tasks_disabled(
             )
 
     assert response.status_code == 404
+
+
+async def test_create_app_applies_guards_from_factory(test_settings: Settings):
+    from app.modules.business.completions.guards import GuardrailViolation
+
+    class _BlockEverything:
+        async def check_input(self, request: CompletionRequest) -> None:
+            raise GuardrailViolation("blocked")
+
+        async def check_output(
+            self, request: CompletionRequest, result: CompletionResult
+        ) -> None:
+            return None
+
+    app = create_app(
+        completion_guards_factory=lambda resources, settings: (_BlockEverything(),),
+        settings=test_settings,
+        init_resources=False,
+    )
+    async with api_client_for(app) as client:
+        response = await client.post(
+            "/api/v1/completions",
+            headers=await _auth_headers(client),
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "guardrail_input_violation"

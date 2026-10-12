@@ -13,7 +13,9 @@ from loguru import logger
 from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
 from app.bootstrap.resources import ApplicationResources, TaskServices, opened
 from app.bootstrap.services import (
+    CompletionGuardsFactory,
     CompletionHandlerFactory,
+    default_completion_guards_factory,
     default_completion_handler_factory,
     open_runtime,
 )
@@ -192,6 +194,9 @@ async def worker_context(
     completion_handler_factory: CompletionHandlerFactory = (
         default_completion_handler_factory
     ),
+    completion_guards_factory: CompletionGuardsFactory = (
+        default_completion_guards_factory
+    ),
     addons: tuple[BootstrapAddon, ...] | None = None,
 ) -> AsyncIterator[WorkerContext]:
     resolved = settings or get_settings()
@@ -201,6 +206,7 @@ async def worker_context(
         init_resources=True,
         addons=default_resource_addons() if addons is None else addons,
         completion_handler_factory=completion_handler_factory,
+        completion_guards_factory=completion_guards_factory,
     ) as resources:
         # Guaranteed by validate_worker_runtime_settings (TASKS_ENABLED).
         tasks = opened(resources.tasks, "tasks")

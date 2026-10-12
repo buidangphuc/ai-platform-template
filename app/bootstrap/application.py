@@ -10,7 +10,9 @@ from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
 from app.bootstrap.middleware import install_core_middlewares
 from app.bootstrap.resources import ApplicationResources, build_health_service
 from app.bootstrap.services import (
+    CompletionGuardsFactory,
     CompletionHandlerFactory,
+    default_completion_guards_factory,
     default_completion_handler_factory,
     open_runtime,
 )
@@ -27,6 +29,9 @@ def create_app(
     settings: Settings | None = None,
     completion_handler_factory: CompletionHandlerFactory = (
         default_completion_handler_factory
+    ),
+    completion_guards_factory: CompletionGuardsFactory = (
+        default_completion_guards_factory
     ),
     init_resources: bool = True,
     resource_addons: tuple[BootstrapAddon, ...] = (),
@@ -50,6 +55,7 @@ def create_app(
             init_resources=init_resources,
             addons=addons,
             completion_handler_factory=completion_handler_factory,
+            completion_guards_factory=completion_guards_factory,
         ),
         docs_url=docs_url,
         redoc_url=redoc_url,
@@ -74,6 +80,7 @@ def _build_lifespan(
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
     completion_handler_factory: CompletionHandlerFactory,
+    completion_guards_factory: CompletionGuardsFactory,
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -82,6 +89,7 @@ def _build_lifespan(
             init_resources=init_resources,
             addons=addons,
             completion_handler_factory=completion_handler_factory,
+            completion_guards_factory=completion_guards_factory,
         ) as resources:
             app.state.resources = resources
             app.state.health_service = build_health_service(
