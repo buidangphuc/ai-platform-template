@@ -20,3 +20,4 @@
 - [x] 3.3 `QuotaAddon` awaits `MongoQuotaStore.ensure_indexes()` at open; verify `test_quota_addon_ensures_mongo_indexes_when_opening`
 - [x] 3.4 Factories take required dependencies (per-backend builders); narrowing of Optional resources goes through one helper `resources.opened()`; verify `rg "is None" app/modules/*/*/factory.py` empty
 - [x] 3.5 Addon contract is `open(resources, settings, stack)`: each addon pushes the close of what it built onto the exit stack; `close` methods, `= None` resets and `is not None` guards are gone; verify `test_addons_close_in_reverse_order`, `test_failed_open_closes_what_was_already_opened`
+- [x] 3.6 `*_BACKEND` settings are `Literal` aliases; backend dispatch is an exhaustive `match` with no default branch, enforced by pyright `reportMatchNotExhaustive: error`; verify pyright errors when a Literal value has no `case`

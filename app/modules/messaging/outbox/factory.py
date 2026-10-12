@@ -18,5 +18,3 @@ def build_outbox_store(
             from app.modules.messaging.outbox.adapters import PostgresOutboxStore
 
             return PostgresOutboxStore(sessionmaker)
-        case backend:
-            raise ValueError(f"Unknown OUTBOX_BACKEND={backend!r}")

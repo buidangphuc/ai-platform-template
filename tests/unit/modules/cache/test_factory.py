@@ -1,5 +1,6 @@
 import pytest
 from fakeredis import aioredis
+from pydantic import ValidationError
 
 from app.bootstrap.addons.cache import CacheAddon
 from app.bootstrap.resources import ApplicationResources
@@ -46,11 +47,9 @@ async def test_cache_addon_selects_backend_and_closes_gateway():
     assert isinstance(resources.cache, RedisCacheGateway)
 
 
-async def test_cache_addon_rejects_unknown_backend():
-    with pytest.raises(ValueError, match="Unknown CACHE_BACKEND"):
-        await open_addon(
-            CacheAddon(), ApplicationResources(), _settings(CACHE_BACKEND="bogus")
-        )
+def test_settings_reject_unknown_cache_backend():
+    with pytest.raises(ValidationError, match="CACHE_BACKEND"):
+        _settings(CACHE_BACKEND="bogus")
 
 
 def test_cache_addon_is_enabled_only_by_flag():

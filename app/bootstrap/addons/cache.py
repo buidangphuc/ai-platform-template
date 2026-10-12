@@ -26,14 +26,12 @@ class CacheAddon:
         stack: AsyncExitStack,
     ) -> None:
         cache: CacheGateway
-        backend = settings.CACHE_BACKEND
-        if backend == "memory":
-            cache = build_memory_cache_gateway(settings)
-        elif backend == "redis":
-            cache = build_redis_cache_gateway(
-                settings, opened(resources.redis, "redis")
-            )
-        else:
-            raise ValueError(f"Unknown CACHE_BACKEND={backend!r}")
+        match settings.CACHE_BACKEND:
+            case "memory":
+                cache = build_memory_cache_gateway(settings)
+            case "redis":
+                cache = build_redis_cache_gateway(
+                    settings, opened(resources.redis, "redis")
+                )
         stack.push_async_callback(cache.close)
         resources.cache = cache

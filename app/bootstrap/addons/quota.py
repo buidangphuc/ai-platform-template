@@ -28,19 +28,17 @@ class QuotaAddon:
         stack: AsyncExitStack,
     ) -> None:
         store: QuotaStore
-        backend = settings.QUOTA_BACKEND
-        if backend == "memory":
-            store = build_memory_quota_store()
-        elif backend == "postgres":
-            store = build_postgres_quota_store(
-                opened(resources.sessionmaker, "sessionmaker")
-            )
-        elif backend == "mongo":
-            mongo_store = build_mongo_quota_store(opened(resources.mongo, "mongo"))
-            await mongo_store.ensure_indexes()
-            store = mongo_store
-        else:
-            raise ValueError(f"Unknown QUOTA_BACKEND={backend!r}")
+        match settings.QUOTA_BACKEND:
+            case "memory":
+                store = build_memory_quota_store()
+            case "postgres":
+                store = build_postgres_quota_store(
+                    opened(resources.sessionmaker, "sessionmaker")
+                )
+            case "mongo":
+                mongo_store = build_mongo_quota_store(opened(resources.mongo, "mongo"))
+                await mongo_store.ensure_indexes()
+                store = mongo_store
         quota = build_quota_service(store)
         stack.push_async_callback(quota.close)
         resources.quota = quota

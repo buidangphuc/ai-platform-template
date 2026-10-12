@@ -35,13 +35,11 @@ def build_storage_context(settings: Settings) -> StorageContext:
     require_llama_index()
     from llama_index.core import StorageContext
 
-    if settings.RAG_BACKEND == "memory":
-        return StorageContext.from_defaults()
-
-    raise RuntimeError(
-        f"RAG_BACKEND={settings.RAG_BACKEND!r} not implemented. "
-        "Extend build_storage_context() with your vector store."
-    )
+    # To add a vector store: extend RagBackend in app/core/config/ai.py and add
+    # a case here; pyright fails the build until every backend is handled.
+    match settings.RAG_BACKEND:
+        case "memory":
+            return StorageContext.from_defaults()
 
 
 def build_rag_service(settings: Settings) -> KnowledgeRetrievalService:

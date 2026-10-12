@@ -27,6 +27,7 @@
   "reportInconsistentOverload": "error",
   "reportInvalidStringEscapeSequence": "error",
   "reportSelfClsParameterName": "warning",
+  "reportMatchNotExhaustive": "error",
 
   "reportArgumentType": "warning",
   "reportCallIssue": "warning",

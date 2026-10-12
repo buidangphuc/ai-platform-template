@@ -14,11 +14,10 @@ def build_idempotency_store(
     *,
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> IdempotencyStore:
-    if settings.IDEMPOTENCY_BACKEND == "postgres":
-        from app.modules.platform.idempotency.adapters import (
-            build_postgres_idempotency_store,
-        )
+    match settings.IDEMPOTENCY_BACKEND:
+        case "postgres":
+            from app.modules.platform.idempotency.adapters import (
+                build_postgres_idempotency_store,
+            )
 
-        return build_postgres_idempotency_store(settings, sessionmaker=sessionmaker)
-
-    raise ValueError(f"Unknown IDEMPOTENCY_BACKEND={settings.IDEMPOTENCY_BACKEND!r}")
+            return build_postgres_idempotency_store(settings, sessionmaker=sessionmaker)

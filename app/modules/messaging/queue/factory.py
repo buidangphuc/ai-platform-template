@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from app.core.config import Settings
 from app.modules.messaging.queue.gateway import QueueGateway
@@ -11,9 +11,15 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
 
 
-def build_queue_gateway(settings: Settings) -> QueueGateway:
+ClientlessQueueBackend = Literal["memory", "sqs", "rabbitmq"]
+
+
+def build_queue_gateway(
+    settings: Settings,
+    backend: ClientlessQueueBackend,
+) -> QueueGateway:
     """Backends that need no injected client; redis uses its own builder."""
-    match settings.QUEUE_BACKEND:
+    match backend:
         case "memory":
             from app.modules.messaging.queue.adapters.memory import (
                 InMemoryQueueGateway,
@@ -45,8 +51,6 @@ def build_queue_gateway(settings: Settings) -> QueueGateway:
                 dead_letter_exchange=settings.RABBITMQ_DEAD_LETTER_EXCHANGE,
                 dead_letter_queue=settings.RABBITMQ_DEAD_LETTER_QUEUE,
             )
-        case backend:
-            raise ValueError(f"Unknown QUEUE_BACKEND={backend!r}")
 
 
 def build_redis_queue_gateway(settings: Settings, redis: Redis) -> QueueGateway:

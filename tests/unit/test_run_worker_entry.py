@@ -199,7 +199,7 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
 
     monkeypatch.setattr(
         "app.bootstrap.resources.build_queue_gateway",
-        lambda settings: queue,
+        lambda settings, backend: queue,
     )
     monkeypatch.setattr(
         "app.bootstrap.resources.build_memory_task_store",

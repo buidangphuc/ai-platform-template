@@ -52,17 +52,16 @@ def _build_limiter(
     limit: int,
     scope: str,
 ) -> InMemoryRateLimiter | RedisRateLimiter:
-    backend = settings.RATE_LIMIT_BACKEND
-    if backend == "memory":
-        return build_memory_rate_limiter(
-            limit=limit,
-            window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
-        )
-    if backend == "redis":
-        return build_redis_rate_limiter(
-            opened(resources.redis, "redis"),
-            limit=limit,
-            window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
-            prefix=f"{settings.RATE_LIMIT_REDIS_PREFIX}:{scope}",
-        )
-    raise ValueError(f"Unknown RATE_LIMIT_BACKEND={backend!r}")
+    match settings.RATE_LIMIT_BACKEND:
+        case "memory":
+            return build_memory_rate_limiter(
+                limit=limit,
+                window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+            )
+        case "redis":
+            return build_redis_rate_limiter(
+                opened(resources.redis, "redis"),
+                limit=limit,
+                window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+                prefix=f"{settings.RATE_LIMIT_REDIS_PREFIX}:{scope}",
+            )

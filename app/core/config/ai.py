@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+RagBackend = Literal["memory"]
 
 
 class AISettingsMixin(BaseModel):
@@ -20,7 +24,7 @@ class AISettingsMixin(BaseModel):
 
     # RAG
     RAG_ENABLED: bool = False
-    RAG_BACKEND: str = "memory"
+    RAG_BACKEND: RagBackend = "memory"
     RAG_CHUNK_SIZE: int = Field(default=512, gt=0)
     RAG_CHUNK_OVERLAP: int = Field(default=50, ge=0)
     RAG_DEFAULT_TOP_K: int = Field(default=5, gt=0)

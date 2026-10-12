@@ -222,7 +222,7 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     monkeypatch.setattr(
         resources_module,
         "build_queue_gateway",
-        lambda settings: queue,
+        lambda settings, backend: queue,
         raising=False,
     )
     monkeypatch.setattr(
@@ -328,7 +328,7 @@ async def test_app_lifespan_honors_resource_flags(
     monkeypatch.setattr(
         resources_module,
         "build_queue_gateway",
-        lambda settings: build_calls.append("queue"),
+        lambda settings, backend: build_calls.append("queue"),
         raising=False,
     )
     monkeypatch.setattr(

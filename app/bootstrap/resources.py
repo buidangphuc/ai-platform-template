@@ -163,10 +163,13 @@ def _open_queue(
 ) -> None:
     if not settings.QUEUE_ENABLED:
         return
-    if settings.QUEUE_BACKEND == "redis":
-        queue = build_redis_queue_gateway(settings, opened(resources.redis, "redis"))
-    else:
-        queue = build_queue_gateway(settings)
+    match settings.QUEUE_BACKEND:
+        case "redis":
+            queue = build_redis_queue_gateway(
+                settings, opened(resources.redis, "redis")
+            )
+        case "memory" | "sqs" | "rabbitmq" as backend:
+            queue = build_queue_gateway(settings, backend)
     stack.push_async_callback(queue.close)
     resources.queue_gateway = queue
 
@@ -189,8 +192,6 @@ def _open_tasks(
             )
         case "redis":
             store = build_redis_task_store(settings, opened(resources.redis, "redis"))
-        case backend:
-            raise ValueError(f"Unknown TASK_STORE_BACKEND={backend!r}")
     stack.push_async_callback(store.close)
 
     dispatcher: TaskDispatcher
@@ -201,8 +202,6 @@ def _open_tasks(
             dispatcher = OutboxTaskDispatcher(
                 opened(resources.outbox_store, "outbox store")
             )
-        case backend:
-            raise ValueError(f"Unknown TASKS_DISPATCH_BACKEND={backend!r}")
     resources.tasks = TaskServices(
         service=TaskService(
             store=store,

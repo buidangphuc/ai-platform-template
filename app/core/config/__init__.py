@@ -7,8 +7,9 @@ flattens them back into one schema.
 
 To add a new section: create a new ``BaseModel`` mixin and add it to the
 ``Settings`` inheritance list. To add a new adapter / backend for an existing
-section: just register it in that module's ``factory.py`` — the config layer
-does not maintain an allowlist (factory raises ``ValueError`` on unknown).
+section: add the value to that section's ``*Backend`` ``Literal`` alias and a
+``case`` to the dispatching ``match`` — pyright (``reportMatchNotExhaustive``)
+fails until every backend is handled, and Settings rejects unknown values.
 
 Numeric range validation is expressed via ``Field(gt=, ge=, le=)`` so the
 mixins don't need explicit ``@field_validator`` for the common cases. Add a

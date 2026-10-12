@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field, computed_field, model_validator
+
+RateLimitBackend = Literal["memory", "redis"]
+CacheBackend = Literal["memory", "redis"]
+ObjectBackend = Literal["memory", "s3"]
+IdempotencyBackend = Literal["postgres"]
+QuotaBackend = Literal["memory", "postgres", "mongo"]
 
 
 class PlatformSettingsMixin(BaseModel):
@@ -21,7 +27,7 @@ class PlatformSettingsMixin(BaseModel):
 
     # Rate limit (2 layers: IP + principal)
     RATE_LIMIT_ENABLED: bool = False
-    RATE_LIMIT_BACKEND: str = "memory"
+    RATE_LIMIT_BACKEND: RateLimitBackend = "memory"
     RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
     RATE_LIMIT_REDIS_PREFIX: str = "rate-limit"
     RATE_LIMIT_IP_ENABLED: bool = True
@@ -32,13 +38,13 @@ class PlatformSettingsMixin(BaseModel):
 
     # Cache
     CACHE_ENABLED: bool = False
-    CACHE_BACKEND: str = "memory"
+    CACHE_BACKEND: CacheBackend = "memory"
     CACHE_PREFIX: str = "app"
     CACHE_DEFAULT_TTL_SECONDS: float = Field(default=300, gt=0)
 
     # Object storage
     OBJECTS_ENABLED: bool = False
-    OBJECT_BACKEND: str = "memory"
+    OBJECT_BACKEND: ObjectBackend = "memory"
     OBJECT_PREFIX: str = "app"
     OBJECT_S3_BUCKET: str = ""
     OBJECT_S3_REGION: str = "ap-southeast-1"
@@ -46,14 +52,14 @@ class PlatformSettingsMixin(BaseModel):
 
     # Idempotency (sync endpoints only)
     IDEMPOTENCY_ENABLED: bool = False
-    IDEMPOTENCY_BACKEND: str = "postgres"
+    IDEMPOTENCY_BACKEND: IdempotencyBackend = "postgres"
     IDEMPOTENCY_TTL_SECONDS: int = Field(default=86_400, gt=0)
     IDEMPOTENCY_IN_PROGRESS_TIMEOUT_SECONDS: int = Field(default=60, gt=0)
     IDEMPOTENCY_KEY_MAX_LENGTH: int = Field(default=64, gt=0)
 
     # Durable quota / entitlement counters
     QUOTA_ENABLED: bool = False
-    QUOTA_BACKEND: str = "memory"
+    QUOTA_BACKEND: QuotaBackend = "memory"
 
     @model_validator(mode="after")
     def validate_backend_requirements(self) -> Self:
