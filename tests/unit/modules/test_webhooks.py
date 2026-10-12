@@ -1,7 +1,5 @@
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from app.bootstrap.addons.webhooks import WebhookAddon
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy, TimeoutPolicy
@@ -135,13 +133,14 @@ async def test_http_webhook_dispatcher_applies_timeout_policy_to_send():
     assert result.error == "Webhook dispatch timed out"
 
 
-def test_webhook_addon_requires_secret_when_enabled():
+def test_webhook_addon_respects_enabled_flag():
     addon = WebhookAddon()
+    secret = "secret"  # pragma: allowlist secret
 
     assert addon.is_enabled(_settings(WEBHOOKS_ENABLED=False)) is False
-    assert addon.is_enabled(_settings(WEBHOOKS_ENABLED=True)) is True
-    with pytest.raises(RuntimeError, match="WEBHOOK_SIGNING_SECRET"):
-        addon.build_components(_settings(WEBHOOKS_ENABLED=True))
+    assert addon.is_enabled(
+        _settings(WEBHOOKS_ENABLED=True, WEBHOOK_SIGNING_SECRET=secret)
+    )
 
 
 def test_webhook_signer_accepts_recent_past_timestamp():

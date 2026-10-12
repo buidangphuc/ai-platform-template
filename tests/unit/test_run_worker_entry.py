@@ -199,11 +199,11 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
 
     monkeypatch.setattr(
         "app.bootstrap.resources.build_queue_gateway",
-        lambda settings, *, redis=None: queue,
+        lambda settings: queue,
     )
     monkeypatch.setattr(
-        "app.bootstrap.resources.build_task_store",
-        lambda settings, *, sessionmaker=None, redis=None: store,
+        "app.bootstrap.resources.build_memory_task_store",
+        lambda: store,
     )
 
     async with worker_context(_settings()) as ctx:

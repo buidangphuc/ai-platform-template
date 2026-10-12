@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
 from app.modules.messaging.outbox.factory import build_outbox_store
 
@@ -18,16 +18,10 @@ class OutboxAddon:
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
-        if settings.OUTBOX_BACKEND == "postgres" and not settings.DATABASE_ENABLED:
-            raise RuntimeError(
-                "OutboxAddon with OUTBOX_BACKEND=postgres requires DATABASE_ENABLED"
-            )
         resources.outbox_store = build_outbox_store(
             settings,
-            sessionmaker=resources.sessionmaker,
+            opened(resources.sessionmaker, "sessionmaker"),
         )
 
     async def close(self, resources: ApplicationResources) -> None:
-        if resources.outbox_store is not None:
-            await resources.outbox_store.close()
-            resources.outbox_store = None
+        await opened(resources.outbox_store, "outbox store").close()

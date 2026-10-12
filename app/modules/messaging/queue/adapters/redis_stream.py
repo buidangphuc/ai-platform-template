@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
+from redis.typing import EncodableT, FieldT
 
 from app.modules.messaging.queue.gateway import QueueMessage
 
@@ -144,7 +145,7 @@ class RedisStreamQueueGateway:
         reason: str,
         count: int | None = None,
     ) -> None:
-        fields = {
+        fields: dict[FieldT, EncodableT] = {
             "body": json.dumps(body),
             "original_message_id": message_id,
             "reason": reason,

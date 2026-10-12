@@ -9,11 +9,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
-from app.bootstrap.resources import (
-    ApplicationResources,
-    TaskServices,
-    validate_core_resource_requirements,
-)
+from app.bootstrap.resources import ApplicationResources, TaskServices, opened
 from app.bootstrap.services import (
     CompletionHandlerFactory,
     default_completion_handler_factory,
@@ -40,7 +36,6 @@ def validate_worker_runtime_settings(settings: Settings) -> None:
         raise RuntimeError("Worker requires QUEUE_ENABLED")
     if not settings.TASKS_ENABLED:
         raise RuntimeError("Worker requires TASKS_ENABLED")
-    validate_core_resource_requirements(settings=settings, init_resources=True)
 
 
 def build_polling_worker(
@@ -119,9 +114,7 @@ async def worker_context(
         completion_handler_factory=completion_handler_factory,
     ) as resources:
         # Guaranteed by validate_worker_runtime_settings (TASKS_ENABLED).
-        tasks = resources.tasks
-        if tasks is None:
-            raise RuntimeError("Worker requires TASKS_ENABLED")
+        tasks = opened(resources.tasks, "tasks")
         yield WorkerContext(
             settings=resolved,
             worker=build_polling_worker(

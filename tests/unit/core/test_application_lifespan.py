@@ -222,13 +222,13 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     monkeypatch.setattr(
         resources_module,
         "build_queue_gateway",
-        lambda settings, *, redis=None: queue,
+        lambda settings: queue,
         raising=False,
     )
     monkeypatch.setattr(
         resources_module,
-        "build_task_store",
-        lambda settings, *, sessionmaker=None, redis=None: task_store,
+        "build_memory_task_store",
+        lambda: task_store,
         raising=False,
     )
 
@@ -328,13 +328,13 @@ async def test_app_lifespan_honors_resource_flags(
     monkeypatch.setattr(
         resources_module,
         "build_queue_gateway",
-        lambda settings, *, redis=None: build_calls.append("queue"),
+        lambda settings: build_calls.append("queue"),
         raising=False,
     )
     monkeypatch.setattr(
         resources_module,
-        "build_task_store",
-        lambda settings, *, sessionmaker=None, redis=None: build_calls.append("store"),
+        "build_memory_task_store",
+        lambda: build_calls.append("store"),
         raising=False,
     )
     settings = test_settings.model_copy(
@@ -398,46 +398,6 @@ def test_resource_lifecycle_uses_named_open_steps():
         assert callable(getattr(resources_module, name))
 
 
-async def test_app_lifespan_fails_fast_when_redis_queue_backend_has_no_redis(
-    test_settings: Settings,
-):
-    settings = test_settings.model_copy(
-        update={
-            "QUEUE_ENABLED": True,
-            "REDIS_ENABLED": False,
-            "QUEUE_BACKEND": "redis",
-        }
-    )
-    app = create_app(settings=settings, init_resources=True)
-
-    with pytest.raises(
-        RuntimeError, match="QUEUE_BACKEND=redis requires REDIS_ENABLED"
-    ):
-        async with app.router.lifespan_context(app):
-            pass
-
-
-async def test_app_lifespan_fails_fast_when_postgres_task_store_has_no_database(
-    test_settings: Settings,
-):
-    settings = test_settings.model_copy(
-        update={
-            "QUEUE_ENABLED": True,
-            "TASKS_ENABLED": True,
-            "DATABASE_ENABLED": False,
-            "TASK_STORE_BACKEND": "postgres",
-        }
-    )
-    app = create_app(settings=settings, init_resources=True)
-
-    with pytest.raises(
-        RuntimeError,
-        match="TASK_STORE_BACKEND=postgres requires DATABASE_ENABLED",
-    ):
-        async with app.router.lifespan_context(app):
-            pass
-
-
 @pytest.mark.parametrize(
     ("updates", "message"),
     [
@@ -464,13 +424,6 @@ async def test_app_lifespan_fails_fast_when_postgres_task_store_has_no_database(
                 "IDEMPOTENCY_ENABLED": True,
             },
             "IDEMPOTENCY_BACKEND=postgres requires DATABASE_ENABLED",
-        ),
-        (
-            {
-                "DATABASE_ENABLED": False,
-                "OUTBOX_ENABLED": True,
-            },
-            "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
         ),
         (
             {
@@ -505,14 +458,5 @@ async def test_object_s3_backend_fails_fast_without_bucket(test_settings: Settin
     app = create_app(settings=settings, init_resources=False)
 
     with pytest.raises(RuntimeError, match="OBJECT_S3_BUCKET is required"):
-        async with app.router.lifespan_context(app):
-            pass
-
-
-async def test_webhooks_fail_fast_without_signing_secret(test_settings: Settings):
-    settings = test_settings.model_copy(update={"WEBHOOKS_ENABLED": True})
-    app = create_app(settings=settings, init_resources=False)
-
-    with pytest.raises(RuntimeError, match="WEBHOOK_SIGNING_SECRET is required"):
         async with app.router.lifespan_context(app):
             pass

@@ -45,13 +45,10 @@ def test_outbox_model_uses_safe_metadata_column_name():
     assert OutboxEvent.event_metadata.property.columns[0].name == "metadata"
 
 
-def test_build_outbox_store_requires_sessionmaker_for_postgres():
-    with pytest.raises(RuntimeError, match="sessionmaker"):
-        build_outbox_store(_settings(OUTBOX_ENABLED=True))
-
-
 def test_build_outbox_store_returns_postgres_store():
-    store = build_outbox_store(_settings(OUTBOX_ENABLED=True), sessionmaker=object())
+    store = build_outbox_store(
+        _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True), object()
+    )
 
     assert isinstance(store, PostgresOutboxStore)
 
@@ -69,7 +66,7 @@ async def test_outbox_addon_attaches_store_when_enabled():
 def test_outbox_addon_respects_enabled_flag():
     addon = OutboxAddon()
 
-    assert addon.is_enabled(_settings(OUTBOX_ENABLED=True)) is True
+    assert addon.is_enabled(_settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True))
     assert addon.is_enabled(_settings(OUTBOX_ENABLED=False)) is False
 
 

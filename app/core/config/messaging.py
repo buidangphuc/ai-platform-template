@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class MessagingSettingsMixin(BaseModel):
+    # Declared by InfraSettingsMixin; annotated here so the cross-setting
+    # rules below can read them.
+    DATABASE_ENABLED: bool
+    REDIS_ENABLED: bool
+
     # Queue gateway
     QUEUE_ENABLED: bool = False
     QUEUE_BACKEND: str = "memory"
@@ -52,3 +57,41 @@ class MessagingSettingsMixin(BaseModel):
     WEBHOOK_SIGNING_SECRET: str = ""
     WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: int = Field(default=300, gt=0)
     WEBHOOK_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0)
+
+    @model_validator(mode="after")
+    def validate_messaging_requirements(self) -> MessagingSettingsMixin:
+        if self.QUEUE_ENABLED and self.QUEUE_BACKEND == "redis":
+            _require(self.REDIS_ENABLED, "QUEUE_BACKEND=redis requires REDIS_ENABLED")
+        if self.TASKS_ENABLED:
+            _require(self.QUEUE_ENABLED, "TASKS_ENABLED requires QUEUE_ENABLED")
+            if self.TASK_STORE_BACKEND == "postgres":
+                _require(
+                    self.DATABASE_ENABLED,
+                    "TASK_STORE_BACKEND=postgres requires DATABASE_ENABLED",
+                )
+            if self.TASK_STORE_BACKEND == "redis":
+                _require(
+                    self.REDIS_ENABLED,
+                    "TASK_STORE_BACKEND=redis requires REDIS_ENABLED",
+                )
+            if self.TASKS_DISPATCH_BACKEND == "outbox":
+                _require(
+                    self.OUTBOX_ENABLED,
+                    "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
+                )
+        if self.OUTBOX_ENABLED and self.OUTBOX_BACKEND == "postgres":
+            _require(
+                self.DATABASE_ENABLED,
+                "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
+            )
+        if self.WEBHOOKS_ENABLED:
+            _require(
+                bool(self.WEBHOOK_SIGNING_SECRET),
+                "WEBHOOK_SIGNING_SECRET is required when WEBHOOKS_ENABLED is true",
+            )
+        return self
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)

@@ -11,14 +11,12 @@ if TYPE_CHECKING:
 
 def build_outbox_store(
     settings: Settings,
-    *,
-    sessionmaker: async_sessionmaker[AsyncSession] | None = None,
+    sessionmaker: async_sessionmaker[AsyncSession],
 ) -> OutboxStore:
-    if settings.OUTBOX_BACKEND == "postgres":
-        if sessionmaker is None:
-            raise RuntimeError("sessionmaker is required for postgres outbox store")
-        from app.modules.messaging.outbox.adapters import PostgresOutboxStore
+    match settings.OUTBOX_BACKEND:
+        case "postgres":
+            from app.modules.messaging.outbox.adapters import PostgresOutboxStore
 
-        return PostgresOutboxStore(sessionmaker)
-
-    raise ValueError(f"Unknown OUTBOX_BACKEND={settings.OUTBOX_BACKEND!r}")
+            return PostgresOutboxStore(sessionmaker)
+        case backend:
+            raise ValueError(f"Unknown OUTBOX_BACKEND={backend!r}")

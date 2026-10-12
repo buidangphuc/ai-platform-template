@@ -21,4 +21,4 @@ class RagAddon:
         resources.rag_service = build_rag_service(settings)
 
     async def close(self, resources: ApplicationResources) -> None:
-        resources.rag_service = None
+        """Nothing to release: the retrieval service holds no connection."""

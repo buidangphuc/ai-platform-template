@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from app.bootstrap.addons.base import BootstrapAddon
 from app.core.config import Settings
@@ -15,17 +15,28 @@ from app.core.database.engine import (
 )
 from app.core.health import DependencyCheck, HealthService
 from app.core.redis import build_redis_client, check_redis_connection
-from app.modules.messaging.queue.factory import build_queue_gateway
+from app.modules.messaging.queue.factory import (
+    build_queue_gateway,
+    build_redis_queue_gateway,
+)
 from app.modules.messaging.queue.gateway import QueueGateway
-from app.modules.messaging.tasks.factory import build_task_store
-from app.modules.messaging.tasks.service import TaskDispatcher, TaskService
+from app.modules.messaging.tasks.factory import (
+    build_memory_task_store,
+    build_postgres_task_store,
+    build_redis_task_store,
+)
+from app.modules.messaging.tasks.service import (
+    OutboxTaskDispatcher,
+    QueueTaskDispatcher,
+    TaskDispatcher,
+    TaskService,
+)
 from app.modules.messaging.tasks.store import TaskStore
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-    from app.core.resilience import RetryPolicy
     from app.modules.ai.rag.service import KnowledgeRetrievalService
     from app.modules.business.completions.service import CompletionService
     from app.modules.messaging.outbox.store import OutboxStore
@@ -40,6 +51,16 @@ if TYPE_CHECKING:
         InMemoryRateLimiter,
         RedisRateLimiter,
     )
+
+
+_T = TypeVar("_T")
+
+
+def opened(value: _T | None, name: str) -> _T:
+    """Narrow a resource that settings validation guarantees is open."""
+    if value is None:
+        raise RuntimeError(f"{name} is not open")
+    return value
 
 
 @dataclass(frozen=True)
@@ -76,7 +97,6 @@ class ApplicationResources:
     rag_service: KnowledgeRetrievalService | None = None
     webhook_signer: WebhookSigner | None = None
     webhook_dispatcher: HttpWebhookDispatcher | None = None
-    webhook_retry_policy: RetryPolicy | None = None
     # Addons opened for this runtime (closed in reverse by the exit stack)
     addons: list[BootstrapAddon] = field(default_factory=list)
 
@@ -93,10 +113,6 @@ async def open_application_resources(
     Shared by the API lifespan and the worker, so both run the same resource
     graph. Each opener registers its own close on the exit stack.
     """
-    validate_core_resource_requirements(
-        settings=settings,
-        init_resources=init_resources,
-    )
     resources = ApplicationResources()
     async with AsyncExitStack() as stack:
         if init_resources:
@@ -148,7 +164,10 @@ def _open_queue(
 ) -> None:
     if not settings.QUEUE_ENABLED:
         return
-    queue = build_queue_gateway(settings, redis=resources.redis)
+    if settings.QUEUE_BACKEND == "redis":
+        queue = build_redis_queue_gateway(settings, opened(resources.redis, "redis"))
+    else:
+        queue = build_queue_gateway(settings)
     stack.push_async_callback(queue.close)
     resources.queue_gateway = queue
 
@@ -161,22 +180,30 @@ def _open_tasks(
     """Runs after addons so the outbox dispatcher reuses OutboxAddon's store."""
     if not settings.TASKS_ENABLED:
         return
-    if resources.queue_gateway is None:
-        raise RuntimeError("TASKS_ENABLED requires an open queue gateway")
-    store = build_task_store(
-        settings,
-        sessionmaker=resources.sessionmaker,
-        redis=resources.redis,
-    )
+    queue = opened(resources.queue_gateway, "queue gateway")
+    match settings.TASK_STORE_BACKEND:
+        case "memory":
+            store = build_memory_task_store()
+        case "postgres":
+            store = build_postgres_task_store(
+                opened(resources.sessionmaker, "sessionmaker")
+            )
+        case "redis":
+            store = build_redis_task_store(settings, opened(resources.redis, "redis"))
+        case backend:
+            raise ValueError(f"Unknown TASK_STORE_BACKEND={backend!r}")
     stack.push_async_callback(store.close)
 
-    from app.modules.messaging.tasks.factory import build_task_dispatcher
-
-    dispatcher = build_task_dispatcher(
-        settings,
-        queue=resources.queue_gateway,
-        outbox=resources.outbox_store,
-    )
+    dispatcher: TaskDispatcher
+    match settings.TASKS_DISPATCH_BACKEND:
+        case "queue":
+            dispatcher = QueueTaskDispatcher(queue)
+        case "outbox":
+            dispatcher = OutboxTaskDispatcher(
+                opened(resources.outbox_store, "outbox store")
+            )
+        case backend:
+            raise ValueError(f"Unknown TASKS_DISPATCH_BACKEND={backend!r}")
     resources.tasks = TaskServices(
         service=TaskService(
             store=store,
@@ -186,7 +213,7 @@ def _open_tasks(
         ),
         store=store,
         dispatcher=dispatcher,
-        queue=resources.queue_gateway,
+        queue=queue,
     )
 
 
@@ -216,39 +243,3 @@ def _build_dependency_checks(
 
         checks.append(("mongo", partial(check_mongo_connection, resources.mongo)))
     return tuple(checks)
-
-
-def validate_core_resource_requirements(
-    *,
-    settings: Settings,
-    init_resources: bool,
-) -> None:
-    if not init_resources:
-        return
-    if settings.TASKS_ENABLED and not settings.QUEUE_ENABLED:
-        raise RuntimeError("TASKS_ENABLED requires QUEUE_ENABLED")
-    if settings.TASKS_DISPATCH_BACKEND == "outbox" and settings.TASKS_ENABLED:
-        _require_enabled(
-            settings.OUTBOX_ENABLED,
-            "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
-        )
-    if settings.QUEUE_ENABLED and settings.QUEUE_BACKEND == "redis":
-        _require_enabled(
-            settings.REDIS_ENABLED,
-            "QUEUE_BACKEND=redis requires REDIS_ENABLED",
-        )
-    if settings.TASKS_ENABLED and settings.TASK_STORE_BACKEND == "postgres":
-        _require_enabled(
-            settings.DATABASE_ENABLED,
-            "TASK_STORE_BACKEND=postgres requires DATABASE_ENABLED",
-        )
-    if settings.TASKS_ENABLED and settings.TASK_STORE_BACKEND == "redis":
-        _require_enabled(
-            settings.REDIS_ENABLED,
-            "TASK_STORE_BACKEND=redis requires REDIS_ENABLED",
-        )
-
-
-def _require_enabled(enabled: bool, message: str) -> None:
-    if not enabled:
-        raise RuntimeError(message)
