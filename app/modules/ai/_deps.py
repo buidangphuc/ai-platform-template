@@ -9,19 +9,21 @@ message instead of a bare ImportError. Mirrors the S3 adapter's
 
 from __future__ import annotations
 
+import importlib
+
 _HINT = "install the AI extra: `uv sync --extra ai` (or `pip install '.[ai]'`)"
 
 
 def require_langchain() -> None:
     try:
-        import langchain_core  # noqa: F401
+        importlib.import_module("langchain_core")
     except ImportError as exc:  # pragma: no cover - exercised via poisoned import
         raise RuntimeError(f"LangChain is required for this feature — {_HINT}") from exc
 
 
 def require_llama_index() -> None:
     try:
-        import llama_index.core  # noqa: F401
+        importlib.import_module("llama_index.core")
     except ImportError as exc:  # pragma: no cover - exercised via poisoned import
         raise RuntimeError(
             f"LlamaIndex is required for RAG features — {_HINT}"

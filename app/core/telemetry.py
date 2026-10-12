@@ -7,6 +7,7 @@ With telemetry off it is ``NOOP_SINK``; with it on, the OTel-backed handle in
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -44,7 +45,7 @@ NOOP_SINK: CompletionSink = _NoopSink()
 
 def require_otel() -> None:
     try:
-        import opentelemetry.sdk.trace  # noqa: F401
+        importlib.import_module("opentelemetry.sdk.trace")
     except ImportError as exc:
         raise RuntimeError(
             f"OpenTelemetry is required by OTEL_ENABLED — {_HINT}"
