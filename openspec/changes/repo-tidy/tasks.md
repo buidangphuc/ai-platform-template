@@ -18,9 +18,9 @@ Owns: `pyproject.toml`, delete `pyrightconfig.json`, `.nbqa.ini`, `requirements.
 
 Owns: `.agents/**` (delete), new `docs/agents/{project,architecture,ai-engineering}.md`, delete `CLAUDE.md`, `AGENTS.md`, `docs/superpowers/**`; `openspec/config.yaml`; `docs/migration/phase-log.md` and `docs/adr/*.md` (links only).
 
-- [ ] 2.1 `docs/agents/architecture.md` = `.agents/fastapi-template-repo/SKILL.md` + `references/architecture.md` merged into one plain doc (no skill frontmatter, no "use this skill when" text, no duplicated rules); `docs/agents/ai-engineering.md` = `.agents/senior-ai-engineer/SKILL.md` + `references/ai-engineering.md` likewise. Content rules unchanged.
-- [ ] 2.2 `docs/agents/project.md` in the setup-project format (sections: Feedback loops, Checks, Tracker, Docs, Hot paths), Checks mirroring `.github/workflows/test.yml`; Docs pointing to the two docs above, `docs/adr/`, `openspec/`; content as paths, not repeated rules
-- [ ] 2.3 Delete `.agents/`, `CLAUDE.md`, `AGENTS.md`, `docs/superpowers/`; fix links in `openspec/config.yaml`, `docs/migration/phase-log.md`, `docs/adr/`; verify `rg -n "\.agents/|CLAUDE\.md|AGENTS\.md|superpowers"` outside `openspec/changes/archive` is empty
+- [x] 2.1 `docs/agents/architecture.md` = `.agents/fastapi-template-repo/SKILL.md` + `references/architecture.md` merged into one plain doc (no skill frontmatter, no "use this skill when" text, no duplicated rules); `docs/agents/ai-engineering.md` = `.agents/senior-ai-engineer/SKILL.md` + `references/ai-engineering.md` likewise. Content rules unchanged.
+- [x] 2.2 `docs/agents/project.md` in the setup-project format (sections: Feedback loops, Checks, Tracker, Docs, Hot paths), Checks mirroring `.github/workflows/test.yml`; Docs pointing to the two docs above, `docs/adr/`, `openspec/`; content as paths, not repeated rules
+- [x] 2.3 Delete `.agents/`, `CLAUDE.md`, `AGENTS.md`, `docs/superpowers/`; fix links in `openspec/config.yaml`, `docs/migration/phase-log.md`, `docs/adr/`; verify `rg -n "\.agents/|CLAUDE\.md|AGENTS\.md|superpowers"` outside `openspec/changes/archive` is empty
 
 ## 3. README and usage docs
 
