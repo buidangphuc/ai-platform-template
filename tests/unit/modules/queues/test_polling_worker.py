@@ -152,3 +152,20 @@ async def test_worker_rejects_invalid_concurrency():
 
     with pytest.raises(ValueError):
         AsyncPollingWorker(gateway=gateway, handler=noop, max_attempts=0)
+
+
+async def test_worker_dead_letters_non_retryable_errors_on_first_delivery():
+    from app.modules.messaging.queue.worker import NonRetryableMessageError
+
+    gateway = _RecordingGateway()
+
+    async def handler(message):
+        raise NonRetryableMessageError("malformed")
+
+    worker = AsyncPollingWorker(gateway=gateway, handler=handler, max_attempts=5)
+    message = QueueMessage(id="m1", body={}, receive_count=1)
+
+    await worker._dispatch(message)
+
+    assert gateway.acked == []
+    assert gateway.nacked == [(message, False)]

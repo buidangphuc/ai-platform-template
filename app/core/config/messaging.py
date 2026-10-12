@@ -47,6 +47,14 @@ class MessagingSettingsMixin(BaseModel):
     TASK_TTL_SECONDS: int = Field(default=86_400, gt=0)
     TASKS_LEASE_SECONDS: int = Field(default=300, gt=0)
     TASKS_DISPATCH_BACKEND: TaskDispatchBackend = "queue"
+    # Worker-side housekeeping. The worker process publishes pending task outbox
+    # events (only when TASKS_DISPATCH_BACKEND=outbox) and requeues tasks whose
+    # processing lease expired. Keep the reclaim interval well under
+    # TASKS_LEASE_SECONDS.
+    TASKS_OUTBOX_RELAY_INTERVAL_SECONDS: float = Field(default=1.0, gt=0)
+    TASKS_OUTBOX_RELAY_BATCH_SIZE: int = Field(default=100, gt=0)
+    TASKS_RECLAIM_INTERVAL_SECONDS: float = Field(default=30.0, gt=0)
+    TASKS_RECLAIM_BATCH_SIZE: int = Field(default=100, gt=0)
 
     # Polling worker
     WORKER_MAX_CONCURRENT: int = Field(default=10, gt=0)
@@ -85,6 +93,13 @@ class MessagingSettingsMixin(BaseModel):
                 _require(
                     self.OUTBOX_ENABLED,
                     "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
+                )
+                # The task row and its outbox event must commit together, which
+                # only holds when both live in the same Postgres database.
+                _require(
+                    self.TASK_STORE_BACKEND == "postgres",
+                    "TASKS_DISPATCH_BACKEND=outbox requires TASK_STORE_BACKEND=postgres "
+                    "(task and outbox event must commit in one transaction)",
                 )
         if self.OUTBOX_ENABLED and self.OUTBOX_BACKEND == "postgres":
             _require(

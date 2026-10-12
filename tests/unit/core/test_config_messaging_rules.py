@@ -27,6 +27,16 @@ _TASKS_ON = {"QUEUE_ENABLED": True, "TASKS_ENABLED": True}
             "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
         ),
         (
+            {
+                **_TASKS_ON,
+                "DATABASE_ENABLED": True,
+                "OUTBOX_ENABLED": True,
+                "TASKS_DISPATCH_BACKEND": "outbox",
+                "TASK_STORE_BACKEND": "memory",
+            },
+            "TASKS_DISPATCH_BACKEND=outbox requires TASK_STORE_BACKEND=postgres",
+        ),
+        (
             {"OUTBOX_ENABLED": True},
             "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
         ),
@@ -56,6 +66,7 @@ def test_settings_reject_inconsistent_messaging_config(
             "DATABASE_ENABLED": True,
             "OUTBOX_ENABLED": True,
             "TASKS_DISPATCH_BACKEND": "outbox",
+            "TASK_STORE_BACKEND": "postgres",
         },
     ],
 )

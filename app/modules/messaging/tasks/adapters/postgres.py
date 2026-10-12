@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.messaging.tasks.models import Task, TaskStatus
-from app.modules.messaging.tasks.store import TaskRecord
+from app.modules.messaging.tasks.store import TaskRecord, TaskRef
 
 
 class PostgresTaskStore:
@@ -18,35 +18,49 @@ class PostgresTaskStore:
 
     async def create(self, task: TaskRecord) -> None:
         async with self.sessionmaker() as session, session.begin():
-            session.add(
-                Task(
-                    id=task.id,
-                    type=task.type,
-                    status=str(task.status),
-                    payload=task.payload,
-                    result=task.result,
-                    error=task.error,
-                    attempts=task.attempts,
-                    locked_until=task.locked_until,
-                    expires_at=task.expires_at,
-                )
-            )
+            session.add(new_task_row(task))
 
     async def get(self, task_id: str) -> TaskRecord | None:
         async with self.sessionmaker() as session:
             row = await session.get(Task, task_id)
             return _to_record(row) if row else None
 
-    async def mark_processing(self, task_id: str, *, lease_seconds: int) -> None:
+    async def mark_processing(
+        self,
+        task_id: str,
+        *,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> bool:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
-        locked_until = datetime.now(UTC) + timedelta(seconds=lease_seconds)
-        await self._update(
-            task_id,
-            status=TaskStatus.PROCESSING,
-            locked_until=locked_until,
-            increment_attempts=True,
+        now = now or datetime.now(UTC)
+        stmt = (
+            update(Task)
+            .where(
+                Task.id == task_id,
+                or_(
+                    Task.status == str(TaskStatus.QUEUED),
+                    and_(
+                        Task.status == str(TaskStatus.PROCESSING),
+                        Task.locked_until <= now,
+                    ),
+                ),
+            )
+            .values(
+                status=str(TaskStatus.PROCESSING),
+                locked_until=now + timedelta(seconds=lease_seconds),
+                attempts=Task.attempts + 1,
+            )
+            .execution_options(synchronize_session=False)
         )
+        async with self.sessionmaker() as session, session.begin():
+            claimed = int(getattr(await session.execute(stmt), "rowcount", 0) or 0)
+            if claimed:
+                return True
+            if await session.scalar(select(Task.id).where(Task.id == task_id)) is None:
+                raise KeyError(task_id)
+            return False
 
     async def mark_completed(self, task_id: str, result: dict[str, Any]) -> None:
         await self._update(
@@ -61,22 +75,11 @@ class PostgresTaskStore:
             task_id, status=TaskStatus.FAILED, error=error, locked_until=None
         )
 
-    async def reclaim_stale_processing(self, *, now: datetime, limit: int = 100) -> int:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
+    async def reclaim_stale_processing(
+        self, *, now: datetime, limit: int = 100
+    ) -> list[TaskRef]:
         async with self.sessionmaker() as session, session.begin():
-            stmt = (
-                update(Task)
-                .where(
-                    Task.status == str(TaskStatus.PROCESSING),
-                    Task.locked_until.is_not(None),
-                    Task.locked_until <= now,
-                )
-                .values(status=str(TaskStatus.QUEUED), locked_until=None)
-                .execution_options(synchronize_session=False)
-            )
-            result = await session.execute(stmt)
-            return int(getattr(result, "rowcount", 0) or 0)
+            return await reclaim_stale_in(session, now=now, limit=limit)
 
     async def delete_expired(self, before: datetime) -> int:
         async with self.sessionmaker() as session, session.begin():
@@ -94,7 +97,6 @@ class PostgresTaskStore:
         status: TaskStatus,
         result: dict[str, Any] | None = None,
         error: str | None = None,
-        increment_attempts: bool = False,
         locked_until: datetime | None = None,
     ) -> None:
         values: dict[str, Any] = {
@@ -105,14 +107,58 @@ class PostgresTaskStore:
             values["result"] = result
         if error is not None:
             values["error"] = error
-        if increment_attempts:
-            values["attempts"] = Task.attempts + 1
 
         async with self.sessionmaker() as session, session.begin():
             stmt = update(Task).where(Task.id == task_id).values(**values)
             outcome = await session.execute(stmt)
             if getattr(outcome, "rowcount", 0) == 0:
                 raise KeyError(task_id)
+
+
+def new_task_row(task: TaskRecord) -> Task:
+    return Task(
+        id=task.id,
+        type=task.type,
+        status=str(task.status),
+        payload=task.payload,
+        result=task.result,
+        error=task.error,
+        attempts=task.attempts,
+        locked_until=task.locked_until,
+        expires_at=task.expires_at,
+    )
+
+
+async def reclaim_stale_in(
+    session: AsyncSession, *, now: datetime, limit: int
+) -> list[TaskRef]:
+    """Requeue up to ``limit`` expired-lease tasks inside the caller's transaction.
+
+    The bounded sub-select with ``SKIP LOCKED`` keeps concurrent reclaimers from
+    contending on (or double-claiming) the same rows.
+    """
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    stale = (
+        select(Task.id)
+        .where(
+            Task.status == str(TaskStatus.PROCESSING),
+            Task.locked_until.is_not(None),
+            Task.locked_until <= now,
+        )
+        .order_by(Task.locked_until)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    stmt = (
+        update(Task)
+        .where(Task.id.in_(stale))
+        .values(status=str(TaskStatus.QUEUED), locked_until=None)
+        .returning(Task.id, Task.type)
+        .execution_options(synchronize_session=False)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [TaskRef(id=row.id, type=row.type) for row in rows]
 
 
 def _to_record(task: Task) -> TaskRecord:

@@ -78,6 +78,7 @@ class _FakeOutboxStore:
         self.published: list[tuple[str, datetime]] = []
         self.failed: list[tuple[str, str, datetime | None]] = []
         self.claim_calls: list[tuple[int, datetime | None, float]] = []
+        self.claim_prefixes: list[str | None] = []
         self.list_calls = 0
 
     async def list_pending(
@@ -95,8 +96,10 @@ class _FakeOutboxStore:
         limit: int = 100,
         now: datetime | None = None,
         lock_seconds: float = 60.0,
+        event_type_prefix: str | None = None,
     ) -> list[OutboxRecord]:
         self.claim_calls.append((limit, now, lock_seconds))
+        self.claim_prefixes.append(event_type_prefix)
         return self.records[:limit]
 
     async def mark_published(self, event_id: str, *, published_at: datetime) -> None:
@@ -254,3 +257,16 @@ async def test_webhook_outbox_sink_dispatches_generic_envelope():
     assert envelope.id == "evt-1"
     assert envelope.type == "generic.event"
     assert envelope.occurred_at == now
+
+
+async def test_outbox_publisher_claims_only_its_event_family():
+    store = _FakeOutboxStore([])
+    publisher = OutboxPublisher(
+        store=store,
+        sink=QueueOutboxSink(_FakeQueue()),
+        event_type_prefix="task.",
+    )
+
+    await publisher.publish_pending()
+
+    assert store.claim_prefixes == ["task."]

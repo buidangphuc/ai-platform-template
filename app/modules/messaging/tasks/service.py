@@ -1,16 +1,19 @@
 """Task submit / poll / transition service, decoupled from dispatch backend.
 
-A ``TaskDispatcher`` decides *how* a newly created task is announced for the
-worker:
+A ``TaskDispatcher`` owns *both* halves of submission, because atomicity between
+them is the dispatcher's property, not the service's:
 
-- ``QueueTaskDispatcher`` — fire-and-forget directly to the queue. Simple but
-  not atomic with the DB write; on queue-send failure the task record is
-  orphaned (worker never picks it up).
-- ``OutboxTaskDispatcher`` — enqueue into ``messaging/outbox/`` in the same
-  transaction as task creation, then a separate publisher process pushes to
-  the queue. Atomic + retryable, at the cost of an extra hop.
+- ``QueueTaskDispatcher`` — create the task, then ``queue.send`` directly. Works
+  with any task store but is **not atomic**: if the send fails the task row is
+  orphaned (it stays QUEUED and no worker ever sees it).
+- ``PostgresTaskOutboxDispatcher`` (``tasks/outbox.py``) — inserts the task row
+  and its outbox event in **one** Postgres transaction; an outbox relay (run by
+  the worker process) then publishes the event to the queue. Atomic and
+  retryable, at the cost of an extra hop. Only valid with
+  ``TASK_STORE_BACKEND=postgres`` (settings enforce it).
 
-Pick via ``Settings.TASKS_DISPATCH_BACKEND`` (``"queue"`` or ``"outbox"``).
+Pick via ``Settings.TASKS_DISPATCH_BACKEND`` (``"queue"`` or ``"outbox"``). Both
+announce a task with the same ``TaskMessage`` contract.
 """
 
 from __future__ import annotations
@@ -20,43 +23,41 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from app.core.errors import NotFoundError
-from app.modules.messaging.outbox.store import OutboxStore
 from app.modules.messaging.queue.gateway import QueueGateway
+from app.modules.messaging.tasks.message import TaskMessage
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.store import TaskRecord, TaskStore
 
 
 class TaskDispatcher(Protocol):
-    async def dispatch(self, task_id: str, *, type: str) -> None: ...
+    async def submit(self, task: TaskRecord) -> None:
+        """Persist a new QUEUED task and announce it to the worker."""
+        ...
+
+    async def reclaim(self, *, now: datetime, limit: int) -> int:
+        """Requeue expired-lease PROCESSING tasks and announce them again."""
+        ...
 
 
 class QueueTaskDispatcher:
-    """Direct ``queue.send`` — simple but non-atomic with task creation."""
+    """Create, then direct ``queue.send`` — simple but non-atomic."""
 
-    def __init__(self, queue: QueueGateway) -> None:
+    def __init__(self, store: TaskStore, queue: QueueGateway) -> None:
+        self.store = store
         self.queue = queue
 
-    async def dispatch(self, task_id: str, *, type: str) -> None:
-        await self.queue.send({"task_id": task_id, "type": type})
+    async def submit(self, task: TaskRecord) -> None:
+        await self.store.create(task)
+        await self._announce(task.id, task.type)
 
+    async def reclaim(self, *, now: datetime, limit: int) -> int:
+        reclaimed = await self.store.reclaim_stale_processing(now=now, limit=limit)
+        for ref in reclaimed:
+            await self._announce(ref.id, ref.type)
+        return len(reclaimed)
 
-class OutboxTaskDispatcher:
-    """Enqueue an outbox event so dispatch and task-create share a DB transaction."""
-
-    def __init__(
-        self,
-        outbox: OutboxStore,
-        *,
-        event_type_prefix: str = "task",
-    ) -> None:
-        self.outbox = outbox
-        self.event_type_prefix = event_type_prefix
-
-    async def dispatch(self, task_id: str, *, type: str) -> None:
-        await self.outbox.enqueue(
-            event_type=f"{self.event_type_prefix}.{type}",
-            payload={"task_id": task_id, "type": type},
-        )
+    async def _announce(self, task_id: str, type: str) -> None:
+        await self.queue.send(TaskMessage(task_id=task_id, type=type).to_body())
 
 
 class TaskService:
@@ -93,8 +94,7 @@ class TaskService:
             created_at=now,
             updated_at=now,
         )
-        await self.store.create(task)
-        await self.dispatcher.dispatch(task.id, type=type)
+        await self.dispatcher.submit(task)
         return task
 
     async def require(self, task_id: str) -> TaskRecord:
@@ -103,8 +103,11 @@ class TaskService:
             raise NotFoundError(f"Task {task_id} not found", code="task_not_found")
         return record
 
-    async def mark_processing(self, task_id: str) -> None:
-        await self.store.mark_processing(task_id, lease_seconds=self.lease_seconds)
+    async def mark_processing(self, task_id: str) -> bool:
+        """Claim the task for this worker; ``False`` means skip it (see the store)."""
+        return await self.store.mark_processing(
+            task_id, lease_seconds=self.lease_seconds
+        )
 
     async def mark_completed(self, task_id: str, result: dict[str, Any]) -> None:
         await self.store.mark_completed(task_id, result)
@@ -118,6 +121,4 @@ class TaskService:
         now: datetime | None = None,
         limit: int = 100,
     ) -> int:
-        return await self.store.reclaim_stale_processing(
-            now=now or datetime.now(UTC), limit=limit
-        )
+        return await self.dispatcher.reclaim(now=now or datetime.now(UTC), limit=limit)

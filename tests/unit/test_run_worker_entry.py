@@ -22,7 +22,10 @@ from app.bootstrap.worker import (
 from app.core.config import Settings
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.messaging.queue.gateway import QueueMessage
-from app.modules.messaging.queue.worker import AsyncPollingWorker
+from app.modules.messaging.queue.worker import (
+    AsyncPollingWorker,
+    NonRetryableMessageError,
+)
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskRecord
@@ -118,8 +121,9 @@ async def test_worker_message_handler_marks_task_completed():
                 expires_at=datetime(2026, 5, 22, tzinfo=UTC),
             )
 
-        async def mark_processing(self, task_id: str) -> None:
+        async def mark_processing(self, task_id: str) -> bool:
             self.processing.append(task_id)
+            return True
 
         async def mark_completed(self, task_id: str, result: dict) -> None:
             self.completed.append((task_id, result))
@@ -133,7 +137,9 @@ async def test_worker_message_handler_marks_task_completed():
         service=service, completion_service=completion_service
     )
 
-    await process_message(QueueMessage(id="msg-1", body={"task_id": "task-1"}))
+    await process_message(
+        QueueMessage(id="msg-1", body={"task_id": "task-1", "type": "completion"})
+    )
 
     assert service.processing == ["task-1"]
     assert service.completed == [
@@ -179,14 +185,17 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
         async def get(self, task_id: str) -> TaskRecord | None:
             return None
 
-        async def mark_processing(self, task_id: str) -> None:
-            return None
+        async def mark_processing(self, task_id: str, **_: object) -> bool:
+            return True
 
         async def mark_completed(self, task_id: str, result: dict) -> None:
             return None
 
         async def mark_failed(self, task_id: str, error: str) -> None:
             return None
+
+        async def reclaim_stale_processing(self, **_: object) -> list:
+            return []
 
         async def delete_expired(self, before) -> int:
             return 0
@@ -275,3 +284,105 @@ def test_worker_check_cli_reports_configuration_errors(monkeypatch, capsys):
 
     assert exc_info.value.code == 1
     assert "worker configuration invalid: bad worker config" in capsys.readouterr().err
+
+
+class _ScriptedService:
+    """TaskService stand-in: records transitions, claim result is scripted."""
+
+    def __init__(self, *, claims: bool = True) -> None:
+        self.claims = claims
+        self.completed: list[str] = []
+        self.failed: list[tuple[str, str]] = []
+
+    async def require(self, task_id: str) -> TaskRecord:
+        return TaskRecord(
+            id=task_id,
+            type="completion",
+            status=TaskStatus.QUEUED,
+            payload={"messages": [{"role": "user", "content": "hello"}]},
+            expires_at=datetime(2026, 5, 22, tzinfo=UTC),
+        )
+
+    async def mark_processing(self, task_id: str) -> bool:
+        return self.claims
+
+    async def mark_completed(self, task_id: str, result: dict) -> None:
+        self.completed.append(task_id)
+
+    async def mark_failed(self, task_id: str, error: str) -> None:
+        self.failed.append((task_id, error))
+
+
+def _handler(service: _ScriptedService, completion_handler=None):
+    return build_worker_message_handler(
+        service=service,  # type: ignore[arg-type]
+        completion_service=worker_module.CompletionService(
+            completion_handler or EchoCompletionHandler()
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"task_id": "t-1"},
+        # What the outbox used to publish: must dead-letter, not be acked.
+        {"id": "e", "type": "task.completion", "payload": {"task_id": "t-1"}},
+    ],
+)
+async def test_worker_handler_rejects_malformed_message_as_non_retryable(body):
+    service = _ScriptedService()
+
+    with pytest.raises(NonRetryableMessageError):
+        await _handler(service)(QueueMessage(id="m", body=body))
+
+    assert service.completed == [] and service.failed == []
+
+
+async def test_worker_handler_skips_a_task_it_could_not_claim():
+    class _Exploding:
+        async def complete(self, request):
+            pytest.fail("a redelivered task must not run again")
+
+        async def stream(self, request): ...
+
+    service = _ScriptedService(claims=False)
+
+    await _handler(service, _Exploding())(
+        QueueMessage(id="m", body={"task_id": "t-1", "type": "completion"})
+    )
+
+    assert service.completed == [] and service.failed == []
+
+
+async def test_worker_handler_stores_a_safe_error_and_dead_letters_failures():
+    class _Leaky:
+        async def complete(self, request):
+            raise RuntimeError("secret upstream key sk-123 rejected")
+
+        async def stream(self, request): ...
+
+    service = _ScriptedService()
+
+    with pytest.raises(NonRetryableMessageError):
+        await _handler(service, _Leaky())(
+            QueueMessage(id="m", body={"task_id": "t-1", "type": "completion"})
+        )
+
+    [(task_id, error)] = service.failed
+    assert task_id == "t-1"
+    assert error.startswith("RuntimeError")
+    assert "sk-123" not in error and "secret" not in error
+
+
+async def test_worker_context_run_stops_the_background_loops_with_the_worker():
+    import asyncio
+
+    async with worker_context(_settings()) as ctx:
+        run = asyncio.create_task(ctx.run())
+        await asyncio.sleep(0.1)
+        assert not run.done()
+
+        ctx.worker.request_shutdown()
+        await asyncio.wait_for(run, timeout=5)

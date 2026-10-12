@@ -50,6 +50,7 @@ class OutboxStore(Protocol):
         limit: int = 100,
         now: datetime | None = None,
         lock_seconds: float = 60.0,
+        event_type_prefix: str | None = None,
     ) -> Sequence[OutboxRecord]: ...
 
     async def mark_published(

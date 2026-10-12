@@ -15,7 +15,7 @@ def _outbox_settings() -> Settings:
         QUEUE_ENABLED=True,
         QUEUE_BACKEND="memory",
         TASKS_ENABLED=True,
-        TASK_STORE_BACKEND="memory",
+        TASK_STORE_BACKEND="postgres",
         TASKS_DISPATCH_BACKEND="outbox",
         OUTBOX_ENABLED=True,
         OUTBOX_BACKEND="postgres",
@@ -45,8 +45,9 @@ class _Addon:
         stack.callback(self.log.append, f"close:{self.name}")
 
 
-async def test_outbox_store_is_built_once_and_shared_with_dispatcher():
+async def test_outbox_dispatch_writes_task_and_event_on_the_shared_sessionmaker():
     from app.bootstrap.addons.base import default_resource_addons
+    from app.modules.messaging.tasks.outbox import PostgresTaskOutboxDispatcher
 
     async with open_application_resources(
         _outbox_settings(),
@@ -55,12 +56,20 @@ async def test_outbox_store_is_built_once_and_shared_with_dispatcher():
     ) as resources:
         assert resources.tasks is not None
         assert resources.outbox_store is not None
-        assert resources.tasks.dispatcher.outbox is resources.outbox_store
+        dispatcher = resources.tasks.dispatcher
+        assert isinstance(dispatcher, PostgresTaskOutboxDispatcher)
+        assert dispatcher.sessionmaker is resources.sessionmaker
 
 
-async def test_worker_opens_outbox_dispatch_with_non_postgres_task_store():
+async def test_worker_owns_the_outbox_relay_and_reclaim_loops():
     async with worker_context(_outbox_settings()) as ctx:
-        assert ctx.tasks.dispatcher.outbox is ctx.resources.outbox_store
+        assert len(ctx.loops) == 2
+
+
+async def test_worker_with_queue_dispatch_runs_only_the_reclaim_loop():
+    settings = _outbox_settings().model_copy(update={"TASKS_DISPATCH_BACKEND": "queue"})
+    async with worker_context(settings) as ctx:
+        assert len(ctx.loops) == 1
 
 
 async def test_addons_close_in_reverse_order():

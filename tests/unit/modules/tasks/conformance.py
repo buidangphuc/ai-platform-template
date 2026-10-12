@@ -73,7 +73,8 @@ class TaskStoreConformance:
         future_now = datetime.now(UTC) + timedelta(seconds=120)
         reclaimed = await store.reclaim_stale_processing(now=future_now)
 
-        assert reclaimed >= 1
+        assert [ref.id for ref in reclaimed] == [task.id]
+        assert reclaimed[0].type == "completion"
         fetched = await store.get(task.id)
         assert fetched is not None
         assert fetched.status == TaskStatus.QUEUED
@@ -110,3 +111,67 @@ class TaskStoreConformance:
         assert deleted >= 1
         assert await store.get(stale.id) is None
         assert await store.get(fresh.id) is not None
+
+    async def test_mark_processing_refuses_a_live_lease(self, store: TaskStore):
+        task = _make_task()
+        await store.create(task)
+        assert await store.mark_processing(task.id, lease_seconds=60) is True
+
+        assert await store.mark_processing(task.id, lease_seconds=60) is False
+
+        fetched = await store.get(task.id)
+        assert fetched is not None
+        assert fetched.attempts == 1
+
+    async def test_mark_processing_takes_over_an_expired_lease(self, store: TaskStore):
+        task = _make_task()
+        await store.create(task)
+        await store.mark_processing(task.id, lease_seconds=1)
+
+        later = datetime.now(UTC) + timedelta(seconds=120)
+        assert await store.mark_processing(task.id, lease_seconds=60, now=later) is True
+
+        fetched = await store.get(task.id)
+        assert fetched is not None
+        assert fetched.attempts == 2
+
+    @pytest.mark.parametrize("terminal", ["completed", "failed"])
+    async def test_mark_processing_never_revives_a_terminal_task(
+        self, store: TaskStore, terminal: str
+    ):
+        task = _make_task()
+        await store.create(task)
+        if terminal == "completed":
+            await store.mark_completed(task.id, {"answer": 1})
+        else:
+            await store.mark_failed(task.id, "boom")
+
+        assert await store.mark_processing(task.id, lease_seconds=60) is False
+
+        fetched = await store.get(task.id)
+        assert fetched is not None
+        assert fetched.status.value == terminal
+
+    async def test_mark_processing_unknown_task_raises(self, store: TaskStore):
+        with pytest.raises(KeyError):
+            await store.mark_processing("missing", lease_seconds=60)
+
+    async def test_reclaim_respects_limit_and_skips_live_leases(self, store: TaskStore):
+        expired = [_make_task() for _ in range(3)]
+        live = _make_task()
+        for task in (*expired, live):
+            await store.create(task)
+        for task in expired:
+            await store.mark_processing(task.id, lease_seconds=1)
+        await store.mark_processing(live.id, lease_seconds=3600)
+
+        later = datetime.now(UTC) + timedelta(seconds=120)
+        first = await store.reclaim_stale_processing(now=later, limit=2)
+        second = await store.reclaim_stale_processing(now=later, limit=2)
+
+        assert len(first) == 2
+        assert len(second) == 1
+        assert {ref.id for ref in (*first, *second)} == {t.id for t in expired}
+        still_live = await store.get(live.id)
+        assert still_live is not None
+        assert still_live.status == TaskStatus.PROCESSING

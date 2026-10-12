@@ -29,21 +29,45 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class TaskRef:
+    """Just enough of a task to announce it to a worker again."""
+
+    id: str
+    type: str
+
+
 class TaskStore(Protocol):
     async def create(self, task: TaskRecord) -> None: ...
 
     async def get(self, task_id: str) -> TaskRecord | None: ...
 
-    async def mark_processing(self, task_id: str, *, lease_seconds: int) -> None: ...
+    async def mark_processing(
+        self,
+        task_id: str,
+        *,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """Compare-and-set claim: QUEUED -> PROCESSING.
+
+        Also takes over a PROCESSING task whose lease expired. Returns ``False``
+        (changing nothing) for a live lease or a COMPLETED/FAILED task, so a
+        redelivered message cannot run a task twice. Unknown id raises
+        ``KeyError``.
+        """
+        ...
 
     async def mark_completed(self, task_id: str, result: dict[str, Any]) -> None: ...
 
     async def mark_failed(self, task_id: str, error: str) -> None: ...
 
-    async def reclaim_stale_processing(self, *, now: datetime, limit: int = 100) -> int:
-        """Reset PROCESSING tasks whose lease expired back to QUEUED.
+    async def reclaim_stale_processing(
+        self, *, now: datetime, limit: int = 100
+    ) -> list[TaskRef]:
+        """Reset up to ``limit`` PROCESSING tasks whose lease expired to QUEUED.
 
-        Returns the number of tasks reclaimed.
+        Returns the reclaimed tasks so the caller can dispatch them again.
         """
         ...
 

@@ -59,9 +59,12 @@ class OutboxPublisher:
         store: OutboxStore,
         sink: OutboxSink,
         retry_policy: RetryPolicy | None = None,
+        event_type_prefix: str | None = None,
     ) -> None:
+        """``event_type_prefix`` limits this publisher to one family of events."""
         self.store = store
         self.sink = sink
+        self.event_type_prefix = event_type_prefix
         self.retry_policy = retry_policy or RetryPolicy()
 
     async def publish_pending(
@@ -78,6 +81,7 @@ class OutboxPublisher:
             limit=limit,
             now=now,
             lock_seconds=lock_seconds,
+            event_type_prefix=self.event_type_prefix,
         )
         published = 0
         retried = 0

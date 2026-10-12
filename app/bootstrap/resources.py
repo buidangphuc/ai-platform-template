@@ -25,8 +25,8 @@ from app.modules.messaging.tasks.factory import (
     build_postgres_task_store,
     build_redis_task_store,
 )
+from app.modules.messaging.tasks.outbox import PostgresTaskOutboxDispatcher
 from app.modules.messaging.tasks.service import (
-    OutboxTaskDispatcher,
     QueueTaskDispatcher,
     TaskDispatcher,
     TaskService,
@@ -179,7 +179,7 @@ def _open_tasks(
     settings: Settings,
     stack: AsyncExitStack,
 ) -> None:
-    """Runs after addons so the outbox dispatcher reuses OutboxAddon's store."""
+    """Compose the task feature group (store, dispatcher, service)."""
     if not settings.TASKS_ENABLED:
         return
     queue = opened(resources.queue_gateway, "queue gateway")
@@ -197,10 +197,12 @@ def _open_tasks(
     dispatcher: TaskDispatcher
     match settings.TASKS_DISPATCH_BACKEND:
         case "queue":
-            dispatcher = QueueTaskDispatcher(queue)
+            dispatcher = QueueTaskDispatcher(store, queue)
         case "outbox":
-            dispatcher = OutboxTaskDispatcher(
-                opened(resources.outbox_store, "outbox store")
+            # Settings guarantee TASK_STORE_BACKEND=postgres: the dispatcher
+            # writes task + outbox event in one transaction on this sessionmaker.
+            dispatcher = PostgresTaskOutboxDispatcher(
+                opened(resources.sessionmaker, "sessionmaker")
             )
     resources.tasks = TaskServices(
         service=TaskService(

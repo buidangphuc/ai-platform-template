@@ -21,7 +21,7 @@ async def _run() -> None:
         settings.TASK_STORE_BACKEND,
     )
     async with worker_bootstrap.worker_context(settings) as ctx:
-        await ctx.worker.run()
+        await ctx.run()
 
 
 def main(argv: list[str] | None = None) -> None:

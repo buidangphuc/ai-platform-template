@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 
@@ -18,9 +20,19 @@ from app.bootstrap.services import (
 from app.core.config import Settings, get_settings
 from app.modules.business.completions.schemas import CompletionRequest
 from app.modules.business.completions.service import CompletionService
+from app.modules.messaging.outbox.publisher import OutboxPublisher
 from app.modules.messaging.queue.gateway import QueueMessage
-from app.modules.messaging.queue.worker import AsyncPollingWorker
+from app.modules.messaging.queue.worker import (
+    AsyncPollingWorker,
+    NonRetryableMessageError,
+)
+from app.modules.messaging.tasks.message import TaskMessage
+from app.modules.messaging.tasks.outbox import TASK_EVENT_PREFIX, TaskQueueOutboxSink
+from app.modules.messaging.tasks.relay import run_outbox_relay, run_reclaim_loop
 from app.modules.messaging.tasks.service import TaskService
+
+# A background loop runs until the stop event is set.
+BackgroundLoop = Callable[[asyncio.Event], Coroutine[Any, Any, None]]
 
 
 @dataclass
@@ -29,6 +41,26 @@ class WorkerContext:
     worker: AsyncPollingWorker
     resources: ApplicationResources
     tasks: TaskServices
+    loops: tuple[BackgroundLoop, ...]
+
+    async def run(self) -> None:
+        """Run the polling worker and the task housekeeping loops until shutdown.
+
+        The loops stop when the worker stops (SIGTERM/SIGINT or a crash), so the
+        process owns one lifetime for all of them.
+        """
+        stop = asyncio.Event()
+
+        async def run_worker() -> None:
+            try:
+                await self.worker.run()
+            finally:
+                stop.set()
+
+        async with asyncio.TaskGroup() as group:
+            group.create_task(run_worker())
+            for loop in self.loops:
+                group.create_task(loop(stop))
 
 
 def validate_worker_runtime_settings(settings: Settings) -> None:
@@ -64,10 +96,7 @@ def build_worker_message_handler(
     completion_service: CompletionService,
 ) -> Callable[[QueueMessage], Awaitable[None]]:
     async def process_message(message: QueueMessage) -> None:
-        task_id = message.body.get("task_id")
-        if not task_id:
-            logger.warning("worker.skip message_without_task_id={}", message.body)
-            return
+        task_id = TaskMessage.from_body(message.body).task_id
 
         try:
             task = await service.require(task_id)
@@ -75,25 +104,70 @@ def build_worker_message_handler(
             logger.exception("worker.task_lookup_failed task_id={}", task_id)
             raise
 
-        await service.mark_processing(task_id)
+        if not await service.mark_processing(task_id):
+            logger.info("worker.skip task_id={} reason=not_claimable", task_id)
+            return
+
         try:
             payload = CompletionRequest(**task.payload)
             result = await completion_service.complete(payload)
-            await service.mark_completed(
-                task_id,
-                {
-                    "content": result.content,
-                    "model": result.model,
-                    "metadata": result.metadata,
-                },
-            )
-            logger.info("worker.task_completed task_id={}", task_id)
         except Exception as exc:
             logger.exception("worker.task_failed task_id={}", task_id)
-            await service.mark_failed(task_id, str(exc))
-            raise
+            await service.mark_failed(task_id, _safe_error(exc))
+            # FAILED is terminal: a redelivery would be skipped, so dead-letter now.
+            raise NonRetryableMessageError(f"task {task_id} failed") from exc
+
+        await service.mark_completed(
+            task_id,
+            {
+                "content": result.content,
+                "model": result.model,
+                "metadata": result.metadata,
+            },
+        )
+        logger.info("worker.task_completed task_id={}", task_id)
 
     return process_message
+
+
+def _safe_error(exc: Exception) -> str:
+    """What the API may show: the class name only; the detail stays in the logs."""
+    return f"{type(exc).__name__}: task failed (see worker logs)"
+
+
+def build_background_loops(
+    settings: Settings,
+    *,
+    resources: ApplicationResources,
+    tasks: TaskServices,
+) -> tuple[BackgroundLoop, ...]:
+    async def reclaim(stop: asyncio.Event) -> None:
+        await run_reclaim_loop(
+            tasks.service,
+            interval_seconds=settings.TASKS_RECLAIM_INTERVAL_SECONDS,
+            batch_size=settings.TASKS_RECLAIM_BATCH_SIZE,
+            stop=stop,
+        )
+
+    match settings.TASKS_DISPATCH_BACKEND:
+        case "queue":
+            return (reclaim,)
+        case "outbox":
+            publisher = OutboxPublisher(
+                store=opened(resources.outbox_store, "outbox store"),
+                sink=TaskQueueOutboxSink(tasks.queue),
+                event_type_prefix=TASK_EVENT_PREFIX,
+            )
+
+            async def relay(stop: asyncio.Event) -> None:
+                await run_outbox_relay(
+                    publisher,
+                    interval_seconds=settings.TASKS_OUTBOX_RELAY_INTERVAL_SECONDS,
+                    batch_size=settings.TASKS_OUTBOX_RELAY_BATCH_SIZE,
+                    stop=stop,
+                )
+
+            return (relay, reclaim)
 
 
 @asynccontextmanager
@@ -124,6 +198,7 @@ async def worker_context(
             ),
             resources=resources,
             tasks=tasks,
+            loops=build_background_loops(resolved, resources=resources, tasks=tasks),
         )
 
 
