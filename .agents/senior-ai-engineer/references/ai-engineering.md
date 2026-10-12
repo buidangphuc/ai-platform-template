@@ -113,7 +113,19 @@ Do not modify `CompletionService` to add behavior — swap the handler.
   for other external calls.
 - **Observability:** Langfuse trace via `LLMInstance.trace_config(...)`.
 - **Redaction:** `RedactionPolicy` (`app/core/redaction`) before logging/tracing
-  sensitive input or output.
+  sensitive input or output. It masks emails, bearer/`sk-`/AWS keys, phone
+  numbers (incl. Vietnamese), Luhn-valid card numbers, secret-named keys
+  (`authorization`, `cookie`, `x-api-key`, ...) and recurses into lists.
+- **Input/output guards:** pass `CompletionGuard`s to `CompletionService(handler,
+  guards=...)` (`business/completions/guards.py`); raise `GuardrailViolation`
+  (422, fail-closed). Output guards run on `complete()` only; streamed output is
+  not guarded yet, and an input violation in `stream()` surfaces on first
+  iteration unless the caller primes the iterator before sending headers.
+- **Untrusted content:** clients cannot send `system` messages (the server owns
+  the system prompt). Retrieved text is untrusted: `knowledge_search` wraps each
+  match in `<document id=... source="retrieved">` and says so in its tool
+  description. Do the same for any other tool that returns third-party text, and
+  delimit graded output in judge prompts.
 - **Evals:** at least one eval case covering the new behavior.
 
 > **Open seam: traces are NOT auto-redacted.** The Langfuse callback captures
@@ -123,6 +135,9 @@ Do not modify `CompletionService` to add behavior — swap the handler.
 > flag was deliberately trimmed with the other advanced settings
 > (`tests/unit/core/test_config.py` pins its absence). A product that traces
 > sensitive data adds its own setting and applies the policy at the call site.
+> The policy now also masks phone numbers, card numbers, AWS keys and strings in
+> lists, so applying it at the call site covers more than before; it is still
+> regex-based, so treat it as a floor, not a PII guarantee.
 
 ## Ship checklist for an AI feature
 

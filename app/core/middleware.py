@@ -310,9 +310,13 @@ class IPRateLimitMiddleware:
         app: ASGIApp,
         *,
         exclude_patterns: tuple[str, ...] = (),
+        trusted_proxy_count: int = 0,
     ) -> None:
+        if trusted_proxy_count < 0:
+            raise ValueError("trusted_proxy_count must not be negative")
         self.app = app
         self.exclude_patterns = exclude_patterns
+        self.trusted_proxy_count = trusted_proxy_count
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -344,13 +348,27 @@ class IPRateLimitMiddleware:
         return get_app_resources(scope["app"]).ip_rate_limiter
 
     def _extract_client_ip(self, scope: Scope) -> str:
-        for header_name, header_value in scope.get("headers", []):
-            if header_name == b"x-forwarded-for":
-                return header_value.decode("latin-1").split(",")[0].strip()
+        """Client address for rate limiting.
+
+        ``X-Forwarded-For`` is client-controlled except for the entries our own
+        proxies append, so it is only read when ``trusted_proxy_count`` > 0, and
+        then the address that many hops from the right is used. A chain shorter
+        than that did not pass through all trusted proxies: fall back to the peer.
+        """
         client = scope.get("client")
-        if client is None:
-            return "unknown"
-        return client[0]
+        peer = client[0] if client is not None else "unknown"
+        if self.trusted_proxy_count == 0:
+            return peer
+        hops = [
+            hop.strip()
+            for name, value in scope.get("headers", [])
+            if name == b"x-forwarded-for"
+            for hop in value.decode("latin-1").split(",")
+            if hop.strip()
+        ]
+        if len(hops) < self.trusted_proxy_count:
+            return peer
+        return hops[-self.trusted_proxy_count]
 
     async def _send_rate_limited(
         self,

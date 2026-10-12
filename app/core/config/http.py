@@ -24,6 +24,10 @@ class HttpSettingsMixin(BaseModel):
     REQUEST_TIMEOUT_SECONDS: int = Field(default=30, gt=0)
     REQUEST_TIMEOUT_EXCLUDE_PATTERNS: str = "/stream,/sse"
 
+    # Reverse proxies in front of the app that append to X-Forwarded-For. 0 = do
+    # not trust the header; the per-IP rate limit keys on the socket peer.
+    TRUSTED_PROXY_COUNT: int = Field(default=0, ge=0)
+
     @computed_field
     @property
     def cors_allow_origins(self) -> list[str]:

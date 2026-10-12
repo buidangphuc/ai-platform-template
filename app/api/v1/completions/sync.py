@@ -22,5 +22,7 @@ async def complete(
         id=f"cmpl_{uuid4().hex}",
         content=result.content,
         model=result.model,
+        usage=result.usage,
+        finish_reason=result.finish_reason,
         metadata=result.metadata,
     )

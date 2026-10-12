@@ -4,17 +4,29 @@ Runs inside lifespan after platform resources are open, so a handler factory
 can take whatever it needs (LLM instance, RAG, stores) from ``resources``.
 """
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 
 from app.bootstrap.addons.base import BootstrapAddon
 from app.bootstrap.resources import ApplicationResources, open_application_resources
 from app.core.config import Settings
+from app.modules.business.completions.guards import CompletionGuard
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.business.completions.ports import CompletionHandler
 from app.modules.business.completions.service import CompletionService
 
 CompletionHandlerFactory = Callable[[ApplicationResources, Settings], CompletionHandler]
+CompletionGuardsFactory = Callable[
+    [ApplicationResources, Settings], Sequence[CompletionGuard]
+]
+
+
+def default_completion_guards_factory(
+    resources: ApplicationResources,
+    settings: Settings,
+) -> Sequence[CompletionGuard]:
+    """Scaffold ships no guards; products add theirs (input/output checks)."""
+    return ()
 
 
 def default_completion_handler_factory(
@@ -30,9 +42,11 @@ def compose_business_services(
     settings: Settings,
     *,
     completion_handler_factory: CompletionHandlerFactory,
+    completion_guards_factory: CompletionGuardsFactory = default_completion_guards_factory,
 ) -> None:
     resources.completion_service = CompletionService(
-        completion_handler_factory(resources, settings)
+        completion_handler_factory(resources, settings),
+        guards=completion_guards_factory(resources, settings),
     )
 
 
@@ -43,6 +57,7 @@ async def open_runtime(
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
     completion_handler_factory: CompletionHandlerFactory,
+    completion_guards_factory: CompletionGuardsFactory = default_completion_guards_factory,
 ) -> AsyncIterator[ApplicationResources]:
     """Open resources and compose business services; used by API and worker."""
     async with open_application_resources(
@@ -54,5 +69,6 @@ async def open_runtime(
             resources,
             settings,
             completion_handler_factory=completion_handler_factory,
+            completion_guards_factory=completion_guards_factory,
         )
         yield resources
