@@ -53,6 +53,9 @@ class RuntimeSettingsMixin(BaseModel):
 
     GRACEFUL_SHUTDOWN_ENABLED: bool = True
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: int = Field(default=30, ge=0)
+    # Seconds ``python -m app.serve`` keeps serving after SIGTERM with /readyz at
+    # 503, so load balancers stop routing before the listener closes. 0 disables.
+    SHUTDOWN_READINESS_DELAY_SECONDS: float = Field(default=5, ge=0)
 
     @field_validator("ENVIRONMENT", mode="before")
     @classmethod

@@ -118,6 +118,24 @@ keys are bootstrapped from `.env` through Langfuse headless initialization. The
 API container uses `LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000`; host
 Python processes can use `LANGFUSE_BASE_URL=http://localhost:3000`.
 
+### Graceful shutdown and Kubernetes
+
+The image runs `python -m app.serve` (also usable locally; `SERVER_HOST` /
+`SERVER_PORT`, default `0.0.0.0:8000`). uvicorn closes its listener as soon as it
+gets SIGTERM, which would hide the `/readyz` 503 from load balancers, so on the
+first SIGTERM/SIGINT `app.serve` marks the app draining (`/readyz` returns 503,
+`/healthz` stays 200), keeps accepting for `SHUTDOWN_READINESS_DELAY_SECONDS`
+(default 5, `0` disables), then runs the normal graceful shutdown. A second signal
+forces exit.
+
+- A `preStop: sleep` hook is optional with this delay; set the delay at least
+  `periodSeconds * failureThreshold` of the readiness probe plus endpoint
+  propagation time.
+- `terminationGracePeriodSeconds` must exceed `SHUTDOWN_READINESS_DELAY_SECONDS` +
+  `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` (connection drain), plus another
+  `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` in the worst case (the lifespan then waits
+  for in-flight requests): `5 + 2 * 30 + margin` with the defaults.
+
 ## Project Layout
 
 ```text
