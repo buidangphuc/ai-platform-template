@@ -30,7 +30,13 @@ def build_queue_gateway(
             RedisStreamQueueGateway,
         )
 
-        return RedisStreamQueueGateway(redis=redis, stream=settings.QUEUE_NAME)
+        return RedisStreamQueueGateway(
+            redis=redis,
+            stream=settings.QUEUE_NAME,
+            consumer_name=settings.QUEUE_REDIS_CONSUMER_NAME or None,
+            min_idle_seconds=settings.QUEUE_REDIS_MIN_IDLE_SECONDS,
+            max_deliveries=settings.QUEUE_REDIS_MAX_DELIVERIES,
+        )
 
     if backend == "sqs":
         from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
@@ -52,6 +58,9 @@ def build_queue_gateway(
         return RabbitMQQueueGateway(
             url=settings.RABBITMQ_URL,
             queue_name=settings.QUEUE_NAME,
+            dead_letter_enabled=settings.RABBITMQ_DEAD_LETTER_ENABLED,
+            dead_letter_exchange=settings.RABBITMQ_DEAD_LETTER_EXCHANGE,
+            dead_letter_queue=settings.RABBITMQ_DEAD_LETTER_QUEUE,
         )
 
     raise ValueError(f"Unknown QUEUE_BACKEND={backend!r}")

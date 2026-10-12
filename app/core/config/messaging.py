@@ -15,6 +15,18 @@ class MessagingSettingsMixin(BaseModel):
     SQS_ENDPOINT_URL: str = ""
     SQS_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=0, ge=0)
     RABBITMQ_URL: str = ""
+    # Dead-letter topology for the work queue. Empty names derive from
+    # QUEUE_NAME (<name>.dlx / <name>.dead). Set ENABLED=false to keep declaring
+    # a pre-existing queue that has no DLX arguments (RabbitMQ rejects
+    # re-declaring a queue with different arguments).
+    RABBITMQ_DEAD_LETTER_ENABLED: bool = True
+    RABBITMQ_DEAD_LETTER_EXCHANGE: str = ""
+    RABBITMQ_DEAD_LETTER_QUEUE: str = ""
+    # Redis Streams redelivery. CONSUMER_NAME empty -> $HOSTNAME -> random.
+    # MIN_IDLE must exceed the slowest handler, else live work is reclaimed.
+    QUEUE_REDIS_CONSUMER_NAME: str = ""
+    QUEUE_REDIS_MIN_IDLE_SECONDS: float = Field(default=60.0, gt=0)
+    QUEUE_REDIS_MAX_DELIVERIES: int = Field(default=5, gt=0)
 
     # Async task store + service
     TASKS_ENABLED: bool = False
