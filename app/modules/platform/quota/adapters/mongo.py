@@ -74,6 +74,7 @@ class MongoQuotaStore:
         if existing is not None:
             return await self._to_reservation(existing)
 
+        # The counter exists before any reservation that points at it.
         counter_key = _counter_key(command)
         await self._counters.update_one(
             counter_key,
@@ -89,6 +90,27 @@ class MongoQuotaStore:
             },
             upsert=True,
         )
+        # Claim the reservation (and its idempotency key) BEFORE charging, so a
+        # burst of retries with one key charges once and losers never hit the
+        # limit. The unique partial index on idempotency_key arbitrates.
+        reservation_doc = {
+            "_id": command.reservation_id,
+            "subject_id": command.subject_id,
+            "resource": command.resource,
+            "window_key": command.window_key,
+            "cost": command.cost,
+            "status": QuotaReservationStatus.RESERVED.value,
+            "idempotency_key": command.idempotency_key,
+            "reset_at": command.reset_at,
+        }
+        try:
+            await self._reservations.insert_one(reservation_doc)
+        except DuplicateKeyError:
+            existing = await self._find_idempotent_reservation(command)
+            if existing is None:
+                raise
+            return await self._to_reservation(existing)
+
         counter = await self._counters.find_one_and_update(
             {
                 **counter_key,
@@ -109,30 +131,9 @@ class MongoQuotaStore:
             return_document=ReturnDocument.AFTER,
         )
         if counter is None:
+            # Over the limit: release the claim so a later retry can try again.
+            await self._reservations.delete_one({"_id": command.reservation_id})
             return None
-
-        reservation_doc = {
-            "_id": command.reservation_id,
-            "subject_id": command.subject_id,
-            "resource": command.resource,
-            "window_key": command.window_key,
-            "cost": command.cost,
-            "status": QuotaReservationStatus.RESERVED.value,
-            "idempotency_key": command.idempotency_key,
-            "reset_at": command.reset_at,
-        }
-        try:
-            await self._reservations.insert_one(reservation_doc)
-        except DuplicateKeyError:
-            # A concurrent request with the same idempotency key won the race:
-            # give back the capacity just taken and return its reservation.
-            await self._counters.update_one(
-                counter_key, {"$inc": {"used": -command.cost}}
-            )
-            existing = await self._find_idempotent_reservation(command)
-            if existing is None:
-                raise
-            return await self._to_reservation(existing)
         return _reservation_from_doc(reservation_doc, _usage_from_counter(counter))
 
     async def finalize(self, reservation_id: str) -> QuotaUsage:

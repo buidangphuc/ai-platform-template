@@ -57,6 +57,31 @@ jobs:
           uv run --no-dev --env-file .env.example
           python -c "import main, scripts.run_worker; print('ok')"
 
+  mongo-adapters:
+    # Concurrency on the Mongo quota store needs a real server (fakes serialize).
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install (all extras)
+        run: uv sync --dev --all-extras
+      - name: Mongo quota store tests
+        env:
+          QUOTA_TEST_MONGO_URI: mongodb://localhost:27017
+        run: uv run --all-extras pytest -q tests/unit/modules/test_quota_mongo_real.py
+
   migrations:
     runs-on: ubuntu-latest
     services:
