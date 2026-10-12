@@ -12,6 +12,7 @@ import json
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 
+import anyio
 from loguru import logger
 
 from app.api.v1.completions.observability import CompletionTimer, Outcome
@@ -127,11 +128,14 @@ async def _frames(
         outcome = "ok"
         yield sse_event(_done_payload(timer))
     finally:
-        if pending is not None and not pending.done():
-            pending.cancel()
-            await asyncio.wait({pending})
-        await chunks.aclose()
+        # Record first: a client disconnect cancels this generator under an anyio
+        # cancel scope, which re-cancels every await below.
         timer.emit(outcome)
+        with anyio.CancelScope(shield=True):
+            if pending is not None and not pending.done():
+                pending.cancel()
+                await asyncio.wait({pending})
+            await chunks.aclose()
 
 
 def _done_payload(timer: CompletionTimer) -> dict[str, object]:

@@ -161,3 +161,36 @@ def test_create_app_instruments_fastapi_only_when_enabled():
         assert on._is_instrumented_by_opentelemetry is True
     finally:
         FastAPIInstrumentor.uninstrument_app(on)
+
+
+def test_unconfigured_request_model_is_omitted_not_empty():
+    from time import time_ns
+
+    from app.core.telemetry import CompletionObservation
+
+    spans = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(spans))
+    telemetry = Telemetry(
+        tracer_provider=tracer_provider,
+        meter_provider=MeterProvider(metric_readers=[InMemoryMetricReader()]),
+        request_model="",
+    )
+
+    telemetry.record_completion(
+        CompletionObservation(
+            mode="sync",
+            outcome="ok",
+            started_ns=time_ns(),
+            duration_s=0.01,
+            ttft_s=None,
+            model=None,
+            finish_reason=None,
+            input_tokens=None,
+            output_tokens=None,
+        )
+    )
+
+    (span,) = spans.get_finished_spans()
+    assert "gen_ai.request.model" not in (span.attributes or {})
+    assert span.name == "chat"

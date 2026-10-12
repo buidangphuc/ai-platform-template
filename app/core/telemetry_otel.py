@@ -64,10 +64,11 @@ class Telemetry:
     def record_completion(self, observation: CompletionObservation) -> None:
         attributes: dict[str, str] = {
             "gen_ai.operation.name": "chat",
-            "gen_ai.request.model": self._request_model,
             "app.completion.mode": observation.mode,
             "app.completion.outcome": observation.outcome,
         }
+        if self._request_model:
+            attributes["gen_ai.request.model"] = self._request_model
         if observation.model:
             attributes["gen_ai.response.model"] = observation.model
         failed = observation.outcome != "ok"
@@ -87,7 +88,11 @@ class Telemetry:
                 )
 
         span = self._tracer.start_span(
-            f"chat {observation.model or self._request_model}",
+            " ".join(
+                part
+                for part in ("chat", observation.model or self._request_model)
+                if part
+            ),
             kind=SpanKind.CLIENT,
             start_time=observation.started_ns,
             attributes=attributes,
