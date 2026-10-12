@@ -8,7 +8,7 @@ from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, TimestampMixin, utcnow
+from app.core.database.model import Base, TimestampMixin, utcnow
 
 JSONB_TYPE = JSON().with_variant(JSONB, "postgresql")
 

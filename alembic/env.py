@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from app.core.config import get_settings
-from app.core.database import Base
+from app.core.database.model import Base
 from app.modules.messaging.outbox import models as outbox_models  # noqa: F401
 from app.modules.messaging.tasks import models as tasks_models  # noqa: F401
 from app.modules.platform.audit import models as audit_models  # noqa: F401

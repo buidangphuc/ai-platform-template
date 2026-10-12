@@ -52,6 +52,9 @@ Avoid:
 - Endpoint files constructing stores, HTTP clients, LLMs, quota stores, or dependency graphs.
 - Product-specific setup inside `app/modules/platform`.
 - Generic `deps.py` files that collect unrelated feature wiring.
+- Re-exports in `__init__.py` and `__all__`. Package `__init__.py` files stay empty (a docstring is allowed);
+  import each symbol from the file that defines it, and only what you use. `tests/unit/test_package_inits.py`
+  enforces this.
 
 ## Adding Or Changing A Service
 

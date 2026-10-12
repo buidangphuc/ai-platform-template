@@ -2,7 +2,12 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from sqlalchemy import DateTime
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncAttrs
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(AsyncAttrs, DeclarativeBase):
+    pass
 
 
 def utcnow() -> datetime:

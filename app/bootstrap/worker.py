@@ -9,7 +9,7 @@ from loguru import logger
 
 from app.bootstrap.resources import validate_core_resource_requirements
 from app.core.config import Settings, get_settings
-from app.core.database import build_engine, build_sessionmaker
+from app.core.database.engine import build_engine, build_sessionmaker
 from app.core.redis import build_redis_client
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.business.completions.pipeline import CompletionPipeline

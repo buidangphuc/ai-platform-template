@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from app.bootstrap.addons import BootstrapAddon
 from app.core.config import Settings
-from app.core.database import (
+from app.core.database.engine import (
     build_engine,
     build_sessionmaker,
     check_postgres_connection,

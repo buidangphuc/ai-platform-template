@@ -5,7 +5,7 @@ from sqlalchemy import JSON, Boolean, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, CreatedAtMixin
+from app.core.database.model import Base, CreatedAtMixin
 
 JSONB_TYPE = JSON().with_variant(JSONB, "postgresql")
 

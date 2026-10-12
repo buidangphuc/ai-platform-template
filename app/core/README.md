@@ -90,17 +90,17 @@ if settings.ENVIRONMENT.is_production:
 
 ```
 database/
-├── __init__.py       # Re-exports — caller imports `from app.core.database import X`
-├── engine.py         # build_engine, build_sessionmaker, Base, DbSession, get_db, check_postgres_connection
-└── model.py          # TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, id_key, utcnow
+├── __init__.py       # Empty — import from the defining file
+├── engine.py         # build_engine, build_sessionmaker, DbSession, get_db, check_postgres_connection
+└── model.py          # Base, TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, id_key, utcnow
 ```
 
-External callers use one import path:
+Import each symbol from the file that defines it (ORM models only need `model.py`,
+so they don't load the engine or FastAPI):
 
 ```python
-from app.core.database import (
-    Base, DbSession, TimestampMixin, ActorAuditMixin, id_key, utcnow,
-)
+from app.core.database.engine import DbSession
+from app.core.database.model import Base, TimestampMixin, utcnow
 ```
 
 `DbSession = Annotated[AsyncSession, Depends(get_db)]` — drop into FastAPI endpoints.

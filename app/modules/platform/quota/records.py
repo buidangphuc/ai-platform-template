@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, TimestampMixin
+from app.core.database.model import Base, TimestampMixin
 from app.modules.platform.quota.models import QuotaReservationStatus
 
 

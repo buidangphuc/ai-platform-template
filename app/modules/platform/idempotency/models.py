@@ -6,7 +6,7 @@ from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, TimestampMixin
+from app.core.database.model import Base, TimestampMixin
 
 JSONB_TYPE = JSON().with_variant(JSONB, "postgresql")
 

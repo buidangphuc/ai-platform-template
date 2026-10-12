@@ -4,21 +4,14 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
-    AsyncAttrs,
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
 
 from app.bootstrap.state import get_app_resources, require
 from app.core.config import Settings, get_settings
-
-
-class Base(AsyncAttrs, DeclarativeBase):
-    pass
-
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
