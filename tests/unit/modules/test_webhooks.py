@@ -70,7 +70,9 @@ def test_webhook_retry_policy_retries_transient_statuses_only():
         max_attempts=3,
         retry_status_codes=(408, 429, 500, 502, 503, 504),
         retry_exceptions=True,
-        backoff_seconds=(1.0, 2.0, 4.0),
+        base_delay_seconds=1.0,
+        max_delay_seconds=4.0,
+        rng=lambda: 1.0,
     )
 
     assert policy.decision(attempt=1, status_code=503).should_retry
@@ -81,7 +83,10 @@ def test_webhook_retry_policy_retries_transient_statuses_only():
 
 def test_default_webhook_retry_policy_has_sensible_backoff():
     assert DEFAULT_WEBHOOK_RETRY_POLICY.max_attempts == 3
-    assert DEFAULT_WEBHOOK_RETRY_POLICY.backoff_seconds == (1.0, 5.0, 30.0)
+    assert (
+        DEFAULT_WEBHOOK_RETRY_POLICY.base_delay_seconds,
+        DEFAULT_WEBHOOK_RETRY_POLICY.max_delay_seconds,
+    ) == (1.0, 30.0)
 
 
 async def test_http_webhook_dispatcher_uses_injected_post_callable():

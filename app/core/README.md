@@ -167,22 +167,27 @@ Install order is set by `app/bootstrap/middleware.py::install_core_middlewares()
 
 ## resilience.py
 
-Three immutable policies + one stateful object:
+Three immutable policies + one stateful object. "Transient" is defined once
+(`is_transient_error`: 408, 429, 5xx, timeouts, connection errors) and shared by
+retry and the breaker; deterministic 4xx never retries or trips failover.
 
 ```python
 RetryPolicy(
     max_attempts: int,
     retry_status_codes: tuple[int, ...],
     retry_exceptions: bool,
-    backoff_seconds: tuple[float, ...],
+    retry_on: Callable[[BaseException], bool],  # default is_transient_error
+    base_delay_seconds: float,   # capped exponential, full jitter
+    max_delay_seconds: float,
+    rng: Callable[[], float],    # injectable for tests
 )
 # Usage
 decision = policy.decision(attempt=N, status_code=503, error=None)
-# decision.should_retry, decision.next_delay_seconds
+# decision.should_retry, decision.next_delay_seconds (honors Retry-After)
 
-CircuitBreakerPolicy(failure_threshold, failure_status_codes, failure_status_range)
-breaker = policy.build()  # CircuitBreaker (stateful)
-breaker.allows_request() / record_success() / record_failure(status_code=...)
+CircuitBreakerPolicy(failure_threshold, cooldown_seconds)
+breaker = policy.build(clock=...)  # CircuitBreaker: closed -> open -> half-open
+breaker.try_acquire() / record_success() / record_failure(error)
 
 TimeoutPolicy(timeout_seconds: float)  # Used by callers with asyncio.wait_for
 ```

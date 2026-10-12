@@ -14,6 +14,18 @@ class AISettingsMixin(BaseModel):
     CHAT_MODEL: str = ""
     CHAT_FALLBACK_MODELS: str = ""
     JUDGE_CHAT_MODEL: str = ""
+    # Every provider call is bounded: output cap, per-request timeout and the
+    # SDK's own hidden retry budget. LLM_MAX_RETRIES is kept at 1 because the
+    # breaker only sees a call after the SDK has exhausted its retries, so each
+    # extra retry multiplies the latency before failover can engage.
+    LLM_MAX_TOKENS: int = Field(default=2048, gt=0, le=200_000)
+    LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=600)
+    LLM_MAX_RETRIES: int = Field(default=1, ge=0, le=5)
+    # Primary-model circuit breaker: consecutive transient failures (429, 5xx,
+    # timeouts, connection errors) before failover, and the cooldown before the
+    # primary is probed again.
+    LLM_BREAKER_FAILURE_THRESHOLD: int = Field(default=3, gt=0)
+    LLM_BREAKER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0)
 
     # Langfuse observability
     LANGFUSE_ENABLED: bool = False

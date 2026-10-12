@@ -11,6 +11,15 @@ from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
 from app.modules.messaging.webhooks.envelope import WebhookEnvelope
 
 
+def _retry_any_error(error: BaseException) -> bool:
+    # A sink failure is infrastructure failing (queue, webhook endpoint), never
+    # a bad request of ours: retry until max_attempts rather than classify.
+    return True
+
+
+DEFAULT_OUTBOX_RETRY_POLICY = RetryPolicy(retry_on=_retry_any_error)
+
+
 class OutboxSink(Protocol):
     async def publish(self, record: OutboxRecord, *, now: datetime) -> None: ...
 
@@ -65,7 +74,7 @@ class OutboxPublisher:
         self.store = store
         self.sink = sink
         self.event_type_prefix = event_type_prefix
-        self.retry_policy = retry_policy or RetryPolicy()
+        self.retry_policy = retry_policy or DEFAULT_OUTBOX_RETRY_POLICY
 
     async def publish_pending(
         self,

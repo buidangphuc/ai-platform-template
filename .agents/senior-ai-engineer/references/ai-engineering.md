@@ -28,25 +28,47 @@ Rules:
 
 - Resolves the target model per role: `"default"` and `"judge"` (judge model
   used by eval-as-judge flows). Reads `Settings.CHAT_MODEL`, `JUDGE_CHAT_MODEL`,
-  `CHAT_FALLBACK_MODELS`.
-- Primary → secondary fallback is driven by a **circuit breaker on 4xx**
-  (`CircuitBreakerPolicy`, `failure_status_range=range(400, 500)`). After each
-  call the caller must report the outcome:
-  - `record_success(target, role=...)`
-  - `record_error(target, status_code=..., role=...)`
-  When the primary breaker opens, `current_target` returns the secondary.
-- With no model configured, `chat_model()` returns `FakeListChatModel` — this is
+  `CHAT_FALLBACK_MODELS`. An empty `JUDGE_CHAT_MODEL` falls back to
+  `CHAT_MODEL` with a warning locally and a `ValueError` outside
+  dev/local/test — a judge silently grading with the production model is not
+  an independent judge.
+- Every model is built with bounded calls: `LLM_MAX_TOKENS`,
+  `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` (the SDK's hidden retry budget,
+  default 1 — the breaker only sees a call after the SDK gave up, so each
+  extra retry delays failover).
+- Primary → secondary failover is a **circuit breaker** (`CircuitBreaker`,
+  `app/core/resilience.py`) on the primary of any role that has a secondary.
+  It counts only *transient* failures: 408/429/5xx, timeouts and connection
+  errors (`is_transient_error`). Deterministic errors (bad prompt, context
+  length, content policy, other 4xx) never count and never fail over — the
+  secondary would only repeat them. After `LLM_BREAKER_FAILURE_THRESHOLD`
+  consecutive transient failures the breaker opens and `select_target`
+  returns the secondary; after `LLM_BREAKER_COOLDOWN_SECONDS` exactly one call
+  is let through to the primary as a probe (half-open): success closes the
+  breaker, a transient failure reopens it for another cooldown.
+- The router is not discarded: `LLMInstance` carries it (`instance.router`)
+  next to the tracker, and the model is resolved **per call**, because which
+  target is healthy changes at runtime. Handlers call
+  `await instance.ainvoke(messages, role=..., context=LLMTraceContext(...))`,
+  which selects the target, attaches the Langfuse trace config, reports
+  success/error to the breaker and, on a transient primary failure, retries
+  once on the secondary (the secondary has no breaker of its own). Chosen
+  over LangChain `with_fallbacks` because that wrapper cannot report outcomes
+  to the breaker or skip the primary while it is open.
+- Streaming / tool-binding callers use `instance.chat_model(role)` (raw model
+  for the next call) and own failover and outcome reporting via
+  `router.record_success(target)` / `router.record_error(target, error=exc)`.
+- With no model configured, the router returns `FakeListChatModel` — this is
   why tests and local runs work without provider keys. Lean on it for tests.
 
-When adding a model call: get the target from the router, invoke with the
-trace config, then record success/error so fallback health stays accurate.
-
-> **Open seam: the template itself never reports outcomes.** The scaffold
-> handler (`handlers/echo.py`) doesn't touch the router, so no shipped code
-> path calls `record_success`/`record_error` — the breaker cannot trip and
-> fallback never engages until your first real handler reports them. That
-> wiring deliberately lives with the product handler, not the scaffold:
-> outcome reporting only makes sense where the provider call happens.
+> **Open seam: the scaffold handler does not call a model.**
+> `handlers/echo.py` never touches the `LLMInstance`, and no resource builds
+> one yet, so nothing in the template exercises failover end to end. A real
+> handler factory (in `bootstrap/services.py`) builds the instance with
+> `build_llm_instance(...)` once and injects it; the handler then only calls
+> `instance.ainvoke(...)`. Outcome reporting is no longer the handler's job.
+> `application.py` still flushes Langfuse through the global `get_client()`
+> rather than the tracker's own client (`tracker.flush()`).
 
 ## Evals — `app/modules/ai/evals/`
 

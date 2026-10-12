@@ -19,7 +19,8 @@ DEFAULT_WEBHOOK_RETRY_POLICY = RetryPolicy(
     max_attempts=3,
     retry_status_codes=(408, 429, 500, 502, 503, 504),
     retry_exceptions=True,
-    backoff_seconds=(1.0, 5.0, 30.0),
+    base_delay_seconds=1.0,
+    max_delay_seconds=30.0,
 )
 
 

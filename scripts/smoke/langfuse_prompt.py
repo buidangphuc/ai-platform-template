@@ -42,6 +42,7 @@ async def run_smoke(
     template = (
         "You are smoke-testing the Langfuse prompt registry. Subject: {{subject}}."
     )
+    assert tracker.client is not None
     created = tracker.client.create_prompt(
         name=prompt_name,
         prompt=template,

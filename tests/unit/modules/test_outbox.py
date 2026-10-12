@@ -198,7 +198,13 @@ async def test_outbox_publisher_reschedules_transient_failures_before_max_attemp
     publisher = OutboxPublisher(
         store=store,
         sink=_FailingSink(),
-        retry_policy=RetryPolicy(max_attempts=3, backoff_seconds=(5.0,)),
+        retry_policy=RetryPolicy(
+            max_attempts=3,
+            base_delay_seconds=5.0,
+            max_delay_seconds=5.0,
+            rng=lambda: 1.0,
+            retry_on=lambda _error: True,
+        ),
     )
 
     report = await publisher.publish_pending(now=now)
@@ -224,7 +230,13 @@ async def test_outbox_publisher_marks_final_failure_after_max_attempts():
     publisher = OutboxPublisher(
         store=store,
         sink=_FailingSink(),
-        retry_policy=RetryPolicy(max_attempts=3, backoff_seconds=(5.0,)),
+        retry_policy=RetryPolicy(
+            max_attempts=3,
+            base_delay_seconds=5.0,
+            max_delay_seconds=5.0,
+            rng=lambda: 1.0,
+            retry_on=lambda _error: True,
+        ),
     )
 
     report = await publisher.publish_pending(now=now)

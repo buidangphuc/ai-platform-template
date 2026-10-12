@@ -121,9 +121,14 @@ def test_in_memory_rate_limiter_rejects_invalid_limit():
 
 
 class FakeRedis:
-    """Python stub mirroring the Lua script semantics."""
+    """Python stub mirroring the Lua script, including its server-side clock.
 
-    def __init__(self) -> None:
+    ``server_time`` plays Redis ``TIME``: the limiter passes no timestamp, so
+    the window is whatever the *server* says, shared by every client.
+    """
+
+    def __init__(self, server_time: float = 0.0) -> None:
+        self.server_time = server_time
         self.values: dict[str, int] = {}
         self.eval_calls: list[tuple] = []
 
@@ -131,23 +136,16 @@ class FakeRedis:
         self,
         script: str,
         num_keys: int,
-        current_key: str,
-        previous_key: str,
+        base_key: str,
         window_seconds: int,
         limit: int,
-        elapsed: float,
     ) -> list[int]:
-        self.eval_calls.append(
-            (
-                script,
-                num_keys,
-                current_key,
-                previous_key,
-                window_seconds,
-                limit,
-                elapsed,
-            )
-        )
+        self.eval_calls.append((script, num_keys, base_key, window_seconds, limit))
+        now = self.server_time
+        window_index = int(now // window_seconds)
+        elapsed = now - window_index * window_seconds
+        current_key = f"{base_key}:{window_index}"
+        previous_key = f"{base_key}:{window_index - 1}"
         current = self.values.get(current_key, 0)
         previous = self.values.get(previous_key, 0)
         previous_weight = max(1.0 - elapsed / window_seconds, 0.0)
@@ -164,9 +162,7 @@ class FakeRedis:
 
 async def test_redis_rate_limiter_allows_within_limit():
     redis = FakeRedis()
-    limiter = RedisRateLimiter(
-        redis=redis, limit=2, window_seconds=60, clock=lambda: 0.0
-    )
+    limiter = RedisRateLimiter(redis=redis, limit=2, window_seconds=60)
 
     first = await limiter.check("api-key-1")
     second = await limiter.check("api-key-1")
@@ -177,9 +173,7 @@ async def test_redis_rate_limiter_allows_within_limit():
 
 async def test_redis_rate_limiter_blocks_and_returns_retry_after():
     redis = FakeRedis()
-    limiter = RedisRateLimiter(
-        redis=redis, limit=1, window_seconds=30, clock=lambda: 0.0
-    )
+    limiter = RedisRateLimiter(redis=redis, limit=1, window_seconds=30)
 
     await limiter.check("api-key-1")
     blocked = await limiter.check("api-key-1")
@@ -190,9 +184,7 @@ async def test_redis_rate_limiter_blocks_and_returns_retry_after():
 
 async def test_redis_rate_limiter_does_not_increment_past_limit():
     redis = FakeRedis()
-    limiter = RedisRateLimiter(
-        redis=redis, limit=1, window_seconds=30, clock=lambda: 0.0
-    )
+    limiter = RedisRateLimiter(redis=redis, limit=1, window_seconds=30)
 
     await limiter.check("api-key-1")
     for _ in range(10):
@@ -201,6 +193,41 @@ async def test_redis_rate_limiter_does_not_increment_past_limit():
     # Lua script returns without INCR once limit is reached
     current_key_value = next(iter(redis.values.values()))
     assert current_key_value == 1
+
+
+async def test_redis_rate_limiter_pods_share_windows_via_server_clock():
+    """Two pods (two limiter instances) hitting one Redis count into the same
+    window: nothing about the window is derived from process-local time."""
+    redis = FakeRedis(server_time=45.0)
+    pod_a = RedisRateLimiter(redis=redis, limit=2, window_seconds=60)
+    pod_b = RedisRateLimiter(redis=redis, limit=2, window_seconds=60)
+
+    assert (await pod_a.check("k")).allowed
+    assert (await pod_b.check("k")).allowed
+    assert not (await pod_a.check("k")).allowed
+    assert not (await pod_b.check("k")).allowed
+
+
+def test_redis_rate_limiter_script_reads_redis_server_time():
+    script = RedisRateLimiter._CHECK_SCRIPT
+
+    assert "redis.call('TIME')" in script
+    assert "ARGV[3]" not in script  # no client-supplied timestamp/elapsed
+
+
+async def test_redis_rate_limiter_lua_script_against_fakeredis():
+    """Runs the real Lua (TIME included) when fakeredis has the lupa extra."""
+    pytest.importorskip("lupa")
+    from fakeredis import FakeAsyncRedis
+
+    redis = FakeAsyncRedis()
+    limiter = RedisRateLimiter(redis=redis, limit=2, window_seconds=60)
+
+    results = [await limiter.check("k") for _ in range(3)]
+
+    assert [r.allowed for r in results] == [True, True, False]
+    assert results[0].remaining == 1
+    assert results[2].retry_after_seconds is not None
 
 
 # ----------------------------------------------------- factory + addon
