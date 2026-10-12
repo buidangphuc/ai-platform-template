@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
+from functools import partial
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
-from app.modules.platform.mongo.factory import build_mongo_gateway
+from app.modules.platform.mongo.factory import (
+    build_mongo_gateway,
+    check_mongo_connection,
+)
 
 
 class MongoAddon:
@@ -24,3 +28,6 @@ class MongoAddon:
         gateway = build_mongo_gateway(settings)
         stack.push_async_callback(gateway.close)
         resources.mongo = gateway
+        resources.health_checks.register(
+            "mongo", partial(check_mongo_connection, gateway)
+        )

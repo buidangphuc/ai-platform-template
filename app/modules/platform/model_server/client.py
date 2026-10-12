@@ -56,6 +56,18 @@ class ModelServerClient:
             return False
         return response.status_code == 200
 
+    async def check(self) -> None:
+        """Readiness check: raises when the server does not answer ``/health``.
+
+        Shaped as a ``DependencyCheck`` so a product addon can register it with
+        ``resources.health_checks.register("model_server", model.check)``.
+        """
+        if not await self.ping():
+            raise ServiceUnavailableError(
+                message="Model server is not healthy",
+                code="model_server_unavailable",
+            )
+
 
 def build_httpx_model_server_client(base_url: str, *, timeout: float = 10.0) -> Any:
     """Shared httpx.AsyncClient bound to the server — own it in your domain

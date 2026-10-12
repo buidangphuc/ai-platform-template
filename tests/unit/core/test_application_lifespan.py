@@ -19,6 +19,13 @@ from app.core.config import Settings
 from app.core.health import HealthService
 
 
+def _async_returning(value):
+    async def opener(settings, backend):
+        return value
+
+    return opener
+
+
 class _FakeLangfuseClient:
     def __init__(self) -> None:
         self.flushed = False
@@ -228,8 +235,8 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     )
     monkeypatch.setattr(
         resources_module,
-        "build_queue_gateway",
-        lambda settings, backend: queue,
+        "open_queue_gateway",
+        _async_returning(queue),
         raising=False,
     )
     monkeypatch.setattr(
@@ -332,10 +339,14 @@ async def test_app_lifespan_honors_resource_flags(
         lambda settings: build_calls.append("redis"),
         raising=False,
     )
+
+    async def spy_open_queue(settings, backend):
+        build_calls.append("queue")
+
     monkeypatch.setattr(
         resources_module,
-        "build_queue_gateway",
-        lambda settings, backend: build_calls.append("queue"),
+        "open_queue_gateway",
+        spy_open_queue,
         raising=False,
     )
     monkeypatch.setattr(
@@ -403,3 +414,42 @@ def test_resource_lifecycle_uses_named_open_steps():
         "build_health_service",
     ):
         assert callable(getattr(resources_module, name))
+
+
+async def test_openers_register_readiness_checks_with_the_configured_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+):
+    monkeypatch.setattr(resources_module, "build_engine", lambda s: _FakeEngine())
+    monkeypatch.setattr(resources_module, "build_sessionmaker", lambda e: object())
+    monkeypatch.setattr(resources_module, "build_redis_client", lambda s: _FakeRedis())
+    settings = test_settings.model_copy(
+        update={
+            "DATABASE_ENABLED": True,
+            "REDIS_ENABLED": True,
+            "QUEUE_ENABLED": False,
+            "TASKS_ENABLED": False,
+            "HEALTH_CHECK_TIMEOUT_SECONDS": 0.75,
+        }
+    )
+
+    async with resources_module.open_application_resources(
+        settings, init_resources=True
+    ) as resources:
+        service = resources_module.build_health_service(resources, init_resources=True)
+
+        assert [name for name, _ in service.checks] == ["postgres", "redis"]
+        assert service.check_timeout_seconds == 0.75
+
+
+async def test_no_readiness_checks_for_resources_that_are_not_opened(
+    test_settings: Settings,
+):
+    settings = test_settings.model_copy(
+        update={"DATABASE_ENABLED": False, "REDIS_ENABLED": False}
+    )
+
+    async with resources_module.open_application_resources(
+        settings, init_resources=True
+    ) as resources:
+        assert resources.health_checks.checks == ()

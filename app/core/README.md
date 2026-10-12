@@ -132,21 +132,21 @@ from app.core.database.model import Base, TimestampMixin, utcnow
 HealthService(
     check_external_dependencies: bool = True,
     checks: tuple[tuple[str, DependencyCheck], ...] = (),
+    check_timeout_seconds: float = 2.0,
 )
 ```
 
-No hardcoded postgres/redis slots. Bootstrap registers what's enabled:
+No hardcoded postgres/redis slots. Each opener registers its own readiness
+check on `resources.health_checks` (a `HealthChecks` registry) as its resource
+comes up, and `build_health_service` hands the registry to `HealthService`:
 
 ```python
-checks = []
-if resources.sessionmaker:
-    checks.append(("postgres", partial(check_postgres_connection, resources.sessionmaker)))
-if resources.redis:
-    checks.append(("redis", partial(check_redis_connection, resources.redis)))
-HealthService(checks=tuple(checks))
+resources.health_checks.register("redis", partial(check_redis_connection, redis))
 ```
 
-Adding a new dependency check (queue, vector DB, etc.) = append one tuple, no code change in `health.py`.
+Checks run concurrently and each is bounded by `HEALTH_CHECK_TIMEOUT_SECONDS`
+(a timeout reports `error`). Adding a dependency check (queue, vector DB, model
+server) = one `register` call in its opener, no change in `health.py`.
 
 ---
 
@@ -192,7 +192,7 @@ breaker.try_acquire() / record_success() / record_failure(error)
 TimeoutPolicy(timeout_seconds: float)  # Used by callers with asyncio.wait_for
 ```
 
-Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (circuit breaker for primary→secondary failover), `ai/rag/service.py` (timeout), `ai/evals/runner.py` (timeout), `messaging/outbox/publisher.py`. (Worker retry uses `WORKER_MAX_ATTEMPTS`, not a `RetryPolicy`.)
+Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (per-target circuit breakers for the ordered failover chain), `ai/rag/service.py` (timeout), `ai/evals/runner.py` (timeout), `messaging/outbox/publisher.py`. (Worker retry uses `WORKER_MAX_ATTEMPTS`, not a `RetryPolicy`.)
 
 ---
 

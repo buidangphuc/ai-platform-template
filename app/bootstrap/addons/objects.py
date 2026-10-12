@@ -6,7 +6,7 @@ from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
-from app.modules.platform.objects.factory import build_object_gateway
+from app.modules.platform.objects.factory import open_object_gateway
 
 
 class ObjectAddon:
@@ -21,6 +21,6 @@ class ObjectAddon:
         settings: Settings,
         stack: AsyncExitStack,
     ) -> None:
-        gateway = build_object_gateway(settings)
+        gateway = await open_object_gateway(settings)
         stack.push_async_callback(gateway.close)
         resources.objects = gateway

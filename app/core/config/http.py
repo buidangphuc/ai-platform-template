@@ -32,6 +32,10 @@ class HttpSettingsMixin(BaseModel):
     STREAM_FIRST_TOKEN_TIMEOUT_SECONDS: float = Field(default=30, gt=0)
     STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=30, gt=0)
 
+    # Upper bound for each readiness dependency check; checks run concurrently,
+    # so the probe takes at most about this long however many are registered.
+    HEALTH_CHECK_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+
     # Reverse proxies in front of the app that append to X-Forwarded-For. 0 = do
     # not trust the header; the per-IP rate limit keys on the socket peer.
     TRUSTED_PROXY_COUNT: int = Field(default=0, ge=0)

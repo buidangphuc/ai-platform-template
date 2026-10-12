@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from app.core.config import Settings
+from app.core.errors import ServiceUnavailableError
+from app.core.resilience import is_transient_error
 from app.modules.ai.llm.langfuse import (
     LangfuseLLMTracker,
     LLMTraceContext,
@@ -21,9 +23,12 @@ class LLMInstance:
     """The model dependency handlers receive: router + tracker.
 
     The model is resolved per call, because which target is healthy changes
-    at runtime. ``ainvoke`` is the supported call path: it picks the target,
-    attaches the trace config, reports the outcome to the breaker and, on a
-    transient primary failure, retries once on the secondary.
+    at runtime. ``ainvoke`` is the supported call path: it walks the role's
+    chain in order, skipping targets whose breaker is open, attaches the trace
+    config, reports each outcome to that target's breaker and moves on to the
+    next target only after a transient failure. A deterministic error
+    propagates at once; when every target fails the last error is raised, and
+    when every breaker is open ``ServiceUnavailableError``.
     """
 
     router: ModelRouter
@@ -39,18 +44,26 @@ class LLMInstance:
         role: ModelRole = "default",
         context: LLMTraceContext | None = None,
     ) -> BaseMessage:
-        target = self.router.select_target(role)
-        try:
-            message = await self._call(target, input, context)
-        except Exception as exc:
-            self.router.record_error(target, error=exc, role=role)
-            fallback = self.router.failover_target(target, exc, role)
-            if fallback is None:
-                raise
-            # The secondary has no breaker; its outcome is not tracked.
-            return await self._call(fallback, input, context)
-        self.router.record_success(target, role=role)
-        return message
+        last_error: Exception | None = None
+        for target in self.router.chain(role):
+            if not self.router.try_acquire(target, role):
+                continue
+            try:
+                message = await self._call(target, input, context)
+            except Exception as exc:
+                self.router.record_error(target, error=exc, role=role)
+                if not is_transient_error(exc):
+                    raise
+                last_error = exc
+                continue
+            self.router.record_success(target, role=role)
+            return message
+        if last_error is not None:
+            raise last_error
+        raise ServiceUnavailableError(
+            message="Every configured LLM target is unavailable",
+            code="llm_unavailable",
+        )
 
     def chat_model(self, role: ModelRole = "default") -> BaseChatModel:
         """Raw model for the next call (streaming, tool binding). Bypasses

@@ -13,11 +13,11 @@ from app.core.database.engine import (
     build_sessionmaker,
     check_postgres_connection,
 )
-from app.core.health import DependencyCheck, HealthService
+from app.core.health import HealthChecks, HealthService
 from app.core.redis import build_redis_client, check_redis_connection
 from app.modules.messaging.queue.factory import (
-    build_queue_gateway,
     build_redis_queue_gateway,
+    open_queue_gateway,
 )
 from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.factory import (
@@ -101,6 +101,8 @@ class ApplicationResources:
     telemetry: Telemetry | None = None
     # Addons opened for this runtime (closed in reverse by the exit stack)
     addons: list[BootstrapAddon] = field(default_factory=list)
+    # Readiness checks, registered by each opener as its resource comes up
+    health_checks: HealthChecks = field(default_factory=HealthChecks)
 
 
 @asynccontextmanager
@@ -115,12 +117,16 @@ async def open_application_resources(
     Shared by the API lifespan and the worker, so both run the same resource
     graph. Each opener registers its own close on the exit stack.
     """
-    resources = ApplicationResources()
+    resources = ApplicationResources(
+        health_checks=HealthChecks(
+            timeout_seconds=settings.HEALTH_CHECK_TIMEOUT_SECONDS
+        )
+    )
     async with AsyncExitStack() as stack:
         if init_resources:
             _open_database(resources, settings, stack)
             _open_redis(resources, settings, stack)
-            _open_queue(resources, settings, stack)
+            await _open_queue(resources, settings, stack)
 
         for addon in addons:
             if addon.is_enabled(settings):
@@ -144,6 +150,9 @@ def _open_database(
     stack.push_async_callback(engine.dispose)
     resources.engine = engine
     resources.sessionmaker = build_sessionmaker(engine)
+    resources.health_checks.register(
+        "postgres", partial(check_postgres_connection, resources.sessionmaker)
+    )
 
 
 def _open_redis(
@@ -156,9 +165,10 @@ def _open_redis(
     redis = build_redis_client(settings)
     stack.push_async_callback(redis.aclose)
     resources.redis = redis
+    resources.health_checks.register("redis", partial(check_redis_connection, redis))
 
 
-def _open_queue(
+async def _open_queue(
     resources: ApplicationResources,
     settings: Settings,
     stack: AsyncExitStack,
@@ -171,7 +181,7 @@ def _open_queue(
                 settings, opened(resources.redis, "redis")
             )
         case "memory" | "sqs" | "rabbitmq" as backend:
-            queue = build_queue_gateway(settings, backend)
+            queue = await open_queue_gateway(settings, backend)
     stack.push_async_callback(queue.close)
     resources.queue_gateway = queue
 
@@ -226,22 +236,6 @@ def build_health_service(
 ) -> HealthService:
     return HealthService(
         check_external_dependencies=init_resources,
-        checks=_build_dependency_checks(resources),
+        checks=resources.health_checks.checks,
+        check_timeout_seconds=resources.health_checks.timeout_seconds,
     )
-
-
-def _build_dependency_checks(
-    resources: ApplicationResources,
-) -> tuple[tuple[str, DependencyCheck], ...]:
-    checks: list[tuple[str, DependencyCheck]] = []
-    if resources.sessionmaker is not None:
-        checks.append(
-            ("postgres", partial(check_postgres_connection, resources.sessionmaker))
-        )
-    if resources.redis is not None:
-        checks.append(("redis", partial(check_redis_connection, resources.redis)))
-    if resources.mongo is not None:
-        from app.modules.platform.mongo.factory import check_mongo_connection
-
-        checks.append(("mongo", partial(check_mongo_connection, resources.mongo)))
-    return tuple(checks)

@@ -36,28 +36,37 @@ Rules:
   `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` (the SDK's hidden retry budget,
   default 1 — the breaker only sees a call after the SDK gave up, so each
   extra retry delays failover).
-- Primary → secondary failover is a **circuit breaker** (`CircuitBreaker`,
-  `app/core/resilience.py`) on the primary of any role that has a secondary.
-  It counts only *transient* failures: 408/429/5xx, timeouts and connection
-  errors (`is_transient_error`). Deterministic errors (bad prompt, context
-  length, content policy, other 4xx) never count and never fail over — the
-  secondary would only repeat them. After `LLM_BREAKER_FAILURE_THRESHOLD`
-  consecutive transient failures the breaker opens and `select_target`
-  returns the secondary; after `LLM_BREAKER_COOLDOWN_SECONDS` exactly one call
-  is let through to the primary as a probe (half-open): success closes the
-  breaker, a transient failure reopens it for another cooldown.
+- Failover is an **ordered chain**: the `default` role's chain is `CHAT_MODEL`
+  followed by *every* `CHAT_FALLBACK_MODELS` entry, in order (duplicates
+  dropped); `judge` has the judge model alone and no fallbacks. With more than
+  one target, each target has its **own circuit breaker**
+  (`CircuitBreaker`, `app/core/resilience.py`), keyed by (role, target). A
+  breaker counts only *transient* failures: 408/429/5xx, timeouts and
+  connection errors (`is_transient_error`). Deterministic errors (bad prompt,
+  context length, content policy, other 4xx) never count and never fail over —
+  the next model would only repeat them. After
+  `LLM_BREAKER_FAILURE_THRESHOLD` consecutive transient failures a target's
+  breaker opens and the chain skips it; after `LLM_BREAKER_COOLDOWN_SECONDS`
+  exactly one call is let through to it as a probe (half-open): success closes
+  the breaker, a transient failure reopens it for another cooldown. A
+  single-target chain is never gated.
 - The router is not discarded: `LLMInstance` carries it (`instance.router`)
   next to the tracker, and the model is resolved **per call**, because which
   target is healthy changes at runtime. Handlers call
   `await instance.ainvoke(messages, role=..., context=LLMTraceContext(...))`,
-  which selects the target, attaches the Langfuse trace config, reports
-  success/error to the breaker and, on a transient primary failure, retries
-  once on the secondary (the secondary has no breaker of its own). Chosen
-  over LangChain `with_fallbacks` because that wrapper cannot report outcomes
-  to the breaker or skip the primary while it is open.
+  which walks the chain: skip a target whose breaker is open, call it with the
+  Langfuse trace config, report the outcome to *that target's* breaker, and
+  move to the next target only after a transient failure. A deterministic
+  error propagates at once; if every target fails the **last** error is
+  raised; if every breaker is open, `ServiceUnavailableError`
+  (`llm_unavailable`). Chosen over LangChain `with_fallbacks` because that
+  wrapper cannot report outcomes to a breaker or skip an open target. Each
+  failover hop adds up to one full call timeout, so keep chains short (2–3).
 - Streaming / tool-binding callers use `instance.chat_model(role)` (raw model
-  for the next call) and own failover and outcome reporting via
-  `router.record_success(target)` / `router.record_error(target, error=exc)`.
+  for the first admitted target, `ServiceUnavailableError` if none) and own
+  failover and outcome reporting via `router.chain(role)`,
+  `router.try_acquire(target)`, `router.record_success(target)` /
+  `router.record_error(target, error=exc)`.
 - With no model configured, the router returns `FakeListChatModel` — this is
   why tests and local runs work without provider keys. Lean on it for tests.
 

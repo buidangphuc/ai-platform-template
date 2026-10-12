@@ -89,13 +89,14 @@ async def test_sqs_gateway_passes_endpoint_and_receive_attributes(monkeypatch):
         SimpleNamespace(Session=lambda: session),
     )
 
-    gateway = SQSQueueGateway(
+    gateway = await SQSQueueGateway(
         queue_url="https://sqs.test/queue",
         region_name="us-test-1",
         endpoint_url="http://localhost:4566",
         visibility_timeout=30,
-    )
+    ).open()
 
+    assert len(session.client_kwargs) == 1  # connected eagerly
     messages = await gateway.receive(max_messages=10, wait_seconds=21.5)
 
     assert session.client_kwargs == [

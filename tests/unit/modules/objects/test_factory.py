@@ -4,7 +4,7 @@ from app.bootstrap.addons.objects import ObjectAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.objects.adapters.memory import MemoryObjectGateway
-from app.modules.platform.objects.factory import build_object_gateway
+from app.modules.platform.objects.factory import open_object_gateway
 from tests.factories import build_test_settings, open_addon
 
 
@@ -12,8 +12,8 @@ def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
 
 
-def test_build_object_gateway_defaults_to_memory():
-    gateway = build_object_gateway(_settings())
+async def test_open_object_gateway_defaults_to_memory():
+    gateway = await open_object_gateway(_settings())
 
     assert isinstance(gateway, MemoryObjectGateway)
 

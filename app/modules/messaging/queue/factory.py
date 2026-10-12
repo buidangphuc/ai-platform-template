@@ -1,4 +1,4 @@
-"""Select a ``QueueGateway`` implementation based on ``Settings.QUEUE_BACKEND``."""
+"""Open a ``QueueGateway`` implementation based on ``Settings.QUEUE_BACKEND``."""
 
 from __future__ import annotations
 
@@ -14,11 +14,15 @@ if TYPE_CHECKING:
 ClientlessQueueBackend = Literal["memory", "sqs", "rabbitmq"]
 
 
-def build_queue_gateway(
+async def open_queue_gateway(
     settings: Settings,
     backend: ClientlessQueueBackend,
 ) -> QueueGateway:
-    """Backends that need no injected client; redis uses its own builder."""
+    """Backends that need no injected client; redis uses its own builder.
+
+    The SQS and RabbitMQ gateways connect here, so an unreachable broker fails
+    startup instead of the first request.
+    """
     match backend:
         case "memory":
             from app.modules.messaging.queue.adapters.memory import (
@@ -29,7 +33,7 @@ def build_queue_gateway(
         case "sqs":
             from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
 
-            return SQSQueueGateway(
+            return await SQSQueueGateway(
                 queue_url=settings.SQS_QUEUE_URL,
                 region_name=settings.SQS_REGION,
                 endpoint_url=settings.SQS_ENDPOINT_URL or None,
@@ -38,19 +42,19 @@ def build_queue_gateway(
                     if settings.SQS_VISIBILITY_TIMEOUT_SECONDS > 0
                     else None
                 ),
-            )
+            ).open()
         case "rabbitmq":
             from app.modules.messaging.queue.adapters.rabbitmq import (
                 RabbitMQQueueGateway,
             )
 
-            return RabbitMQQueueGateway(
+            return await RabbitMQQueueGateway(
                 url=settings.RABBITMQ_URL,
                 queue_name=settings.QUEUE_NAME,
                 dead_letter_enabled=settings.RABBITMQ_DEAD_LETTER_ENABLED,
                 dead_letter_exchange=settings.RABBITMQ_DEAD_LETTER_EXCHANGE,
                 dead_letter_queue=settings.RABBITMQ_DEAD_LETTER_QUEUE,
-            )
+            ).open()
 
 
 def build_redis_queue_gateway(settings: Settings, redis: Redis) -> QueueGateway:

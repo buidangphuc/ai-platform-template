@@ -33,6 +33,13 @@ from scripts.run_worker import main
 from tests.factories import build_test_settings
 
 
+def _async_returning(value):
+    async def opener(settings, backend):
+        return value
+
+    return opener
+
+
 def _settings() -> Settings:
     return build_test_settings(
         # The worker stack is opt-in on the template — enable it explicitly.
@@ -207,8 +214,8 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
     store = _FakeStore()
 
     monkeypatch.setattr(
-        "app.bootstrap.resources.build_queue_gateway",
-        lambda settings, backend: queue,
+        "app.bootstrap.resources.open_queue_gateway",
+        _async_returning(queue),
     )
     monkeypatch.setattr(
         "app.bootstrap.resources.build_memory_task_store",

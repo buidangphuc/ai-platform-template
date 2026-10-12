@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from contextlib import AsyncExitStack
 
+import httpx
+
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import TimeoutPolicy
@@ -27,12 +29,14 @@ class WebhookAddon:
             secret=settings.WEBHOOK_SIGNING_SECRET,
             tolerance_seconds=settings.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
         )
+        client = httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT_SECONDS)
+        stack.push_async_callback(client.aclose)
         dispatcher = HttpWebhookDispatcher(
             signer=signer,
+            client=client,
             timeout_policy=TimeoutPolicy(
                 timeout_seconds=settings.WEBHOOK_TIMEOUT_SECONDS
             ),
         )
-        stack.push_async_callback(dispatcher.close)
         resources.webhook_signer = signer
         resources.webhook_dispatcher = dispatcher

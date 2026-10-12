@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Self
 
 from app.modules.messaging.queue.gateway import QueueMessage
 
@@ -38,20 +38,18 @@ class SQSQueueGateway:
         self.endpoint_url = endpoint_url
         self.visibility_timeout = visibility_timeout
         self._session = aioboto3.Session()
-        self._client_cm = None
-        self._client = None
 
-    async def _get_client(self):
-        if self._client is None:
-            kwargs: dict[str, Any] = {"region_name": self.region_name}
-            if self.endpoint_url:
-                kwargs["endpoint_url"] = self.endpoint_url
-            self._client_cm = self._session.client("sqs", **kwargs)
-            self._client = await self._client_cm.__aenter__()
-        return self._client
+    async def open(self) -> Self:
+        """Create the SQS client; call once, before any operation, then ``close``."""
+        kwargs: dict[str, Any] = {"region_name": self.region_name}
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+        self._client_cm = self._session.client("sqs", **kwargs)
+        self._client = await self._client_cm.__aenter__()
+        return self
 
     async def send(self, payload: dict[str, Any]) -> str:
-        client = await self._get_client()
+        client = self._client
         response = await client.send_message(
             QueueUrl=self.queue_url,
             MessageBody=json.dumps(payload),
@@ -64,7 +62,7 @@ class SQSQueueGateway:
         max_messages: int = 10,
         wait_seconds: float = 0.0,
     ) -> list[QueueMessage]:
-        client = await self._get_client()
+        client = self._client
         kwargs: dict[str, Any] = {
             "QueueUrl": self.queue_url,
             "MaxNumberOfMessages": min(max_messages, 10),
@@ -88,7 +86,7 @@ class SQSQueueGateway:
         ]
 
     async def ack(self, message: QueueMessage) -> None:
-        client = await self._get_client()
+        client = self._client
         receipt_handle = (message.raw or {}).get("ReceiptHandle")
         if not receipt_handle:
             raise ValueError("missing ReceiptHandle on SQS message")
@@ -103,7 +101,7 @@ class SQSQueueGateway:
             # queue level via ``maxReceiveCount``) moves it to the DLQ after
             # the threshold is hit. Deleting here would bypass the DLQ.
             return
-        client = await self._get_client()
+        client = self._client
         receipt_handle = (message.raw or {}).get("ReceiptHandle")
         if receipt_handle:
             await client.change_message_visibility(
@@ -113,7 +111,4 @@ class SQSQueueGateway:
             )
 
     async def close(self) -> None:
-        if self._client_cm is not None:
-            await self._client_cm.__aexit__(None, None, None)
-            self._client_cm = None
-            self._client = None
+        await self._client_cm.__aexit__(None, None, None)

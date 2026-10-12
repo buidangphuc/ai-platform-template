@@ -69,3 +69,12 @@ async def test_ping_reflects_reachability():
     down = ModelServerClient(_FakeClient(ConnectionError("down")))
     assert await up.ping() is True
     assert await down.ping() is False
+
+
+async def test_check_passes_when_healthy_and_raises_when_down():
+    up = ModelServerClient(_FakeClient(_FakeResponse(200, {"status": "ok"})))
+    down = ModelServerClient(_FakeClient(ConnectionError("down")))
+
+    await up.check()
+    with pytest.raises(ServiceUnavailableError):
+        await down.check()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from inspect import isawaitable
-from typing import Any
+from typing import Any, Self
 
 try:
     import aioboto3
@@ -39,17 +39,15 @@ class S3ObjectGateway:
         self._session = (
             session_factory() if session_factory is not None else aioboto3.Session()
         )
-        self._client_cm = None
-        self._client = None
 
-    async def _get_client(self):
-        if self._client is None:
-            kwargs: dict[str, Any] = {"region_name": self.region_name}
-            if self.endpoint_url:
-                kwargs["endpoint_url"] = self.endpoint_url
-            self._client_cm = self._session.client("s3", **kwargs)
-            self._client = await self._client_cm.__aenter__()
-        return self._client
+    async def open(self) -> Self:
+        """Create the S3 client; call once, before any operation, then ``close``."""
+        kwargs: dict[str, Any] = {"region_name": self.region_name}
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+        self._client_cm = self._session.client("s3", **kwargs)
+        self._client = await self._client_cm.__aenter__()
+        return self
 
     async def put(
         self,
@@ -58,7 +56,7 @@ class S3ObjectGateway:
         *,
         content_type: str | None = None,
     ) -> None:
-        client = await self._get_client()
+        client = self._client
         kwargs: dict[str, Any] = {
             "Bucket": self.bucket,
             "Key": self._key(key),
@@ -69,7 +67,7 @@ class S3ObjectGateway:
         await client.put_object(**kwargs)
 
     async def get(self, key: str) -> bytes | None:
-        client = await self._get_client()
+        client = self._client
         try:
             response = await client.get_object(Bucket=self.bucket, Key=self._key(key))
         except Exception as exc:
@@ -80,11 +78,11 @@ class S3ObjectGateway:
         return await body.read()
 
     async def delete(self, key: str) -> None:
-        client = await self._get_client()
+        client = self._client
         await client.delete_object(Bucket=self.bucket, Key=self._key(key))
 
     async def exists(self, key: str) -> bool:
-        client = await self._get_client()
+        client = self._client
         try:
             await client.head_object(Bucket=self.bucket, Key=self._key(key))
         except Exception as exc:
@@ -96,7 +94,7 @@ class S3ObjectGateway:
     async def list(self, prefix: str = "", *, limit: int = 100) -> list[str]:
         if limit <= 0:
             raise ValueError("limit must be positive")
-        client = await self._get_client()
+        client = self._client
         scoped = self._key(prefix) if prefix else self.prefix
         response = await client.list_objects_v2(
             Bucket=self.bucket,
@@ -107,7 +105,7 @@ class S3ObjectGateway:
         return [obj["Key"][prefix_len:] for obj in response.get("Contents", [])]
 
     async def presign_get(self, key: str, *, expires_seconds: int = 3600) -> str:
-        client = await self._get_client()
+        client = self._client
         url = client.generate_presigned_url(
             "get_object",
             Params={"Bucket": self.bucket, "Key": self._key(key)},
@@ -124,7 +122,7 @@ class S3ObjectGateway:
         expires_seconds: int = 3600,
         content_type: str | None = None,
     ) -> str:
-        client = await self._get_client()
+        client = self._client
         params: dict[str, Any] = {"Bucket": self.bucket, "Key": self._key(key)}
         if content_type:
             params["ContentType"] = content_type
@@ -138,10 +136,7 @@ class S3ObjectGateway:
         return str(url)
 
     async def close(self) -> None:
-        if self._client_cm is not None:
-            await self._client_cm.__aexit__(None, None, None)
-            self._client_cm = None
-            self._client = None
+        await self._client_cm.__aexit__(None, None, None)
 
     def _key(self, key: str) -> str:
         normalized = key.strip("/")

@@ -91,12 +91,13 @@ def channel(monkeypatch) -> _Channel:
     return chan
 
 
-def _gateway(**kwargs) -> RabbitMQQueueGateway:
-    return RabbitMQQueueGateway(url="amqp://x", queue_name="work", **kwargs)
+async def _gateway(**kwargs) -> RabbitMQQueueGateway:
+    gateway = RabbitMQQueueGateway(url="amqp://x", queue_name="work", **kwargs)
+    return await gateway.open()
 
 
 async def test_work_queue_declares_dead_letter_topology(channel):
-    gateway = _gateway()
+    gateway = await _gateway()
     await gateway.send({"a": 1})
 
     assert channel.exchanges == ["work.dlx"]
@@ -108,21 +109,21 @@ async def test_work_queue_declares_dead_letter_topology(channel):
 
 
 async def test_dead_letter_names_are_configurable_and_can_be_disabled(channel):
-    custom = _gateway(dead_letter_exchange="X", dead_letter_queue="Q")
+    custom = await _gateway(dead_letter_exchange="X", dead_letter_queue="Q")
     await custom.send({"a": 1})
     assert channel.exchanges == ["X"]
     assert "Q" in channel.queues
 
     channel.queues.clear()
     channel.exchanges.clear()
-    off = _gateway(dead_letter_enabled=False)
+    off = await _gateway(dead_letter_enabled=False)
     await off.send({"a": 1})
     assert channel.exchanges == []
     assert channel.queues["work"].arguments is None
 
 
 async def test_receive_count_increments_across_requeues(channel):
-    gateway = _gateway()
+    gateway = await _gateway()
     await gateway.send({"a": 1})
 
     counts = []
@@ -136,7 +137,7 @@ async def test_receive_count_increments_across_requeues(channel):
 
 
 async def test_requeue_republishes_and_acks_original(channel):
-    gateway = _gateway()
+    gateway = await _gateway()
     await gateway.send({"a": 1})
     message = (await gateway.receive(max_messages=1))[0]
     original = message.raw
@@ -149,7 +150,7 @@ async def test_requeue_republishes_and_acks_original(channel):
 
 
 async def test_nack_without_requeue_nacks_so_broker_dead_letters(channel):
-    gateway = _gateway()
+    gateway = await _gateway()
     await gateway.send({"a": 1})
     message = (await gateway.receive(max_messages=1))[0]
 
@@ -161,7 +162,7 @@ async def test_nack_without_requeue_nacks_so_broker_dead_letters(channel):
 
 
 async def test_quorum_delivery_count_header_is_preferred_when_higher(channel):
-    gateway = _gateway()
+    gateway = await _gateway()
     await gateway.send({"a": 1})
     channel.queues["work"].items[0].headers = {"x-delivery-count": 4}
 
@@ -171,8 +172,56 @@ async def test_quorum_delivery_count_header_is_preferred_when_higher(channel):
 
 
 async def test_broker_redelivery_counts_as_second_attempt(channel):
-    gateway = _gateway()
+    gateway = await _gateway()
     await gateway.send({"a": 1})
     channel.queues["work"].items[0].redelivered = True
 
     assert (await gateway.receive(max_messages=1))[0].receive_count == 2
+
+
+async def test_open_queue_gateway_connects_and_declares_before_first_use(
+    channel, test_settings
+):
+    from app.modules.messaging.queue.factory import open_queue_gateway
+
+    settings = test_settings.model_copy(
+        update={"RABBITMQ_URL": "amqp://x", "QUEUE_NAME": "work"}
+    )
+
+    gateway = await open_queue_gateway(settings, "rabbitmq")
+
+    assert isinstance(gateway, RabbitMQQueueGateway)
+    assert "work" in channel.queues  # declared at open, not on first send
+
+
+async def test_open_closes_the_connection_when_topology_declaration_fails(
+    monkeypatch, channel
+):
+    closed: list[bool] = []
+
+    class _Connection:
+        async def channel(self):
+            raise RuntimeError("broker rejected channel")
+
+        async def close(self):
+            closed.append(True)
+
+    async def connect_robust(url):
+        return _Connection()
+
+    monkeypatch.setattr(rabbitmq_mod.aio_pika, "connect_robust", connect_robust)
+
+    with pytest.raises(RuntimeError, match="rejected"):
+        await RabbitMQQueueGateway(url="amqp://x", queue_name="work").open()
+
+    assert closed == [True]
+
+
+async def test_open_fails_fast_when_the_broker_is_unreachable(monkeypatch, channel):
+    async def connect_robust(url):
+        raise ConnectionError("broker down")
+
+    monkeypatch.setattr(rabbitmq_mod.aio_pika, "connect_robust", connect_robust)
+
+    with pytest.raises(ConnectionError):
+        await RabbitMQQueueGateway(url="amqp://x", queue_name="work").open()

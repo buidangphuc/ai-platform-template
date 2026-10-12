@@ -6,11 +6,8 @@ from typing import TYPE_CHECKING, Literal
 from loguru import logger
 
 from app.core.config import Settings
-from app.core.resilience import (
-    CircuitBreaker,
-    CircuitBreakerPolicy,
-    is_transient_error,
-)
+from app.core.errors import ServiceUnavailableError
+from app.core.resilience import CircuitBreaker, CircuitBreakerPolicy
 from app.modules.ai._deps import require_langchain
 
 if TYPE_CHECKING:
@@ -44,14 +41,17 @@ def settings_model_builder(settings: Settings) -> ModelBuilder:
 
 
 class ModelRouter:
-    """Resolves the LLM target for a role and tracks primary-model health.
+    """Resolves the ordered LLM chain for a role and tracks each target's health.
 
-    The primary target of a role with a configured secondary sits behind a
-    circuit breaker that counts transient failures only (429, 5xx, timeouts,
-    connection errors). While it is open ``select_target`` returns the
-    secondary; after the cooldown one call is let through as a probe.
+    The ``default`` chain is ``CHAT_MODEL`` followed by every entry of
+    ``CHAT_FALLBACK_MODELS`` (duplicates dropped); the ``judge`` chain is the
+    judge model alone. When a chain has more than one target, each target sits
+    behind its own circuit breaker that counts transient failures only (429,
+    5xx, timeouts, connection errors). ``try_acquire`` is the admission gate: an
+    open breaker rejects until its cooldown passes, then admits one probe. A
+    single-target chain is never gated: there is nowhere to fail over to.
     Callers report each outcome with ``record_success`` / ``record_error``;
-    ``LLMInstance.ainvoke`` does this for them.
+    ``LLMInstance.ainvoke`` walks the chain and does this for them.
     """
 
     def __init__(
@@ -69,7 +69,7 @@ class ModelRouter:
             cooldown_seconds=settings.LLM_BREAKER_COOLDOWN_SECONDS,
         )
         self._clock = clock
-        self._breakers: dict[ModelRole, CircuitBreaker] = {}
+        self._breakers: dict[tuple[ModelRole, str], CircuitBreaker] = {}
         self._models: dict[str, BaseChatModel] = {}
         self._judge_fallback_warned = False
 
@@ -92,44 +92,36 @@ class ModelRouter:
                 self._on_judge_uses_production_model()
         return self.settings.CHAT_MODEL
 
-    def secondary_target(self, role: ModelRole = "default") -> str | None:
-        if role != "default":
-            return None
-        fallbacks = _split_csv(self.settings.CHAT_FALLBACK_MODELS)
-        return fallbacks[0] if fallbacks else None
+    def chain(self, role: ModelRole = "default") -> tuple[str, ...]:
+        """Targets in failover order: primary first, then each fallback."""
+        targets = [self.primary_target(role)]
+        if role == "default":
+            targets.extend(_split_csv(self.settings.CHAT_FALLBACK_MODELS))
+        return tuple(dict.fromkeys(targets))
 
-    def fallback_models(self, role: ModelRole = "default") -> list[str]:
-        primary = self.primary_target(role)
-        targets = [primary] if primary else []
-        secondary = self.secondary_target(role)
-        if secondary:
-            targets.append(secondary)
-        return targets
+    def try_acquire(self, target: str, role: ModelRole = "default") -> bool:
+        """Admission gate for one call to ``target``. Consumes the breaker's
+        probe slot when the target is being probed, so call it once per
+        attempt."""
+        if len(self.chain(role)) == 1:
+            return True
+        return self._breaker(role, target).try_acquire()
 
     def select_target(self, role: ModelRole = "default") -> str:
-        """Target for the next call. Consumes the breaker's probe slot when the
-        primary is being probed, so call it once per model invocation."""
-        primary = self.primary_target(role)
-        secondary = self.secondary_target(role)
-        if secondary and not self._breaker(role).try_acquire():
-            return secondary
-        return primary
+        """First target of the chain whose breaker admits a call.
 
-    def failover_target(
-        self,
-        target: str,
-        error: BaseException,
-        role: ModelRole = "default",
-    ) -> str | None:
-        """Secondary to retry on right now, or None (not primary, no secondary,
-        or a deterministic error that the secondary would only repeat)."""
-        if target != self.primary_target(role) or not is_transient_error(error):
-            return None
-        return self.secondary_target(role)
+        Raises ``ServiceUnavailableError`` when every breaker is open.
+        """
+        for target in self.chain(role):
+            if self.try_acquire(target, role):
+                return target
+        raise ServiceUnavailableError(
+            message="Every configured LLM target is unavailable",
+            code="llm_unavailable",
+        )
 
     def record_success(self, target: str, *, role: ModelRole = "default") -> None:
-        if target == self.primary_target(role):
-            self._breaker(role).record_success()
+        self._breaker(role, target).record_success()
 
     def record_error(
         self,
@@ -138,8 +130,7 @@ class ModelRouter:
         error: BaseException,
         role: ModelRole = "default",
     ) -> None:
-        if target == self.primary_target(role):
-            self._breaker(role).record_failure(error)
+        self._breaker(role, target).record_failure(error)
 
     def _build(self, target: str) -> BaseChatModel:
         if target:
@@ -149,10 +140,11 @@ class ModelRouter:
 
         return FakeListChatModel(responses=["fake response"])
 
-    def _breaker(self, role: ModelRole) -> CircuitBreaker:
-        if role not in self._breakers:
-            self._breakers[role] = self.breaker_policy.build(clock=self._clock)
-        return self._breakers[role]
+    def _breaker(self, role: ModelRole, target: str) -> CircuitBreaker:
+        key = (role, target)
+        if key not in self._breakers:
+            self._breakers[key] = self.breaker_policy.build(clock=self._clock)
+        return self._breakers[key]
 
     def _on_judge_uses_production_model(self) -> None:
         message = (

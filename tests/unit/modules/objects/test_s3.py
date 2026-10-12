@@ -65,14 +65,23 @@ class _FakeSession:
 async def test_s3_object_gateway_uses_injected_session_and_custom_endpoint():
     client = _FakeS3Client()
     session = _FakeSession(client)
-    gateway = S3ObjectGateway(
+    gateway = await S3ObjectGateway(
         bucket="bucket",
         region_name="ap-southeast-1",
         prefix="artifacts",
         endpoint_url="http://localstack:4566",
         session_factory=lambda: session,
-    )
+    ).open()
 
+    assert session.client_calls == [  # connected eagerly, before any operation
+        (
+            "s3",
+            {
+                "region_name": "ap-southeast-1",
+                "endpoint_url": "http://localstack:4566",
+            },
+        )
+    ]
     await gateway.put("reports/output.json", b"{}", content_type="application/json")
     value = await gateway.get("reports/output.json")
     exists = await gateway.exists("reports/output.json")

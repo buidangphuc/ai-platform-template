@@ -125,6 +125,7 @@ async def test_mongo_addon_opens_and_closes_gateway(
 
     assert isinstance(resources.mongo, MongoGateway)
     assert resources.mongo.client is client
+    assert [name for name, _ in resources.health_checks.checks] == ["mongo"]
 
     await stack.aclose()
 
