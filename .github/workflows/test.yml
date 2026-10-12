@@ -75,8 +75,4 @@ jobs:
       - name: Apply migrations
         run: uv run --all-extras alembic upgrade head
       - name: Check models match migrations
-        # Known drift today: alembic/env.py does not import the quota models and
-        # the tasks/outbox indexes are not declared on the models, so `check`
-        # fails. Advisory until that is fixed; then drop continue-on-error.
-        continue-on-error: true
         run: uv run --all-extras alembic check

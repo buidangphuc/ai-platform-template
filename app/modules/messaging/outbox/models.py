@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text
+from sqlalchemy import JSON, CheckConstraint, DateTime, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,13 @@ JSONB_TYPE = JSON().with_variant(JSONB, "postgresql")
 
 class OutboxEvent(Base, TimestampMixin):
     __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("ix_outbox_events_status_available_at", "status", "available_at"),
+        CheckConstraint(
+            "status IN ('pending', 'published', 'failed')",
+            name="ck_outbox_events_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -33,9 +40,10 @@ class OutboxEvent(Base, TimestampMixin):
         String(32),
         nullable=False,
         default="pending",
-        index=True,
     )
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

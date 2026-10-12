@@ -2,7 +2,14 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +26,10 @@ class IdempotencyKey(Base, TimestampMixin):
             "key",
             name="uq_idempotency_keys_principal_key",
         ),
+        CheckConstraint(
+            "status IN ('in_progress', 'completed')",
+            name="ck_idempotency_keys_status",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -27,7 +38,7 @@ class IdempotencyKey(Base, TimestampMixin):
         default=lambda: str(uuid4()),
     )
     key: Mapped[str] = mapped_column(String(255), nullable=False)
-    principal_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    principal_id: Mapped[str] = mapped_column(String(255), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="in_progress"
