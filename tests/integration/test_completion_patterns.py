@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
+from app.bootstrap.state import get_task_services
 from app.core.config import Settings
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -204,6 +205,36 @@ async def test_task_poll_is_scoped_to_the_submitting_principal(
     assert missing.status_code == 404
     assert other.json()["error"]["code"] == "task_not_found"
     assert missing.json()["error"]["code"] == "task_not_found"
+
+
+async def test_task_poll_hides_tasks_of_another_type(test_settings: Settings):
+    settings = test_settings.model_copy(
+        update={
+            "QUEUE_ENABLED": True,
+            "TASKS_ENABLED": True,
+            "QUEUE_BACKEND": "memory",
+            "TASK_STORE_BACKEND": "memory",
+        }
+    )
+    app = create_app(
+        completion_handler_factory=lambda resources, settings: (
+            RecordingCompletionHandler()
+        ),
+        settings=settings,
+        init_resources=True,
+    )
+
+    async with api_client_for(app) as client:
+        other = await get_task_services(app).service.submit(
+            type="other", payload={}, principal_id="test-user"
+        )
+        response = await client.get(
+            f"/api/v1/completions/tasks/{other.id}",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "task_not_found"
 
 
 async def test_task_routes_are_not_mounted_when_tasks_disabled(

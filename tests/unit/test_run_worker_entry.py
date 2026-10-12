@@ -152,7 +152,17 @@ async def test_worker_message_handler_marks_task_completed():
     assert service.completed == [
         (
             "task-1",
-            {"content": "echo: hello", "model": "echo", "metadata": {}},
+            {
+                "content": "echo: hello",
+                "model": "echo",
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                    "total_tokens": 3,
+                },
+                "finish_reason": "stop",
+                "metadata": {},
+            },
         )
     ]
 

@@ -133,14 +133,7 @@ def build_worker_message_handler(
             # FAILED is terminal: a redelivery would be skipped, so dead-letter now.
             raise NonRetryableMessageError(f"task {task_id} failed") from exc
 
-        await service.mark_completed(
-            task_id,
-            {
-                "content": result.content,
-                "model": result.model,
-                "metadata": result.metadata,
-            },
-        )
+        await service.mark_completed(task_id, result.model_dump(mode="json"))
         logger.info("worker.task_completed task_id={}", task_id)
 
     return process_message

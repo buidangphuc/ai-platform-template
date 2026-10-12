@@ -117,7 +117,13 @@ async def test_submitted_task_is_relayed_processed_and_completed(sessionmaker):
 
     done = await stack.store.get(task.id)
     assert done is not None
-    assert done.result == {"content": "echo: hello", "model": "echo", "metadata": {}}
+    assert done.result == {
+        "content": "echo: hello",
+        "model": "echo",
+        "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+        "finish_reason": "stop",
+        "metadata": {},
+    }
     assert done.attempts == 1
     assert done.principal_id == "alice"  # stored by the task+outbox insert
     assert stack.queue.dead_letter_count() == 0

@@ -57,7 +57,9 @@ async def test_require_owned_returns_the_owners_task():
     service, _, _ = _service()
     task = await service.submit(type="completion", payload={}, principal_id="alice")
 
-    assert (await service.require_owned(task.id, principal_id="alice")).id == task.id
+    assert (
+        await service.require_owned(task.id, principal_id="alice", type="completion")
+    ).id == task.id
 
 
 async def test_require_owned_hides_another_principals_task_as_not_found():
@@ -65,9 +67,18 @@ async def test_require_owned_hides_another_principals_task_as_not_found():
     task = await service.submit(type="completion", payload={}, principal_id="alice")
 
     with pytest.raises(AppError) as excinfo:
-        await service.require_owned(task.id, principal_id="mallory")
+        await service.require_owned(task.id, principal_id="mallory", type="completion")
     assert excinfo.value.code == "task_not_found"
     assert excinfo.value.status_code == 404
+
+
+async def test_require_owned_hides_another_task_type_as_not_found():
+    service, _, _ = _service()
+    task = await service.submit(type="other", payload={}, principal_id="alice")
+
+    with pytest.raises(AppError) as excinfo:
+        await service.require_owned(task.id, principal_id="alice", type="completion")
+    assert excinfo.value.code == "task_not_found"
 
 
 async def test_worker_require_is_owner_agnostic():

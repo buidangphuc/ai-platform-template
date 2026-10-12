@@ -71,3 +71,7 @@ class CompletionStreamChunk(BaseModel):
     usage: CompletionUsage | None = None
     finish_reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# The task type the completions API submits and the worker runs.
+COMPLETION_TASK_TYPE = "completion"

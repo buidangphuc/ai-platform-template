@@ -114,10 +114,12 @@ class TaskService:
             raise NotFoundError(f"Task {task_id} not found", code="task_not_found")
         return record
 
-    async def require_owned(self, task_id: str, *, principal_id: str) -> TaskRecord:
-        """The task if ``principal_id`` submitted it; otherwise not-found (404)."""
+    async def require_owned(
+        self, task_id: str, *, principal_id: str, type: str
+    ) -> TaskRecord:
+        """The task if ``principal_id`` submitted it and it is a ``type`` task; else 404."""
         record = await self.store.get(task_id, principal_id=principal_id)
-        if record is None:
+        if record is None or record.type != type:
             raise NotFoundError(f"Task {task_id} not found", code="task_not_found")
         return record
 
