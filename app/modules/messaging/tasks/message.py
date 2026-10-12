@@ -18,9 +18,11 @@ class TaskMessage(BaseModel):
 
     task_id: str = Field(min_length=1)
     type: str = Field(min_length=1)
+    # Request id of the submitting HTTP request, so worker logs correlate with it.
+    request_id: str | None = Field(default=None, min_length=1)
 
     def to_body(self) -> dict[str, Any]:
-        return self.model_dump()
+        return self.model_dump(exclude_none=True)
 
     @classmethod
     def from_body(cls, body: dict[str, Any]) -> TaskMessage:

@@ -30,5 +30,11 @@ class EchoCompletionHandler:
 
     async def stream(
         self, request: CompletionRequest
-    ) -> AsyncIterator[CompletionStreamChunk]:  # pragma: no cover
-        yield CompletionStreamChunk(delta=f"echo: {request.messages[-1].content}")
+    ) -> AsyncIterator[CompletionStreamChunk]:
+        result = await self.complete(request)
+        yield CompletionStreamChunk(
+            delta=result.content,
+            model=result.model,
+            usage=result.usage,
+            finish_reason=result.finish_reason,
+        )

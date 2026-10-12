@@ -1,15 +1,14 @@
-import json
-from collections.abc import AsyncIterator
-
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from app.bootstrap.state import get_app_resources
-from app.modules.business.completions.schemas import (
-    CompletionRequest,
-    CompletionStreamChunk,
+from app.api.v1.completions.observability import CompletionTimer
+from app.api.v1.completions.streaming import (
+    SSE_HEADERS,
+    StreamLimits,
+    open_event_stream,
 )
-from app.modules.business.completions.service import CompletionService
+from app.bootstrap.state import get_app_resources, get_app_settings
+from app.modules.business.completions.schemas import CompletionRequest
 
 router = APIRouter()
 
@@ -20,36 +19,20 @@ async def stream(
     request: Request,
 ) -> StreamingResponse:
     service = get_app_resources(request.app).completion_service
-    return StreamingResponse(
-        stream_completion_events(service, payload),
-        media_type="text/event-stream",
+    settings = get_app_settings(request.app)
+    # Awaits the first chunk: guard/handler errors surface here as JSON errors.
+    events = await open_event_stream(
+        service,
+        payload,
+        StreamLimits(
+            first_token_timeout=settings.STREAM_FIRST_TOKEN_TIMEOUT_SECONDS,
+            idle_timeout=settings.STREAM_IDLE_TIMEOUT_SECONDS,
+            heartbeat=settings.SSE_HEARTBEAT_SECONDS,
+        ),
+        CompletionTimer(mode="stream"),
     )
-
-
-async def stream_completion_events(
-    service: CompletionService,
-    payload: CompletionRequest,
-) -> AsyncIterator[str]:
-    async for chunk in service.stream(payload):
-        stream_chunk = normalize_stream_chunk(chunk)
-        if stream_chunk.delta:
-            yield sse_event(
-                {
-                    "type": "content.delta",
-                    "delta": stream_chunk.delta,
-                    "metadata": stream_chunk.metadata,
-                }
-            )
-    yield sse_event({"type": "done"})
-
-
-def normalize_stream_chunk(
-    chunk: CompletionStreamChunk | str,
-) -> CompletionStreamChunk:
-    if isinstance(chunk, str):
-        return CompletionStreamChunk(delta=chunk)
-    return chunk
-
-
-def sse_event(payload: dict[str, object]) -> str:
-    return f"data: {json.dumps(payload)}\n\n"
+    return StreamingResponse(
+        events,
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )

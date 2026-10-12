@@ -84,3 +84,18 @@ async def test_reclaim_stale_processing_via_service():
     refreshed = await store.get(task.id)
     assert refreshed is not None
     assert refreshed.status == TaskStatus.QUEUED
+
+
+async def test_submit_forwards_request_id_into_the_queue_message():
+    service, queue, _ = _service()
+
+    task = await service.submit(
+        type="completion", payload={"q": 1}, request_id="req_abc"
+    )
+
+    [message] = await queue.receive()
+    assert message.body == {
+        "task_id": task.id,
+        "type": "completion",
+        "request_id": "req_abc",
+    }

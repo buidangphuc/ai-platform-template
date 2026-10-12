@@ -92,13 +92,15 @@ def _build_lifespan(
             completion_guards_factory=completion_guards_factory,
         ) as resources:
             app.state.resources = resources
-            app.state.health_service = build_health_service(
+            health_service = build_health_service(
                 resources,
                 init_resources=init_resources,
             )
+            app.state.health_service = health_service
             try:
                 yield
             finally:
+                health_service.begin_draining()
                 await _drain_in_flight(app, settings.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
                 if init_resources and settings.LANGFUSE_ENABLED:
                     await asyncio.to_thread(_flush_langfuse_client)
@@ -122,6 +124,4 @@ def _flush_langfuse_client() -> None:
         from langfuse import get_client
     except ImportError:
         return
-    client = get_client()
-    if client is not None and hasattr(client, "flush"):
-        client.flush()
+    get_client().flush()

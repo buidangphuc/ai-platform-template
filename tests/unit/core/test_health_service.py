@@ -74,3 +74,18 @@ async def test_readiness_skips_checks_when_external_dependencies_disabled():
     assert result.status == "ok"
     assert result.dependencies == {"api": "ok"}
     assert called is False
+
+
+async def test_draining_service_reports_not_ready_without_running_checks():
+    calls: list[str] = []
+
+    async def check() -> None:
+        calls.append("ran")
+
+    service = HealthService(check_external_dependencies=True, checks=(("db", check),))
+    service.begin_draining()
+
+    result = await service.readiness()
+
+    assert result.status == "draining"
+    assert calls == []

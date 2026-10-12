@@ -45,9 +45,12 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"
 
-CMD ["uvicorn", "main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--loop", "uvloop", \
-     "--http", "httptools", \
-     "--no-access-log"]
+# Shell form so the graceful-shutdown timeout follows the app setting; ``exec``
+# keeps uvicorn as PID 1 so it receives SIGTERM.
+CMD exec uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --loop uvloop \
+    --http httptools \
+    --no-access-log \
+    --timeout-graceful-shutdown "${GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS:-30}"

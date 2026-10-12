@@ -25,8 +25,14 @@ from app.modules.messaging.tasks.store import TaskRecord
 TASK_EVENT_PREFIX = "task."
 
 
-def _task_event(session: AsyncSession, *, task_id: str, type: str) -> None:
-    message = TaskMessage(task_id=task_id, type=type)
+def _task_event(
+    session: AsyncSession,
+    *,
+    task_id: str,
+    type: str,
+    request_id: str | None = None,
+) -> None:
+    message = TaskMessage(task_id=task_id, type=type, request_id=request_id)
     session.add(
         new_outbox_row(
             event_type=f"{TASK_EVENT_PREFIX}{type}", payload=message.to_body()
@@ -38,10 +44,10 @@ class PostgresTaskOutboxDispatcher:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self.sessionmaker = sessionmaker
 
-    async def submit(self, task: TaskRecord) -> None:
+    async def submit(self, task: TaskRecord, *, request_id: str | None = None) -> None:
         async with self.sessionmaker() as session, session.begin():
             session.add(new_task_row(task))
-            _task_event(session, task_id=task.id, type=task.type)
+            _task_event(session, task_id=task.id, type=task.type, request_id=request_id)
 
     async def reclaim(self, *, now: datetime, limit: int, max_attempts: int) -> int:
         async with self.sessionmaker() as session, session.begin():

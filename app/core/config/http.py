@@ -24,6 +24,14 @@ class HttpSettingsMixin(BaseModel):
     REQUEST_TIMEOUT_SECONDS: int = Field(default=30, gt=0)
     REQUEST_TIMEOUT_EXCLUDE_PATTERNS: str = "/stream,/sse"
 
+    # Server-sent events (completions stream). The heartbeat keeps proxies from
+    # closing an idle connection; the deadlines bound how long a stream may wait
+    # on the model: before the first chunk (JSON 504) and between chunks (an
+    # ``event: error`` with code ``stream_timeout``).
+    SSE_HEARTBEAT_SECONDS: float = Field(default=15, gt=0)
+    STREAM_FIRST_TOKEN_TIMEOUT_SECONDS: float = Field(default=30, gt=0)
+    STREAM_IDLE_TIMEOUT_SECONDS: float = Field(default=30, gt=0)
+
     # Reverse proxies in front of the app that append to X-Forwarded-For. 0 = do
     # not trust the header; the per-IP rate limit keys on the socket peer.
     TRUSTED_PROXY_COUNT: int = Field(default=0, ge=0)

@@ -278,3 +278,22 @@ def test_env_langfuse_example_carries_compose_only_overrides():
     assert "LANGFUSE_DOCKER_BASE_URL=http://langfuse-web:3000" in langfuse_example
     assert project_id_line in langfuse_example
     assert "LANGFUSE_NEXTAUTH_URL=http://localhost:3000" in langfuse_example
+
+
+def test_streaming_deadlines_have_safe_defaults_and_bounds():
+    settings = build_test_settings()
+
+    assert settings.SSE_HEARTBEAT_SECONDS > 0
+    assert settings.STREAM_FIRST_TOKEN_TIMEOUT_SECONDS > 0
+    assert settings.STREAM_IDLE_TIMEOUT_SECONDS > 0
+    for name in (
+        "SSE_HEARTBEAT_SECONDS",
+        "STREAM_FIRST_TOKEN_TIMEOUT_SECONDS",
+        "STREAM_IDLE_TIMEOUT_SECONDS",
+    ):
+        with pytest.raises(ValidationError):
+            build_test_settings(**{name: 0})
+
+
+def test_graceful_shutdown_is_on_by_default():
+    assert build_test_settings().GRACEFUL_SHUTDOWN_ENABLED is True

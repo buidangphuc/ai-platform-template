@@ -71,6 +71,30 @@ accept chat messages, call an injected `CompletionHandler`, and return either
 one JSON completion or server-sent stream deltas. They do not know prompt
 templates, model selection, caching, retrieval, or product workflow logic.
 
+### Streaming (`POST /api/v1/completions/stream`)
+
+The response is `text/event-stream` with `Cache-Control: no-cache` and
+`X-Accel-Buffering: no`. Frames:
+
+- `data: {"type":"content.delta","delta":"...","metadata":{}}` for each piece of text.
+- `: ping` comment lines every `SSE_HEARTBEAT_SECONDS` while the model is quiet
+  (clients ignore them).
+- `data: {"type":"done", ...}` last, with `usage`, `finish_reason` and `model` when
+  the handler reported them (plain `{"type":"done"}` otherwise).
+- `event: error` + `data: {"type":"error","code":"..."}` if the stream fails after it
+  started (codes: `stream_timeout`, `stream_error`, or an application error code);
+  the stream then closes with no `done`. The frame never carries exception text.
+
+Failures before the first chunk (guardrail violation, handler startup error, no chunk
+within `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS`) return the normal JSON error envelope
+(422 / 500 / 504 `stream_timeout`) instead of a `200` stream. A gap longer than
+`STREAM_IDLE_TIMEOUT_SECONDS` between chunks ends the stream with `stream_timeout`.
+Handlers yield `CompletionStreamChunk`; the last chunk may set `usage` and
+`finish_reason`.
+
+Each sync and stream completion logs one `completion mode=... outcome=... model=...
+duration_ms=... ttft_ms=... finish_reason=... input_tokens=...` line (no content).
+
 ## Docker
 
 ```bash

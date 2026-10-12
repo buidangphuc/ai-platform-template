@@ -386,3 +386,27 @@ async def test_worker_context_run_stops_the_background_loops_with_the_worker():
 
         ctx.worker.request_shutdown()
         await asyncio.wait_for(run, timeout=5)
+
+
+async def test_worker_handler_runs_the_task_under_the_submitting_request_id():
+    from app.core.request_context import get_request_id
+
+    seen: list[str] = []
+
+    class _Recording:
+        async def complete(self, request):
+            seen.append(get_request_id())
+            return await EchoCompletionHandler().complete(request)
+
+        async def stream(self, request): ...
+
+    service = _ScriptedService()
+    await _handler(service, _Recording())(
+        QueueMessage(
+            id="m",
+            body={"task_id": "t-1", "type": "completion", "request_id": "req_abc"},
+        )
+    )
+
+    assert seen == ["req_abc"]
+    assert get_request_id() == "-"  # restored after the message

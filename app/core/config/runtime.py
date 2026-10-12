@@ -46,7 +46,7 @@ class RuntimeSettingsMixin(BaseModel):
     LOG_JSON: bool = False
     LOG_ENQUEUE: bool = False
 
-    GRACEFUL_SHUTDOWN_ENABLED: bool = False
+    GRACEFUL_SHUTDOWN_ENABLED: bool = True
     GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS: int = Field(default=30, ge=0)
 
     @field_validator("ENVIRONMENT", mode="before")

@@ -30,7 +30,7 @@ from app.modules.messaging.tasks.store import TaskRecord, TaskStore
 
 
 class TaskDispatcher(Protocol):
-    async def submit(self, task: TaskRecord) -> None:
+    async def submit(self, task: TaskRecord, *, request_id: str | None = None) -> None:
         """Persist a new QUEUED task and announce it to the worker."""
         ...
 
@@ -49,9 +49,9 @@ class QueueTaskDispatcher:
         self.store = store
         self.queue = queue
 
-    async def submit(self, task: TaskRecord) -> None:
+    async def submit(self, task: TaskRecord, *, request_id: str | None = None) -> None:
         await self.store.create(task)
-        await self._announce(task.id, task.type)
+        await self._announce(task.id, task.type, request_id=request_id)
 
     async def reclaim(self, *, now: datetime, limit: int, max_attempts: int) -> int:
         reclaimed = await self.store.reclaim_stale_processing(
@@ -61,8 +61,11 @@ class QueueTaskDispatcher:
             await self._announce(ref.id, ref.type)
         return len(reclaimed)
 
-    async def _announce(self, task_id: str, type: str) -> None:
-        await self.queue.send(TaskMessage(task_id=task_id, type=type).to_body())
+    async def _announce(
+        self, task_id: str, type: str, *, request_id: str | None = None
+    ) -> None:
+        message = TaskMessage(task_id=task_id, type=type, request_id=request_id)
+        await self.queue.send(message.to_body())
 
 
 class TaskService:
@@ -88,6 +91,7 @@ class TaskService:
         *,
         type: str,
         payload: dict[str, Any],
+        request_id: str | None = None,
     ) -> TaskRecord:
         now = datetime.now(UTC)
         task = TaskRecord(
@@ -99,7 +103,7 @@ class TaskService:
             created_at=now,
             updated_at=now,
         )
-        await self.dispatcher.submit(task)
+        await self.dispatcher.submit(task, request_id=request_id)
         return task
 
     async def require(self, task_id: str) -> TaskRecord:

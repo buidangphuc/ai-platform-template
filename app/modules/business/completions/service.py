@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 
 from app.modules.business.completions.guards import CompletionGuard
 from app.modules.business.completions.ports import CompletionHandler
@@ -18,8 +18,8 @@ class CompletionService:
     ``guards`` run in order, fail-closed: input guards before the handler, output
     guards on the handler's result. ``stream`` runs input guards only; output
     guards on streamed chunks are not applied yet. A violation raised by
-    ``stream`` surfaces on first iteration, i.e. after an SSE response has begun,
-    unless the caller primes the iterator before sending headers.
+    ``stream`` surfaces on first iteration; the API layer awaits the first chunk
+    before it sends SSE headers, so it still becomes a normal JSON error.
     """
 
     def __init__(
@@ -40,7 +40,7 @@ class CompletionService:
     async def stream(
         self,
         request: CompletionRequest,
-    ) -> AsyncIterator[CompletionStreamChunk | str]:
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
         await self._check_input(request)
         async for chunk in self.handler.stream(request):
             yield chunk

@@ -140,3 +140,15 @@ async def test_stream_applies_no_output_guard_yet():
 
     assert chunks == [CompletionStreamChunk(delta="part")]
     assert guard.calls == ["input"]
+
+
+async def test_echo_stream_yields_one_chunk_carrying_usage_and_finish_reason():
+    from app.modules.business.completions.handlers.echo import EchoCompletionHandler
+
+    chunks = [chunk async for chunk in EchoCompletionHandler().stream(_request())]
+
+    assert len(chunks) == 1
+    assert chunks[0].delta == "echo: hello"
+    assert chunks[0].model == "echo"
+    assert chunks[0].finish_reason == "stop"
+    assert chunks[0].usage is not None and chunks[0].usage.total_tokens == 3

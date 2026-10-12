@@ -111,11 +111,20 @@ Factory + bootstrap-addon pattern (`factory.py`):
 
 ## Completions business service — `app/modules/business/completions/`
 
-- `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`.
+- `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`;
+  `stream` yields `CompletionStreamChunk` only (the last chunk may carry `usage`,
+  `finish_reason`, `model`).
 - `service.py`: `CompletionService` wraps one handler and exposes the same two
   methods. The service is stable; behavior lives in the handler. One instance per
   app lives on `ApplicationResources.completion_service`.
 - `handlers/echo.py` is the scaffold handler.
+- Stream contract (`app/api/v1/completions/streaming.py`): the endpoint awaits the
+  first chunk before it sends headers, so guard violations and handler startup errors
+  are normal JSON errors; first-token timeout is a JSON 504 `stream_timeout`. After the
+  first chunk a failure is `event: error` with a safe code (no exception text), an idle
+  gap past `STREAM_IDLE_TIMEOUT_SECONDS` is `stream_timeout`, and `: ping` comments go
+  out every `SSE_HEARTBEAT_SECONDS`. Each completion logs one line (latency, ttft,
+  usage, model; never content). A handler must not swallow `CancelledError`.
 
 To add a real model-backed completion:
 
@@ -142,8 +151,8 @@ through `create_app(completion_guards_factory=...)` (input/output guards, fail-c
 - **Input/output guards:** pass `CompletionGuard`s to `CompletionService(handler,
   guards=...)` (`business/completions/guards.py`); raise `GuardrailViolation`
   (422, fail-closed). Output guards run on `complete()` only; streamed output is
-  not guarded yet, and an input violation in `stream()` surfaces on first
-  iteration unless the caller primes the iterator before sending headers.
+  not guarded yet. An input violation in `stream()` raises on first iteration, which
+  the API awaits before sending headers, so it is a 422 JSON error.
 - **Untrusted content:** clients cannot send `system` messages (the server owns
   the system prompt). Retrieved text is untrusted: `knowledge_search` wraps each
   match in `<document id=... source="retrieved">` and says so in its tool

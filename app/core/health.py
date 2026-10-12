@@ -14,8 +14,15 @@ class HealthResult:
 class HealthService:
     check_external_dependencies: bool = True
     checks: tuple[tuple[str, DependencyCheck], ...] = field(default_factory=tuple)
+    draining: bool = False
+
+    def begin_draining(self) -> None:
+        """Report not-ready from now on; set once shutdown starts, never cleared."""
+        self.draining = True
 
     async def readiness(self) -> HealthResult:
+        if self.draining:
+            return HealthResult(status="draining", dependencies={"api": "draining"})
         dependencies = {"api": "ok"}
         if not self.check_external_dependencies:
             return HealthResult(status="ok", dependencies=dependencies)

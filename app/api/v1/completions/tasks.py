@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request
 
 from app.bootstrap.state import get_task_services
+from app.core.request_context import get_request_id
 from app.modules.business.completions.schemas import CompletionRequest
 from app.modules.messaging.tasks.schemas import TaskResponse, TaskSubmitResponse
 
@@ -18,6 +19,7 @@ async def submit_completion(
     task = await service.submit(
         type=TASK_TYPE,
         payload=payload.model_dump(mode="json"),
+        request_id=get_request_id(),
     )
     return TaskSubmitResponse(
         task_id=task.id,

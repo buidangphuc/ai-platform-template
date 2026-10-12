@@ -64,5 +64,10 @@ class CompletionResponse(BaseModel):
 
 
 class CompletionStreamChunk(BaseModel):
+    """One streamed piece. The last chunk may carry ``usage``/``finish_reason``."""
+
     delta: str
+    model: str | None = None
+    usage: CompletionUsage | None = None
+    finish_reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

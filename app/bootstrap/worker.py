@@ -20,6 +20,7 @@ from app.bootstrap.services import (
     open_runtime,
 )
 from app.core.config import Settings, get_settings
+from app.core.request_context import reset_request_id, set_request_id
 from app.modules.business.completions.schemas import CompletionRequest
 from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.outbox.publisher import OutboxPublisher
@@ -102,8 +103,17 @@ def build_worker_message_handler(
     completion_service: CompletionService,
 ) -> Callable[[QueueMessage], Awaitable[None]]:
     async def process_message(message: QueueMessage) -> None:
-        task_id = TaskMessage.from_body(message.body).task_id
+        task_message = TaskMessage.from_body(message.body)
+        if task_message.request_id is None:
+            await process_task(task_message.task_id)
+            return
+        token = set_request_id(task_message.request_id)
+        try:
+            await process_task(task_message.task_id)
+        finally:
+            reset_request_id(token)
 
+    async def process_task(task_id: str) -> None:
         try:
             task = await service.require(task_id)
         except Exception:

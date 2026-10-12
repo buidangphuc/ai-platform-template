@@ -26,3 +26,22 @@ def test_task_message_round_trips_through_the_flat_body():
 def test_malformed_body_is_non_retryable(body):
     with pytest.raises(NonRetryableMessageError):
         TaskMessage.from_body(body)
+
+
+def test_request_id_is_optional_and_round_trips():
+    message = TaskMessage(task_id="t-1", type="completion", request_id="req_abc")
+
+    assert message.to_body() == {
+        "task_id": "t-1",
+        "type": "completion",
+        "request_id": "req_abc",
+    }
+    assert TaskMessage.from_body(message.to_body()) == message
+
+
+@pytest.mark.parametrize("request_id", ["", 7])
+def test_request_id_must_be_a_non_empty_string_when_present(request_id):
+    body = {"task_id": "t-1", "type": "completion", "request_id": request_id}
+
+    with pytest.raises(NonRetryableMessageError):
+        TaskMessage.from_body(body)
