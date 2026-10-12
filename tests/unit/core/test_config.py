@@ -300,7 +300,9 @@ def test_env_example_includes_app_settings_defaults():
 
 
 def test_env_langfuse_example_carries_compose_only_overrides():
-    langfuse_example = Path(".env.langfuse.example").read_text(encoding="utf-8")
+    langfuse_example = Path("ops/compose/langfuse.env.example").read_text(
+        encoding="utf-8"
+    )
     project_id_line = (
         "LANGFUSE_INIT_PROJECT_ID=local-ai-platform"  # pragma: allowlist secret
     )

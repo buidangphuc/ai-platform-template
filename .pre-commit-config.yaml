@@ -4,10 +4,6 @@ ci:
   autofix_prs: true
   autoupdate_schedule: monthly
 
-# Vendored agent tooling (spec-kit) is upstream-managed — keep it byte-identical,
-# out of hygiene/lint hooks. detect-secrets keeps its own narrower exclude too.
-exclude: ^(\.specify/|\.claude/skills/)
-
 repos:
   # Hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -35,7 +31,7 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
-        exclude: ^(project/artifacts/|project/data/|data/|mlruns/|minio/|\.specify/integrations/)
+        exclude: ^(project/artifacts/|project/data/|data/|mlruns/|minio/)
 
   # Shell
   - repo: https://github.com/shellcheck-py/shellcheck-py

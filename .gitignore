@@ -31,7 +31,7 @@ research/artifacts/generated/
 fastapi_template
 
 # Claude Code: user-specific permissions (not shared with team)
-.claude/settings.local.json
+.claude/
 
 # Coverage
 .coverage

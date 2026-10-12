@@ -67,8 +67,8 @@ docker-build: ## Build docker image
 	docker build -t ai-platform-template:local .
 
 docker-run: ## Run local docker compose stack
-	docker compose -f docker-compose.local.yaml up
+	docker compose --project-directory . -f ops/compose/local.yaml up
 
 docker-run-langfuse: ## Run local stack with Langfuse (loads .env.langfuse if present)
-	docker compose --env-file .env $(if $(wildcard .env.langfuse),--env-file .env.langfuse) \
-	  -f docker-compose.local.yaml -f docker-compose.langfuse.yaml up
+	docker compose --project-directory . --env-file .env $(if $(wildcard .env.langfuse),--env-file .env.langfuse) \
+	  -f ops/compose/local.yaml -f ops/compose/langfuse.yaml up

@@ -9,10 +9,10 @@ Shared contract (all packets use these final paths):
 
 Owns: `pyproject.toml`, delete `pyrightconfig.json`, `.nbqa.ini`, `requirements.txt`; move `docker-compose.local.yaml`, `docker-compose.langfuse.yaml`, `.env.langfuse.example` to `ops/compose/`; `Makefile`; `.pre-commit-config.yaml`; `.gitignore`; `.dockerignore`; `Dockerfile` (only if a path changes); `tests/unit/core/test_config.py` (only the `.env.langfuse.example` path); delete `.specify/`, `.claude/`.
 
-- [ ] 1.1 `[tool.pyright]` in `pyproject.toml` with identical settings; delete `pyrightconfig.json`; verify `uv run --all-extras pyright` → 0 errors, same file count checked
-- [ ] 1.2 Delete `.nbqa.ini`, `requirements.txt`; verify `rg -n "nbqa|requirements.txt"` outside `openspec/changes/archive` is empty
-- [ ] 1.3 Move compose files and Langfuse env example; fix relative paths inside them (build context, env files, mounted files like `ops/observability/*`) and the Makefile targets (`--project-directory .` or adjusted paths); verify `docker compose --project-directory . -f ops/compose/local.yaml -f ops/compose/langfuse.yaml config -q` succeeds, and `tests/unit/core/test_config.py` passes with the new path
-- [ ] 1.4 Delete `.specify/`, `.claude/`; add `.claude/` to `.gitignore`; drop `.specify/` and `.claude/skills/` excludes from `.pre-commit-config.yaml`; verify `uv run pre-commit run --all-files`
+- [x] 1.1 `[tool.pyright]` in `pyproject.toml` with identical settings; delete `pyrightconfig.json`; verify `uv run --all-extras pyright` → 0 errors, same file count checked
+- [x] 1.2 Delete `.nbqa.ini`, `requirements.txt`; verify `rg -n "nbqa|requirements.txt"` outside `openspec/changes/archive` is empty
+- [x] 1.3 Move compose files and Langfuse env example; fix relative paths inside them (build context, env files, mounted files like `ops/observability/*`) and the Makefile targets (`--project-directory .` or adjusted paths); verify `docker compose --project-directory . -f ops/compose/local.yaml -f ops/compose/langfuse.yaml config -q` succeeds, and `tests/unit/core/test_config.py` passes with the new path
+- [x] 1.4 Delete `.specify/`, `.claude/`; add `.claude/` to `.gitignore`; drop `.specify/` and `.claude/skills/` excludes from `.pre-commit-config.yaml`; verify `uv run pre-commit run --all-files`
 
 ## 2. Agent docs to docs/agents
 

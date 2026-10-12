@@ -6,7 +6,7 @@
 #     (the worker also runs the task outbox relay and lease reclaim; run
 #      `make migrate` against the stack's postgres first -- tasks/outbox tables)
 #   make docker-run-langfuse     # + the self-hosted Langfuse overlay
-#     (docker-compose.langfuse.yaml layers the tracing stack on top)
+#     (ops/compose/langfuse.yaml layers the tracing stack on top)
 
 # Async-task stack shared by the api (submits) and the worker (processes).
 # Tasks and their outbox event commit in one Postgres transaction; the worker
