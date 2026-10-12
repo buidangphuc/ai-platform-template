@@ -2,7 +2,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Request
 
-from app.api.v1.completions.observability import CompletionTimer, Outcome
+from app.api.v1.completions.observability import (
+    CompletionTimer,
+    Outcome,
+    completion_sink,
+)
 from app.bootstrap.state import get_app_resources
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -17,8 +21,9 @@ async def complete(
     payload: CompletionRequest,
     request: Request,
 ) -> CompletionResponse:
-    service = get_app_resources(request.app).completion_service
-    timer = CompletionTimer(mode="sync")
+    resources = get_app_resources(request.app)
+    service = resources.completion_service
+    timer = CompletionTimer(mode="sync", sink=completion_sink(resources))
     outcome: Outcome = "error"
     try:
         result = await service.complete(payload)

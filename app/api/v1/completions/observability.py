@@ -1,25 +1,35 @@
 """One structured log line per completion (sync and stream).
 
 Metadata only: latency, token usage, model and outcome. Never prompt or output
-content. This is the minimal observability until tracing (OTel) is added.
+content. When telemetry is on, the same facts also go to the ``CompletionSink``
+(GenAI metrics and a span); otherwise the sink is a no-op.
 """
 
 from dataclasses import dataclass, field
-from time import perf_counter
+from time import perf_counter, time_ns
 from typing import Literal
 
 from loguru import logger
 
+from app.bootstrap.resources import ApplicationResources
+from app.core.telemetry import NOOP_SINK, CompletionObservation, CompletionSink
 from app.modules.business.completions.schemas import CompletionUsage
 
 Mode = Literal["sync", "stream"]
 Outcome = Literal["ok", "error", "timeout", "disconnected"]
 
 
+def completion_sink(resources: ApplicationResources) -> CompletionSink:
+    """The telemetry handle when it is open, else the no-op sink."""
+    return resources.telemetry or NOOP_SINK
+
+
 @dataclass
 class CompletionTimer:
     mode: Mode
+    sink: CompletionSink = NOOP_SINK
     started_at: float = field(default_factory=perf_counter)
+    started_ns: int = field(default_factory=time_ns)
     ttft_ms: float | None = None
     model: str | None = None
     usage: CompletionUsage | None = None
@@ -70,4 +80,17 @@ class CompletionTimer:
             input_tokens,
             output_tokens,
             total_tokens,
+        )
+        self.sink.record_completion(
+            CompletionObservation(
+                mode=self.mode,
+                outcome=outcome,
+                started_ns=self.started_ns,
+                duration_s=duration_ms / 1000,
+                ttft_s=None if self.ttft_ms is None else self.ttft_ms / 1000,
+                model=self.model,
+                finish_reason=self.finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
         )

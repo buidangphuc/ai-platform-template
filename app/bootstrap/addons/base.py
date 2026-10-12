@@ -33,9 +33,11 @@ def default_resource_addons() -> tuple[BootstrapAddon, ...]:
     from app.bootstrap.addons.quota import QuotaAddon
     from app.bootstrap.addons.rag import RagAddon
     from app.bootstrap.addons.rate_limit import RateLimitAddon
+    from app.bootstrap.addons.telemetry import TelemetryAddon
     from app.bootstrap.addons.webhooks import WebhookAddon
 
     return (
+        TelemetryAddon(),
         RateLimitAddon(),
         IdempotencyAddon(),
         CacheAddon(),

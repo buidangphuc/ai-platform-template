@@ -22,6 +22,7 @@ from app.core.errors import register_exception_handlers
 from app.core.health import HealthService
 from app.core.logging import configure_logging
 from app.core.middleware import InFlightTracker
+from app.core.telemetry import require_otel
 
 
 def create_app(
@@ -71,6 +72,8 @@ def create_app(
     install_core_middlewares(app, resolved_settings)
     register_exception_handlers(app)
     app.include_router(build_api_router(resolved_settings))
+    if resolved_settings.OTEL_ENABLED:
+        _instrument_fastapi(app)
     return app
 
 
@@ -125,3 +128,12 @@ def _flush_langfuse_client() -> None:
     except ImportError:
         return
     get_client().flush()
+
+
+def _instrument_fastapi(app: FastAPI) -> None:
+    # Needs the app object, so it cannot live in the addon; the providers the
+    # addon installs globally at startup are picked up lazily.
+    require_otel()
+    from app.core.telemetry_otel import instrument_fastapi
+
+    instrument_fastapi(app)

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.v1.completions.observability import CompletionTimer
+from app.api.v1.completions.observability import CompletionTimer, completion_sink
 from app.api.v1.completions.streaming import (
     SSE_HEADERS,
     StreamLimits,
@@ -18,7 +18,8 @@ async def stream(
     payload: CompletionRequest,
     request: Request,
 ) -> StreamingResponse:
-    service = get_app_resources(request.app).completion_service
+    resources = get_app_resources(request.app)
+    service = resources.completion_service
     settings = get_app_settings(request.app)
     # Awaits the first chunk: guard/handler errors surface here as JSON errors.
     events = await open_event_stream(
@@ -29,7 +30,7 @@ async def stream(
             idle_timeout=settings.STREAM_IDLE_TIMEOUT_SECONDS,
             heartbeat=settings.SSE_HEARTBEAT_SECONDS,
         ),
-        CompletionTimer(mode="stream"),
+        CompletionTimer(mode="stream", sink=completion_sink(resources)),
     )
     return StreamingResponse(
         events,

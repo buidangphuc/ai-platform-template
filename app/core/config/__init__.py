@@ -33,6 +33,7 @@ from app.core.config.runtime import (
     WEAK_AUTH_TOKENS,
     RuntimeSettingsMixin,
 )
+from app.core.config.telemetry import TelemetrySettingsMixin
 
 _SECRET_MARKERS = ("PASSWORD", "SECRET", "TOKEN", "KEY", "PEPPER")
 
@@ -46,6 +47,7 @@ class Settings(
     AISettingsMixin,
     MessagingSettingsMixin,
     PlatformSettingsMixin,
+    TelemetrySettingsMixin,
 ):
     model_config = SettingsConfigDict(
         env_file=".env",

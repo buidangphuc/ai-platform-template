@@ -109,7 +109,6 @@ def test_settings_keeps_model_selection_minimal():
     assert "JOB_BACKEND" not in Settings.model_fields
     assert "LLM_CACHE_BACKEND" not in Settings.model_fields
     assert "OBSERVABILITY_BACKEND" not in Settings.model_fields
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in Settings.model_fields
     assert "EXPERIMENT_TRACKER_BACKEND" not in Settings.model_fields
 
 

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+    from app.core.telemetry_otel import Telemetry
     from app.modules.ai.rag.service import KnowledgeRetrievalService
     from app.modules.business.completions.service import CompletionService
     from app.modules.messaging.outbox.store import OutboxStore
@@ -97,6 +98,7 @@ class ApplicationResources:
     rag_service: KnowledgeRetrievalService | None = None
     webhook_signer: WebhookSigner | None = None
     webhook_dispatcher: HttpWebhookDispatcher | None = None
+    telemetry: Telemetry | None = None
     # Addons opened for this runtime (closed in reverse by the exit stack)
     addons: list[BootstrapAddon] = field(default_factory=list)
 
