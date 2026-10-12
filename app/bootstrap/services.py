@@ -10,11 +10,7 @@ from contextlib import asynccontextmanager
 from app.bootstrap.addons.base import BootstrapAddon
 from app.bootstrap.resources import ApplicationResources, open_application_resources
 from app.core.config import Settings
-from app.core.telemetry import (
-    CompletionObservation,
-    FanOutSink,
-    LogCompletionSink,
-)
+from app.core.telemetry import FanOutSink, LogCompletionSink
 from app.modules.business.completions.guards import CompletionGuard
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.business.completions.ports import CompletionHandler
@@ -45,17 +41,6 @@ def default_completion_handler_factory(
     return EchoCompletionHandler()
 
 
-class _ResourceTelemetry:
-    """The OTel handle, resolved per record: it exists only when OTEL_ENABLED."""
-
-    def __init__(self, resources: ApplicationResources) -> None:
-        self.resources = resources
-
-    def record_completion(self, observation: CompletionObservation) -> None:
-        if self.resources.telemetry:
-            self.resources.telemetry.record_completion(observation)
-
-
 def compose_business_services(
     resources: ApplicationResources,
     settings: Settings,
@@ -66,7 +51,12 @@ def compose_business_services(
     resources.completion_service = CompletionService(
         completion_handler_factory(resources, settings),
         guards=completion_guards_factory(resources, settings),
-        sink=FanOutSink([LogCompletionSink(), _ResourceTelemetry(resources)]),
+        sink=FanOutSink(
+            [
+                LogCompletionSink(),
+                *([resources.telemetry] if resources.telemetry else []),
+            ]
+        ),
         policy=StreamPolicy(
             first_token_timeout=settings.STREAM_FIRST_TOKEN_TIMEOUT_SECONDS,
             idle_timeout=settings.STREAM_IDLE_TIMEOUT_SECONDS,

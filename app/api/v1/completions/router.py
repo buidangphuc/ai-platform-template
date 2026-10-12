@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -42,7 +43,7 @@ async def _events(
     chunks: AsyncGenerator[CompletionStreamChunk, None],
 ) -> AsyncGenerator[ServerSentEvent, None]:
     summary = StreamSummary()
-    try:
+    async with aclosing(chunks):
         async for chunk in chunks:
             summary.merge(chunk)
             if chunk.delta:
@@ -53,13 +54,5 @@ async def _events(
                         "metadata": chunk.metadata,
                     }
                 )
-    finally:
-        await chunks.aclose()
-    done: dict[str, object] = {"type": "done"}
-    if summary.usage is not None:
-        done["usage"] = summary.usage.model_dump()
-    if summary.finish_reason is not None:
-        done["finish_reason"] = summary.finish_reason
-    if summary.model is not None:
-        done["model"] = summary.model
+    done = {"type": "done", **summary.model_dump(exclude_none=True)}
     yield ServerSentEvent(done)

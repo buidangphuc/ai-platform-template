@@ -1,6 +1,6 @@
 """Completion edge emits GenAI metrics/spans through the Telemetry handle."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -59,18 +59,35 @@ class _FailingHandler:
 
     async def stream(
         self, request: CompletionRequest
-    ) -> AsyncIterator[CompletionStreamChunk]:
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
         raise RuntimeError("model down")
         yield CompletionStreamChunk(delta="")
+
+
+class _RigAddon:
+    name = "test-telemetry"
+
+    def __init__(self, rig: _Rig) -> None:
+        self.rig = rig
+
+    def is_enabled(self, settings) -> bool:
+        return True
+
+    async def open(self, resources, settings, stack) -> None:
+        resources.telemetry = self.rig.telemetry
 
 
 async def _call(rig: _Rig, path: str, *, handler=None):
     kwargs = (
         {} if handler is None else {"completion_handler_factory": lambda r, s: handler}
     )
-    app = create_app(settings=build_test_settings(), init_resources=False, **kwargs)
+    app = create_app(
+        settings=build_test_settings(),
+        init_resources=False,
+        resource_addons=(_RigAddon(rig),),
+        **kwargs,
+    )
     async with app.router.lifespan_context(app):
-        app.state.resources.telemetry = rig.telemetry
         async with AsyncClient(
             transport=ASGITransport(app=app, raise_app_exceptions=False),
             base_url="http://test",

@@ -1,7 +1,7 @@
 """CompletionService records one observation per call and owns stream deadlines."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 import pytest
 from loguru import logger
@@ -49,7 +49,7 @@ class _Handler:
 
     async def stream(
         self, request: CompletionRequest
-    ) -> AsyncIterator[CompletionStreamChunk]:
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
         try:
             for step in self.steps:
                 if isinstance(step, CompletionStreamChunk):
@@ -146,6 +146,15 @@ async def test_first_token_timeout() -> None:
     assert (caught.value.code, caught.value.status_code) == ("stream_timeout", 504)
     assert [o.outcome for o in sink.observations] == ["timeout"]
     assert handler.closed
+
+
+async def test_handler_raised_timeout_is_an_error_not_stream_timeout() -> None:
+    service, sink = _service(_Handler(TimeoutError("upstream")))
+
+    with pytest.raises(TimeoutError):
+        [c async for c in service.stream(_request())]
+
+    assert [o.outcome for o in sink.observations] == ["error"]
 
 
 async def test_idle_timeout_after_first_chunk() -> None:

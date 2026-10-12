@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -30,7 +30,7 @@ class EchoCompletionHandler:
 
     async def stream(
         self, request: CompletionRequest
-    ) -> AsyncIterator[CompletionStreamChunk]:
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
         result = await self.complete(request)
         yield CompletionStreamChunk(
             delta=result.content,

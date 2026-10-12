@@ -121,17 +121,18 @@ class CompletionService:
     ) -> AsyncGenerator[CompletionStreamChunk, None]:
         observation = _Observation("stream", self.sink)
         outcome: Outcome = "disconnected"  # what a closed or cancelled stream means
-        chunks = None
+        chunks = self.handler.stream(request)
         try:
             await self._check_input(request)
-            chunks = self.handler.stream(request)
             deadline = self.policy.first_token_timeout
             while True:
                 try:
-                    async with asyncio.timeout(deadline):
+                    async with asyncio.timeout(deadline) as scope:
                         chunk = await anext(chunks, None)
                 except TimeoutError:
-                    raise StreamTimeoutError from None
+                    if scope.expired():
+                        raise StreamTimeoutError from None
+                    raise
                 if chunk is None:
                     break
                 deadline = self.policy.idle_timeout
@@ -148,8 +149,7 @@ class CompletionService:
             raise
         finally:
             observation.record(outcome)
-            if isinstance(chunks, AsyncGenerator):
-                await chunks.aclose()
+            await chunks.aclose()
 
     async def _check_input(self, request: CompletionRequest) -> None:
         for guard in self.guards:

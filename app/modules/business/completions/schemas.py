@@ -49,9 +49,10 @@ class CompletionUsage(BaseModel):
 class StreamSummary(BaseModel):
     """What a stream reports about itself: the latest non-empty value of each field."""
 
-    model: str | None = None
+    # Field order is the wire order of the SSE done frame.
     usage: CompletionUsage | None = None
     finish_reason: str | None = None
+    model: str | None = None
 
     def merge(self, chunk: "CompletionStreamChunk | CompletionResult") -> None:
         self.model = chunk.model or self.model
