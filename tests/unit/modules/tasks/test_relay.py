@@ -85,6 +85,7 @@ async def test_cleanup_loop_purges_expired_tasks_and_old_published_events_in_bat
         run_cleanup_loop(
             store,
             outbox,  # type: ignore[arg-type]
+            None,
             interval_seconds=0.01,
             batch_size=2,
             outbox_retention_seconds=3600,
@@ -104,12 +105,38 @@ async def test_cleanup_loop_purges_expired_tasks_and_old_published_events_in_bat
     )
 
 
+async def test_cleanup_loop_purges_expired_idempotency_keys_in_batches():
+    idempotency = _CountingIdempotency(expired=5)
+    stop = asyncio.Event()
+    loop = asyncio.create_task(
+        run_cleanup_loop(
+            InMemoryTaskStore(),
+            None,
+            idempotency,  # type: ignore[arg-type]
+            interval_seconds=0.01,
+            batch_size=2,
+            outbox_retention_seconds=60,
+            stop=stop,
+        )
+    )
+    await asyncio.sleep(0.1)
+    stop.set()
+    await asyncio.wait_for(loop, timeout=2)
+
+    assert idempotency.remaining == 0
+    assert idempotency.batches[:3] == [2, 2, 1]
+    assert all(
+        datetime.now(UTC) - b < timedelta(seconds=5) for b in idempotency.befores
+    )
+
+
 async def test_cleanup_loop_without_an_outbox_only_purges_tasks():
     store = InMemoryTaskStore()
     stop = asyncio.Event()
     loop = asyncio.create_task(
         run_cleanup_loop(
             store,
+            None,
             None,
             interval_seconds=0.01,
             batch_size=10,
@@ -133,4 +160,18 @@ class _CountingOutbox:
         self.remaining -= deleted
         self.batches.append(deleted)
         self.cutoffs.append(before)
+        return deleted
+
+
+class _CountingIdempotency:
+    def __init__(self, expired: int) -> None:
+        self.remaining = expired
+        self.batches: list[int] = []
+        self.befores: list[datetime] = []
+
+    async def delete_expired(self, *, before: datetime, limit: int) -> int:
+        deleted = min(limit, self.remaining)
+        self.remaining -= deleted
+        self.batches.append(deleted)
+        self.befores.append(before)
         return deleted

@@ -22,6 +22,7 @@ from app.core.errors import AppError
 from app.modules.platform.idempotency import service
 from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
 from app.modules.platform.idempotency.models import IdempotencyKey
+from app.modules.platform.idempotency.store import IdempotencyClaim
 
 POSTGRES_URL = os.environ.get("IDEMPOTENCY_TEST_POSTGRES_URL")
 EXPIRES = datetime.now(UTC) + timedelta(hours=1)
@@ -50,6 +51,11 @@ async def _claim(store: PostgresIdempotencyStore, request_hash: str):
     return await store.check_or_store(
         key="k", principal_id="p", request_hash=request_hash, expires_at=EXPIRES
     )
+
+
+def _token(claim: object) -> str:
+    assert isinstance(claim, IdempotencyClaim)
+    return claim.token
 
 
 async def _age_record(
@@ -97,7 +103,7 @@ async def test_concurrent_retries_of_a_stuck_key_reclaim_it_once(
         *[_claim(store, "h") for _ in range(2)], return_exceptions=True
     )
 
-    reclaimed = [r for r in results if r is None]
+    reclaimed = [r for r in results if isinstance(r, IdempotencyClaim)]
     in_progress = [
         r for r in results if isinstance(r, AppError) and r.status_code == 409
     ]
@@ -119,26 +125,26 @@ async def test_concurrent_retries_of_an_expired_key_reclaim_it_once(
         *[_claim(store, "h") for _ in range(2)], return_exceptions=True
     )
 
-    assert sum(r is None for r in results) == 1
+    assert sum(isinstance(r, IdempotencyClaim) for r in results) == 1
 
 
 async def test_late_original_cannot_overwrite_reclaiming_retry(sessionmaker):
     store = _store(sessionmaker)
-    await _claim(store, "old-request")
+    original = _token(await _claim(store, "old-request"))
     await _age_record(sessionmaker, seconds=3600)
-    await _claim(store, "new-request")  # reclaims the key for a new request
+    retry = _token(await _claim(store, "new-request"))  # reclaims the key
 
     late = await store.store_response(
         key="k",
         principal_id="p",
-        request_hash="old-request",
+        claim_token=original,
         status_code=200,
         response_body={"from": "original"},
     )
     winner = await store.store_response(
         key="k",
         principal_id="p",
-        request_hash="new-request",
+        claim_token=retry,
         status_code=201,
         response_body={"from": "retry"},
     )
@@ -151,10 +157,42 @@ async def test_late_original_cannot_overwrite_reclaiming_retry(sessionmaker):
     assert record.response_body == {"from": "retry"}
 
 
+async def test_late_original_with_identical_request_cannot_complete_the_retrys_claim(
+    sessionmaker,
+):
+    """Same request_hash on both sides: only the claim token tells them apart."""
+    store = _store(sessionmaker)
+    original = _token(await _claim(store, "same-request"))
+    await _age_record(sessionmaker, seconds=3600)
+    retry = _token(await _claim(store, "same-request"))
+
+    late = await store.store_response(
+        key="k",
+        principal_id="p",
+        claim_token=original,
+        status_code=200,
+        response_body={"from": "original"},
+    )
+    winner = await store.store_response(
+        key="k",
+        principal_id="p",
+        claim_token=retry,
+        status_code=201,
+        response_body={"from": "retry"},
+    )
+
+    async with sessionmaker() as session:
+        record = await session.scalar(select(IdempotencyKey))
+    assert original != retry
+    assert (late, winner) == (False, True)
+    assert record is not None
+    assert record.response_body == {"from": "retry"}
+
+
 async def test_completed_response_is_not_overwritten(sessionmaker):
     store = _store(sessionmaker)
-    await _claim(store, "h")
-    args = {"key": "k", "principal_id": "p", "request_hash": "h", "status_code": 200}
+    token = _token(await _claim(store, "h"))
+    args = {"key": "k", "principal_id": "p", "claim_token": token, "status_code": 200}
 
     first = await store.store_response(**args, response_body={"n": 1})
     second = await store.store_response(**args, response_body={"n": 2})
@@ -164,3 +202,23 @@ async def test_completed_response_is_not_overwritten(sessionmaker):
     assert (first, second) == (True, False)
     assert record is not None
     assert record.response_body == {"n": 1}
+
+
+async def test_delete_expired_purges_only_expired_rows_in_bounded_batches(sessionmaker):
+    store = _store(sessionmaker)
+    for n in range(5):
+        await store.check_or_store(
+            key=f"old-{n}",
+            principal_id="p",
+            request_hash="h",
+            expires_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+    await _claim(store, "h")  # fresh: expires in an hour
+    now = datetime.now(UTC)
+
+    batches = [await store.delete_expired(before=now, limit=2) for _ in range(3)]
+
+    async with sessionmaker() as session:
+        left = (await session.scalars(select(IdempotencyKey.key))).all()
+    assert batches == [2, 2, 1]
+    assert left == ["k"]

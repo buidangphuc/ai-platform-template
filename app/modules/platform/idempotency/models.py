@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     CheckConstraint,
     DateTime,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -26,6 +27,7 @@ class IdempotencyKey(Base, TimestampMixin):
             "key",
             name="uq_idempotency_keys_principal_key",
         ),
+        Index("ix_idempotency_keys_expires_at", "expires_at"),
         CheckConstraint(
             "status IN ('in_progress', 'completed')",
             name="ck_idempotency_keys_status",
@@ -43,6 +45,9 @@ class IdempotencyKey(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="in_progress"
     )
+    # Fresh per claim/reclaim; completion is fenced on it. NULL only on rows
+    # claimed before the column existed (they can only expire or be reclaimed).
+    claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     response_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB_TYPE,

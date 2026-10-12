@@ -14,7 +14,10 @@ from app.modules.platform.idempotency.http import (
     replay_or_start_idempotent_request,
     store_idempotent_response,
 )
-from app.modules.platform.idempotency.store import IdempotencyCachedResponse
+from app.modules.platform.idempotency.store import (
+    IdempotencyCachedResponse,
+    IdempotencyClaim,
+)
 from tests.factories import build_test_settings
 
 
@@ -79,9 +82,9 @@ def test_idempotency_key_max_length_comes_from_settings():
 class _FakeIdempotencyStore:
     def __init__(
         self,
-        cached: IdempotencyCachedResponse | None = None,
+        outcome: IdempotencyCachedResponse | IdempotencyClaim | None = None,
     ) -> None:
-        self.cached = cached
+        self.outcome = outcome or IdempotencyClaim(token="claim-1")
         self.check_calls: list[dict[str, object]] = []
         self.store_calls: list[dict[str, object]] = []
 
@@ -92,7 +95,7 @@ class _FakeIdempotencyStore:
         principal_id: str,
         request_hash: str,
         expires_at: datetime,
-    ) -> IdempotencyCachedResponse | None:
+    ) -> IdempotencyCachedResponse | IdempotencyClaim:
         self.check_calls.append(
             {
                 "key": key,
@@ -101,14 +104,14 @@ class _FakeIdempotencyStore:
                 "expires_at": expires_at,
             }
         )
-        return self.cached
+        return self.outcome
 
     async def store_response(
         self,
         *,
         key: str,
         principal_id: str,
-        request_hash: str,
+        claim_token: str,
         status_code: int,
         response_body: dict,
     ) -> bool:
@@ -116,14 +119,14 @@ class _FakeIdempotencyStore:
             {
                 "key": key,
                 "principal_id": principal_id,
-                "request_hash": request_hash,
+                "claim_token": claim_token,
                 "status_code": status_code,
                 "response_body": response_body,
             }
         )
         return True
 
-    async def delete_expired(self, *, before: datetime) -> int:
+    async def delete_expired(self, *, before: datetime, limit: int) -> int:
         return 0
 
     async def close(self) -> None:
@@ -203,7 +206,7 @@ async def test_idempotency_boundary_stores_success_response_after_start():
         {
             "key": "job-1",
             "principal_id": "user-1",
-            "request_hash": store.check_calls[0]["request_hash"],
+            "claim_token": "claim-1",
             "status_code": 201,
             "response_body": {"id": "created"},
         }

@@ -17,6 +17,7 @@ from app.modules.messaging.outbox.publisher import OutboxPublisher
 from app.modules.messaging.outbox.store import OutboxStore
 from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskStore
+from app.modules.platform.idempotency.store import IdempotencyStore
 
 
 async def _every(
@@ -82,13 +83,15 @@ async def run_reclaim_loop(
 async def run_cleanup_loop(
     task_store: TaskStore,
     outbox_store: OutboxStore | None,
+    idempotency_store: IdempotencyStore | None,
     *,
     interval_seconds: float,
     batch_size: int,
     outbox_retention_seconds: float,
     stop: asyncio.Event,
 ) -> None:
-    """Purge expired tasks and, when an outbox exists, old published events.
+    """Purge expired tasks and, when the stores exist, old published outbox
+    events and expired idempotency keys.
 
     Deletes go in batches of ``batch_size`` and repeat until a batch comes back
     short, so a large backlog never holds one long-running DELETE.
@@ -108,8 +111,21 @@ async def run_cleanup_loop(
                 batch_size,
                 stop,
             )
-        if tasks or events:
-            logger.info("tasks.cleanup tasks={} outbox_events={}", tasks, events)
+        keys = 0
+        if idempotency_store is not None:
+            idempotency = idempotency_store
+            keys = await _drain(
+                lambda: idempotency.delete_expired(before=now, limit=batch_size),
+                batch_size,
+                stop,
+            )
+        if tasks or events or keys:
+            logger.info(
+                "tasks.cleanup tasks={} outbox_events={} idempotency_keys={}",
+                tasks,
+                events,
+                keys,
+            )
 
     await _every(interval_seconds, stop, "cleanup", step)
 

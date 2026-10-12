@@ -11,12 +11,15 @@ from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
 from app.modules.platform.idempotency.factory import build_idempotency_store
 from app.modules.platform.idempotency.models import IdempotencyKey
 from app.modules.platform.idempotency.service import (
-    IdempotencyCachedResponse,
     build_request_hash,
     check_or_store_idempotency_key,
     compute_idempotency_expires_at,
     delete_expired_idempotency_keys,
     store_idempotency_response,
+)
+from app.modules.platform.idempotency.store import (
+    IdempotencyCachedResponse,
+    IdempotencyClaim,
 )
 from tests.factories import build_test_settings
 
@@ -102,8 +105,10 @@ async def test_check_or_store_creates_in_progress_record_for_new_key():
         in_progress_timeout_seconds=60,
     )
 
-    assert cached is None
+    assert isinstance(cached, IdempotencyClaim)
+    assert cached.token
     assert session.flushed is True
+    assert session.execute_calls[0].compile().params["claim_token"] == cached.token
 
 
 async def test_check_or_store_returns_cached_response_for_completed_record():
@@ -214,7 +219,8 @@ async def test_check_or_store_reclaims_stuck_in_progress_record():
         now=lambda: now,
     )
 
-    assert cached is None
+    assert isinstance(cached, IdempotencyClaim)
+    assert stuck.claim_token == cached.token
     assert stuck.status == "in_progress"
     assert stuck.request_hash == "new-hash"
     assert stuck.expires_at == new_expires
@@ -229,7 +235,7 @@ async def test_store_idempotency_response_is_a_fenced_update():
         session,
         key="job-1",
         principal_id="svc-local",
-        request_hash="hash",
+        claim_token="token-1",
         status_code=201,
         response_body={"id": "created"},
     )
@@ -237,7 +243,7 @@ async def test_store_idempotency_response_is_a_fenced_update():
     sql = str(session.execute_calls[0].compile(dialect=postgresql.dialect()))
     assert stored is True
     assert session.flushed is True
-    assert "request_hash = %(request_hash_1)s" in sql
+    assert "claim_token = %(claim_token_1)s" in sql
     assert "status = %(status_1)s" in sql
     assert "RETURNING" in sql
 
@@ -249,7 +255,7 @@ async def test_store_idempotency_response_reports_fenced_off_write():
         session,
         key="job-1",
         principal_id="svc-local",
-        request_hash="stale-hash",
+        claim_token="stale-token",
         status_code=201,
         response_body={"id": "created"},
     )
@@ -297,10 +303,14 @@ async def test_delete_expired_returns_row_count():
     deleted = await delete_expired_idempotency_keys(
         session,
         before=datetime(2026, 5, 23, tzinfo=UTC),
+        limit=500,
     )
 
+    sql = str(session.execute_calls[0].compile(dialect=postgresql.dialect()))
     assert deleted == 3
     assert session.flushed is True
+    assert "id IN (SELECT" in sql
+    assert "LIMIT" in sql
 
 
 # ---------------------------------------------------------------- factory

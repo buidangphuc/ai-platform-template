@@ -18,7 +18,11 @@ from app.core.errors import AppError
 from app.modules.platform.idempotency.service import (
     build_request_hash,
 )
-from app.modules.platform.idempotency.store import IdempotencyStore
+from app.modules.platform.idempotency.store import (
+    IdempotencyCachedResponse,
+    IdempotencyClaim,
+    IdempotencyStore,
+)
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 
@@ -29,7 +33,7 @@ class IdempotentCall:
 
     key: str
     principal_id: str
-    request_hash: str
+    claim_token: str
     store: IdempotencyStore
 
 
@@ -83,20 +87,22 @@ async def replay_or_start_idempotent_request(
         body=body,
         principal_id=principal_id,
     )
-    cached = await store.check_or_store(
+    outcome = await store.check_or_store(
         key=idempotency_key,
         principal_id=principal_id,
         request_hash=request_hash,
         expires_at=expires_at,
     )
-    if cached is not None:
-        return JSONResponse(status_code=cached.status_code, content=cached.body)
-    return IdempotentCall(
-        key=idempotency_key,
-        principal_id=principal_id,
-        request_hash=request_hash,
-        store=store,
-    )
+    match outcome:
+        case IdempotencyCachedResponse():
+            return JSONResponse(status_code=outcome.status_code, content=outcome.body)
+        case IdempotencyClaim():
+            return IdempotentCall(
+                key=idempotency_key,
+                principal_id=principal_id,
+                claim_token=outcome.token,
+                store=store,
+            )
 
 
 async def store_idempotent_response(
@@ -109,7 +115,7 @@ async def store_idempotent_response(
     return await call.store.store_response(
         key=call.key,
         principal_id=call.principal_id,
-        request_hash=call.request_hash,
+        claim_token=call.claim_token,
         status_code=status_code,
         response_body=response_body,
     )

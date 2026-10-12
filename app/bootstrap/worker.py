@@ -170,6 +170,7 @@ def build_background_loops(
         await run_cleanup_loop(
             tasks.store,
             resources.outbox_store,
+            resources.idempotency_store,
             interval_seconds=settings.TASKS_CLEANUP_INTERVAL_SECONDS,
             batch_size=settings.TASKS_CLEANUP_BATCH_SIZE,
             outbox_retention_seconds=settings.OUTBOX_RETENTION_SECONDS,
