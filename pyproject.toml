@@ -3,7 +3,7 @@ name = "fastapi-template"
 version = "0.1.0"
 description = "FastAPI template project"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"  # uvloop<0.22 does not support 3.14
 authors = [{ name = "Bui Dang Phuc", email = "buidangphuc2801@gmail.com" }]
 dependencies = [
   "alembic>=1.18.0,<2.0.0",
