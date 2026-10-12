@@ -2,10 +2,14 @@ import pytest
 from fakeredis import aioredis
 
 from app.bootstrap.addons.cache import CacheAddon
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.cache.adapters.memory import MemoryCacheGateway
 from app.modules.platform.cache.adapters.redis import RedisCacheGateway
-from app.modules.platform.cache.factory import build_cache_gateway
+from app.modules.platform.cache.factory import (
+    build_memory_cache_gateway,
+    build_redis_cache_gateway,
+)
 from tests.factories import build_test_settings
 
 
@@ -13,22 +17,39 @@ def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
 
 
-def test_build_cache_gateway_defaults_to_memory():
-    cache = build_cache_gateway(_settings())
+def test_build_memory_cache_gateway_uses_settings():
+    cache = build_memory_cache_gateway(_settings())
 
     assert isinstance(cache, MemoryCacheGateway)
 
 
-def test_build_cache_gateway_uses_redis_backend():
+def test_build_redis_cache_gateway_uses_settings():
     redis = aioredis.FakeRedis(decode_responses=False)
-    cache = build_cache_gateway(_settings(CACHE_BACKEND="redis"), redis=redis)
+    cache = build_redis_cache_gateway(_settings(CACHE_BACKEND="redis"), redis)
 
     assert isinstance(cache, RedisCacheGateway)
 
 
-def test_redis_cache_requires_redis_client():
-    with pytest.raises(RuntimeError, match="redis client"):
-        build_cache_gateway(_settings(CACHE_BACKEND="redis"))
+async def test_cache_addon_selects_backend_and_closes_gateway():
+    resources = ApplicationResources(redis=aioredis.FakeRedis(decode_responses=False))
+    addon = CacheAddon()
+
+    await addon.open(resources, _settings(CACHE_ENABLED=True))
+    assert isinstance(resources.cache, MemoryCacheGateway)
+    await addon.close(resources)
+
+    await addon.open(
+        resources,
+        _settings(CACHE_ENABLED=True, CACHE_BACKEND="redis", REDIS_ENABLED=True),
+    )
+    assert isinstance(resources.cache, RedisCacheGateway)
+
+
+async def test_cache_addon_rejects_unknown_backend():
+    with pytest.raises(ValueError, match="Unknown CACHE_BACKEND"):
+        await CacheAddon().open(
+            ApplicationResources(), _settings(CACHE_BACKEND="bogus")
+        )
 
 
 def test_cache_addon_is_enabled_only_by_flag():

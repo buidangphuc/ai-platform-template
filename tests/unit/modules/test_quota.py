@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi import FastAPI
 
 from app.bootstrap.addons.quota import QuotaAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.errors import RateLimitError
 from app.modules.platform.quota.adapters.memory import MemoryQuotaStore
-from app.modules.platform.quota.factory import build_quota_service
+from app.modules.platform.quota.factory import (
+    build_memory_quota_store,
+    build_quota_service,
+)
 from app.modules.platform.quota.models import (
     QuotaPolicy,
     QuotaReservationStatus,
@@ -173,19 +175,13 @@ def test_resolve_fixed_window_returns_epoch_bucket_and_reset_at():
     assert window.reset_at == datetime.fromtimestamp(120, tz=UTC)
 
 
-def test_build_quota_service_defaults_to_memory_backend():
-    service = build_quota_service(build_test_settings())
+def test_build_quota_service_wraps_the_given_store():
+    service = build_quota_service(build_memory_quota_store())
 
     assert isinstance(service, QuotaService)
 
 
-def test_build_quota_service_requires_sessionmaker_for_postgres():
-    with pytest.raises(RuntimeError, match="sessionmaker"):
-        build_quota_service(build_test_settings(QUOTA_BACKEND="postgres"))
-
-
 async def test_quota_addon_attaches_and_closes_service():
-    FastAPI()
     resources = ApplicationResources()
     addon = QuotaAddon()
 
@@ -193,4 +189,3 @@ async def test_quota_addon_attaches_and_closes_service():
     assert isinstance(resources.quota, QuotaService)
 
     await addon.close(resources)
-    assert resources.quota is None

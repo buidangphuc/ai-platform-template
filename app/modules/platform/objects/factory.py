@@ -11,8 +11,6 @@ def build_object_gateway(settings: Settings) -> ObjectGateway:
         return MemoryObjectGateway(prefix=settings.OBJECT_PREFIX)
 
     if settings.OBJECT_BACKEND == "s3":
-        if not settings.OBJECT_S3_BUCKET:
-            raise RuntimeError("OBJECT_S3_BUCKET is required for s3 object backend")
         from app.modules.platform.objects.adapters.s3 import S3ObjectGateway
 
         return S3ObjectGateway(

@@ -6,8 +6,8 @@ from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.middleware import IPRateLimitMiddleware
 from app.modules.platform.rate_limit.factory import (
-    build_ip_rate_limiter,
-    build_principal_rate_limiter,
+    build_memory_rate_limiter,
+    build_redis_rate_limiter,
 )
 from app.modules.platform.rate_limit.service import (
     InMemoryRateLimiter,
@@ -210,38 +210,20 @@ def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
 
 
-def test_build_principal_rate_limiter_defaults_to_memory():
-    limiter = build_principal_rate_limiter(_settings(RATE_LIMIT_PRINCIPAL_PER_MINUTE=5))
+def test_build_memory_rate_limiter_uses_limit_and_window():
+    limiter = build_memory_rate_limiter(limit=5, window_seconds=30)
 
     assert isinstance(limiter, InMemoryRateLimiter)
     assert limiter.limit == 5
 
 
-def test_build_ip_rate_limiter_uses_separate_prefix_on_redis():
-    redis = FakeRedis()
-    limiter = build_ip_rate_limiter(
-        _settings(RATE_LIMIT_BACKEND="redis"),
-        redis=redis,
+def test_build_redis_rate_limiter_uses_prefix():
+    limiter = build_redis_rate_limiter(
+        FakeRedis(), limit=5, window_seconds=30, prefix="rate-limit:ip"
     )
 
     assert isinstance(limiter, RedisRateLimiter)
     assert limiter.prefix == "rate-limit:ip"
-
-
-def test_build_principal_rate_limiter_uses_separate_prefix_on_redis():
-    redis = FakeRedis()
-    limiter = build_principal_rate_limiter(
-        _settings(RATE_LIMIT_BACKEND="redis"),
-        redis=redis,
-    )
-
-    assert isinstance(limiter, RedisRateLimiter)
-    assert limiter.prefix == "rate-limit:principal"
-
-
-def test_redis_rate_limiter_requires_redis_client():
-    with pytest.raises(RuntimeError, match="redis client"):
-        build_principal_rate_limiter(_settings(RATE_LIMIT_BACKEND="redis"))
 
 
 async def test_rate_limit_addon_attaches_both_limiters_when_enabled():
@@ -259,7 +241,9 @@ async def test_rate_limit_addon_attaches_both_limiters_when_enabled():
     )
 
     assert isinstance(resources.principal_rate_limiter, RedisRateLimiter)
+    assert resources.principal_rate_limiter.prefix == "rate-limit:principal"
     assert isinstance(resources.ip_rate_limiter, RedisRateLimiter)
+    assert resources.ip_rate_limiter.prefix == "rate-limit:ip"
 
 
 async def test_rate_limit_addon_skips_disabled_layers():
@@ -276,16 +260,14 @@ async def test_rate_limit_addon_skips_disabled_layers():
     assert resources.ip_rate_limiter is None
 
 
-async def test_rate_limit_addon_close_clears_both_limiters():
-    FastAPI()
+async def test_rate_limit_addon_close_is_a_no_op():
     resources = ApplicationResources()
     addon = RateLimitAddon()
     await addon.open(resources, _settings())
 
     await addon.close(resources)
 
-    assert resources.principal_rate_limiter is None
-    assert resources.ip_rate_limiter is None
+    assert resources.principal_rate_limiter is not None
 
 
 def test_rate_limit_addon_respects_enabled_flag():

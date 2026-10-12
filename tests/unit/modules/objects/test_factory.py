@@ -1,4 +1,3 @@
-import pytest
 from fastapi import FastAPI
 
 from app.bootstrap.addons.objects import ObjectAddon
@@ -19,11 +18,6 @@ def test_build_object_gateway_defaults_to_memory():
     assert isinstance(gateway, MemoryObjectGateway)
 
 
-def test_s3_object_gateway_requires_bucket():
-    with pytest.raises(RuntimeError, match="OBJECT_S3_BUCKET"):
-        build_object_gateway(_settings(OBJECT_BACKEND="s3"))
-
-
 async def test_object_addon_attaches_gateway_when_enabled():
     FastAPI()
     resources = ApplicationResources()
@@ -32,6 +26,8 @@ async def test_object_addon_attaches_gateway_when_enabled():
     await addon.open(resources, _settings(OBJECTS_ENABLED=True))
 
     assert isinstance(resources.objects, MemoryObjectGateway)
+
+    await addon.close(resources)
 
 
 def test_object_addon_respects_enabled_flag():

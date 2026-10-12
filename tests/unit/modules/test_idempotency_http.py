@@ -124,7 +124,7 @@ class _FakeIdempotencyStore:
 
 def _app_with_idempotency(store: _FakeIdempotencyStore) -> FastAPI:
     app = FastAPI()
-    app.state.settings = _settings(IDEMPOTENCY_ENABLED=True)
+    app.state.settings = _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True)
     app.state.resources = ApplicationResources(idempotency_store=store)
     return app
 

@@ -127,7 +127,6 @@ async def test_mongo_addon_opens_and_closes_gateway(
 
     await addon.close(resources)
 
-    assert resources.mongo is None
     assert client.closed is True
 
 

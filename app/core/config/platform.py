@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, computed_field
+from typing import Self
+
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 class PlatformSettingsMixin(BaseModel):
+    # Backing-service flags owned by the infra / mongo mixins; re-declared here
+    # (same type and default) so the cross-setting rules below can read them.
+    DATABASE_ENABLED: bool = False
+    REDIS_ENABLED: bool = False
+    MONGO_ENABLED: bool = False
+
     # Auth / identity
     AUTH_BEARER_TOKEN: str = ""
     AUTH_SUBJECT: str = "local-user"
@@ -46,6 +54,46 @@ class PlatformSettingsMixin(BaseModel):
     # Durable quota / entitlement counters
     QUOTA_ENABLED: bool = False
     QUOTA_BACKEND: str = "memory"
+
+    @model_validator(mode="after")
+    def validate_backend_requirements(self) -> Self:
+        """Each enabled feature's backend needs the service it runs on."""
+        rules = (
+            (
+                self.RATE_LIMIT_ENABLED and self.RATE_LIMIT_BACKEND == "redis",
+                self.REDIS_ENABLED,
+                "RATE_LIMIT_BACKEND=redis requires REDIS_ENABLED",
+            ),
+            (
+                self.CACHE_ENABLED and self.CACHE_BACKEND == "redis",
+                self.REDIS_ENABLED,
+                "CACHE_BACKEND=redis requires REDIS_ENABLED",
+            ),
+            (
+                self.IDEMPOTENCY_ENABLED and self.IDEMPOTENCY_BACKEND == "postgres",
+                self.DATABASE_ENABLED,
+                "IDEMPOTENCY_BACKEND=postgres requires DATABASE_ENABLED",
+            ),
+            (
+                self.QUOTA_ENABLED and self.QUOTA_BACKEND == "postgres",
+                self.DATABASE_ENABLED,
+                "QUOTA_BACKEND=postgres requires DATABASE_ENABLED",
+            ),
+            (
+                self.QUOTA_ENABLED and self.QUOTA_BACKEND == "mongo",
+                self.MONGO_ENABLED,
+                "QUOTA_BACKEND=mongo requires MONGO_ENABLED",
+            ),
+            (
+                self.OBJECTS_ENABLED and self.OBJECT_BACKEND == "s3",
+                bool(self.OBJECT_S3_BUCKET),
+                "OBJECT_BACKEND=s3 requires OBJECT_S3_BUCKET",
+            ),
+        )
+        for applies, satisfied, message in rules:
+            if applies and not satisfied:
+                raise ValueError(message)
+        return self
 
     @computed_field
     @property

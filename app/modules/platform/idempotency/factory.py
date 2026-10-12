@@ -12,13 +12,9 @@ if TYPE_CHECKING:
 def build_idempotency_store(
     settings: Settings,
     *,
-    sessionmaker: async_sessionmaker[AsyncSession] | None = None,
+    sessionmaker: async_sessionmaker[AsyncSession],
 ) -> IdempotencyStore:
     if settings.IDEMPOTENCY_BACKEND == "postgres":
-        if sessionmaker is None:
-            raise RuntimeError(
-                "sessionmaker is required for postgres idempotency store"
-            )
         from app.modules.platform.idempotency.adapters import (
             build_postgres_idempotency_store,
         )

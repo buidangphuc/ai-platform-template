@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 from pymongo.errors import DuplicateKeyError
 
+from app.bootstrap.addons.quota import QuotaAddon
+from app.bootstrap.resources import ApplicationResources
 from app.core.mongo import build_mongo_client
 from app.modules.platform.quota.adapters.mongo import MongoQuotaStore
 from app.modules.platform.quota.models import (
@@ -16,6 +18,7 @@ from app.modules.platform.quota.models import (
     QuotaUsageQuery,
     ReserveQuota,
 )
+from app.modules.platform.quota.service import QuotaService
 from tests.factories import build_test_settings
 from tests.mongo_fake import FakeCollection, FakeMongoGateway, _matches
 
@@ -206,3 +209,19 @@ async def test_ensure_indexes_declares_unique_partial_and_ttl_indexes():
     assert reservation_unique[0]["keys"][-1] == ("idempotency_key", 1)
     assert any("expireAfterSeconds" in i for i in counters.indexes)
     assert any("expireAfterSeconds" in i for i in reservations.indexes)
+
+
+async def test_quota_addon_ensures_mongo_indexes_when_opening():
+    gateway = RacyGateway()
+    resources = ApplicationResources(mongo=gateway)  # type: ignore[arg-type]
+
+    await QuotaAddon().open(
+        resources,
+        build_test_settings(
+            QUOTA_ENABLED=True, QUOTA_BACKEND="mongo", MONGO_ENABLED=True
+        ),
+    )
+
+    assert isinstance(resources.quota, QuotaService)
+    assert gateway.collection("quota_counters").indexes
+    assert gateway.collection("quota_reservations").indexes

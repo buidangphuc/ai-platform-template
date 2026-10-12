@@ -265,14 +265,9 @@ async def test_delete_expired_returns_row_count():
 # ---------------------------------------------------------------- factory
 
 
-def test_build_idempotency_store_requires_sessionmaker_for_postgres():
-    with pytest.raises(RuntimeError, match="sessionmaker"):
-        build_idempotency_store(_settings(IDEMPOTENCY_ENABLED=True))
-
-
 def test_build_idempotency_store_uses_postgres_adapter():
     store = build_idempotency_store(
-        _settings(IDEMPOTENCY_ENABLED=True),
+        _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True),
         sessionmaker=object(),
     )
 
@@ -283,5 +278,8 @@ def test_build_idempotency_store_uses_postgres_adapter():
 def test_idempotency_addon_respects_enabled_flag():
     addon = IdempotencyAddon()
 
-    assert addon.is_enabled(_settings(IDEMPOTENCY_ENABLED=True)) is True
+    assert (
+        addon.is_enabled(_settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True))
+        is True
+    )
     assert addon.is_enabled(_settings(IDEMPOTENCY_ENABLED=False)) is False

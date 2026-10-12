@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.objects.factory import build_object_gateway
+from app.modules.platform.objects.gateway import ObjectGateway
 
 
 class ObjectAddon:
@@ -21,6 +22,10 @@ class ObjectAddon:
         resources.objects = build_object_gateway(settings)
 
     async def close(self, resources: ApplicationResources) -> None:
-        if resources.objects is not None:
-            await resources.objects.close()
-            resources.objects = None
+        await _objects(resources).close()
+
+
+def _objects(resources: ApplicationResources) -> ObjectGateway:
+    if resources.objects is None:
+        raise RuntimeError("ObjectAddon has no open gateway")
+    return resources.objects

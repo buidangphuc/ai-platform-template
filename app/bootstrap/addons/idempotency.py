@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.idempotency.factory import build_idempotency_store
+from app.modules.platform.idempotency.store import IdempotencyStore
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class IdempotencyAddon:
@@ -18,16 +24,24 @@ class IdempotencyAddon:
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
-        if settings.IDEMPOTENCY_BACKEND == "postgres" and not settings.DATABASE_ENABLED:
-            raise RuntimeError(
-                "IdempotencyAddon with IDEMPOTENCY_BACKEND=postgres requires DATABASE_ENABLED"
-            )
         resources.idempotency_store = build_idempotency_store(
             settings,
-            sessionmaker=resources.sessionmaker,
+            sessionmaker=_sessionmaker(resources),
         )
 
     async def close(self, resources: ApplicationResources) -> None:
-        if resources.idempotency_store is not None:
-            await resources.idempotency_store.close()
-            resources.idempotency_store = None
+        await _store(resources).close()
+
+
+def _sessionmaker(
+    resources: ApplicationResources,
+) -> async_sessionmaker[AsyncSession]:
+    if resources.sessionmaker is None:
+        raise RuntimeError("IdempotencyAddon needs an open database sessionmaker")
+    return resources.sessionmaker
+
+
+def _store(resources: ApplicationResources) -> IdempotencyStore:
+    if resources.idempotency_store is None:
+        raise RuntimeError("IdempotencyAddon has no open store")
+    return resources.idempotency_store

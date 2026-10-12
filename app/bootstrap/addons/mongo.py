@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from app.core.config import Settings
+from app.modules.platform.mongo.factory import build_mongo_gateway
+from app.modules.platform.mongo.gateway import MongoGateway
 
 if TYPE_CHECKING:
     from app.bootstrap.resources import ApplicationResources
-from app.modules.platform.mongo.factory import build_mongo_gateway
 
 
 class MongoAddon:
@@ -25,6 +26,10 @@ class MongoAddon:
         resources.mongo = build_mongo_gateway(settings)
 
     async def close(self, resources: ApplicationResources) -> None:
-        if resources.mongo is not None:
-            await resources.mongo.close()
-            resources.mongo = None
+        await _mongo(resources).close()
+
+
+def _mongo(resources: ApplicationResources) -> MongoGateway:
+    if resources.mongo is None:
+        raise RuntimeError("MongoAddon has no open gateway")
+    return resources.mongo
