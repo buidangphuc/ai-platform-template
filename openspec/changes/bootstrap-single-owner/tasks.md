@@ -9,8 +9,8 @@
 
 ## 2. Single resource owner (step 2)
 
-- [ ] 2.1 `open_core_resources(settings)` / close on `AsyncExitStack`, shared by API lifespan and worker; delete `_worker_needs_*` (fixes outbox+non-postgres store crash); verify worker and API resolve the same handler factory
-- [ ] 2.2 Outbox store built once (opened before tasks, reused by dispatcher); verify a single instance on resources
+- [x] 2.1 `open_application_resources` (async CM on `AsyncExitStack`) + `open_runtime` in `bootstrap/services.py`, shared by API lifespan and worker; addon `open/close` drop the unused `app` param; delete `WorkerResources`/`_worker_needs_*` (fixes outbox + non-postgres store crash); verify `test_worker_context_uses_the_same_handler_factory_as_the_api`, `test_worker_opens_outbox_dispatch_with_non_postgres_task_store`, `test_failed_open_closes_what_was_already_opened`
+- [x] 2.2 Outbox store built once: tasks open after addons and reuse `OutboxAddon`'s store; verify `test_outbox_store_is_built_once_and_shared_with_dispatcher`
 - [ ] 2.3 Health checks registered at open time
 
 ## 3. Addons and factories (step 3, parallel per addon)

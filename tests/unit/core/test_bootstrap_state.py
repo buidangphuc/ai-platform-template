@@ -13,6 +13,7 @@ from app.bootstrap.state import (
 from app.core.errors import ServiceUnavailableError
 from app.core.health import HealthService
 from app.core.middleware import InFlightTracker
+from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
 from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
 from app.modules.messaging.tasks.service import TaskService
 from tests.factories import build_test_settings
@@ -87,6 +88,7 @@ def test_get_task_services_returns_feature_group() -> None:
         service=TaskService(store=store, dispatcher=dispatcher),
         store=store,
         dispatcher=dispatcher,
+        queue=InMemoryQueueGateway(),
     )
     app.state.resources = ApplicationResources(tasks=tasks)
 

@@ -184,12 +184,12 @@ def test_build_quota_service_requires_sessionmaker_for_postgres():
 
 
 async def test_quota_addon_attaches_and_closes_service():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources()
     addon = QuotaAddon()
 
-    await addon.open(app, resources, build_test_settings(QUOTA_ENABLED=True))
+    await addon.open(resources, build_test_settings(QUOTA_ENABLED=True))
     assert isinstance(resources.quota, QuotaService)
 
-    await addon.close(app, resources)
+    await addon.close(resources)
     assert resources.quota is None

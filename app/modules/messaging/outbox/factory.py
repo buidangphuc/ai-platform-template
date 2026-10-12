@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
-
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.messaging.outbox.store import OutboxStore
@@ -35,7 +33,6 @@ class OutboxAddon:
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
@@ -48,7 +45,7 @@ class OutboxAddon:
             sessionmaker=resources.sessionmaker,
         )
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
+    async def close(self, resources: ApplicationResources) -> None:
         if resources.outbox_store is not None:
             await resources.outbox_store.close()
             resources.outbox_store = None

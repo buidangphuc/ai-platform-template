@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
-
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.objects.gateway import ObjectGateway
@@ -36,13 +34,12 @@ class ObjectAddon:
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
         resources.objects = build_object_gateway(settings)
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
+    async def close(self, resources: ApplicationResources) -> None:
         if resources.objects is not None:
             await resources.objects.close()
             resources.objects = None

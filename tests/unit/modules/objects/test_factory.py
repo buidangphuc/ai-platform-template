@@ -24,11 +24,11 @@ def test_s3_object_gateway_requires_bucket():
 
 
 async def test_object_addon_attaches_gateway_when_enabled():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources()
     addon = ObjectAddon()
 
-    await addon.open(app, resources, _settings(OBJECTS_ENABLED=True))
+    await addon.open(resources, _settings(OBJECTS_ENABLED=True))
 
     assert isinstance(resources.objects, MemoryObjectGateway)
 

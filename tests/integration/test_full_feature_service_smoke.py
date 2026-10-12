@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, Request
 from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
@@ -95,20 +95,20 @@ class _ExampleService:
             "attached": {
                 "idempotency_store": resources.idempotency_store is not None,
                 "outbox_store": resources.outbox_store is not None,
-                "example_service": hasattr(request.app.state, "example_service"),
+                "example_service": _EXAMPLE_ADDON.service is not None,
             },
         }
 
 
 class _ExampleServiceAddon:
     name = "example_service"
+    service: _ExampleService | None = None
 
     def is_enabled(self, settings: Settings) -> bool:
         return True
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
@@ -116,22 +116,25 @@ class _ExampleServiceAddon:
             raise RuntimeError(
                 "_ExampleServiceAddon requires DATABASE_ENABLED and TASKS_ENABLED"
             )
-        app.state.example_service = _ExampleService(opened_at=datetime.now(UTC))
+        self.service = _ExampleService(opened_at=datetime.now(UTC))
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
-        if hasattr(app.state, "example_service"):
-            delattr(app.state, "example_service")
+    async def close(self, resources: ApplicationResources) -> None:
+        self.service = None
+
+
+_EXAMPLE_ADDON = _ExampleServiceAddon()
 
 
 async def _service_smoke(request: Request) -> dict[str, Any]:
-    return await request.app.state.example_service.run(request)
+    assert _EXAMPLE_ADDON.service is not None
+    return await _EXAMPLE_ADDON.service.run(request)
 
 
 async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled():
     app = create_app(
         settings=_settings(),
         init_resources=True,
-        resource_addons=(_ExampleServiceAddon(),),
+        resource_addons=(_EXAMPLE_ADDON,),
     )
     app.add_api_route(
         "/service-smoke",
@@ -186,4 +189,4 @@ async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled
     assert resources_closed.cache is None
     assert resources_closed.objects is None
     assert resources_closed.addons == []
-    assert not hasattr(app.state, "example_service")
+    assert _EXAMPLE_ADDON.service is None

@@ -120,12 +120,12 @@ async def test_mongo_addon_opens_and_closes_gateway(
     )
 
     assert addon.is_enabled(settings) is True
-    await addon.open(FastAPI(), resources, settings)
+    await addon.open(resources, settings)
 
     assert isinstance(resources.mongo, MongoGateway)
     assert resources.mongo.client is client
 
-    await addon.close(FastAPI(), resources)
+    await addon.close(resources)
 
     assert resources.mongo is None
     assert client.closed is True

@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
-
     from app.bootstrap.resources import ApplicationResources
     from app.core.config import Settings
 
@@ -16,12 +14,11 @@ class BootstrapAddon(Protocol):
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None: ...
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None: ...
+    async def close(self, resources: ApplicationResources) -> None: ...
 
 
 def default_resource_addons() -> tuple[BootstrapAddon, ...]:

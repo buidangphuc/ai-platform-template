@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
-
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.cache.gateway import CacheGateway
@@ -47,7 +45,6 @@ class CacheAddon:
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
@@ -57,7 +54,7 @@ class CacheAddon:
             )
         resources.cache = build_cache_gateway(settings, redis=resources.redis)
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
+    async def close(self, resources: ApplicationResources) -> None:
         if resources.cache is not None:
             await resources.cache.close()
             resources.cache = None

@@ -8,15 +8,11 @@ from fastapi.responses import ORJSONResponse
 from app.api.router import build_api_router
 from app.bootstrap.addons import BootstrapAddon, default_resource_addons
 from app.bootstrap.middleware import install_core_middlewares
-from app.bootstrap.resources import (
-    ApplicationResources,
-    close_application_resources,
-    open_application_resources,
-)
+from app.bootstrap.resources import ApplicationResources, build_health_service
 from app.bootstrap.services import (
     CompletionHandlerFactory,
-    compose_business_services,
     default_completion_handler_factory,
+    open_runtime,
 )
 from app.bootstrap.state import get_in_flight_tracker
 from app.core.config import Settings, get_settings
@@ -81,24 +77,25 @@ def _build_lifespan(
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        try:
-            resources = await open_application_resources(
-                app,
-                settings,
-                init_resources=init_resources,
-                addons=addons,
-            )
-            compose_business_services(
+        async with open_runtime(
+            settings,
+            init_resources=init_resources,
+            addons=addons,
+            completion_handler_factory=completion_handler_factory,
+        ) as resources:
+            app.state.resources = resources
+            app.state.health_service = build_health_service(
                 resources,
-                settings,
-                completion_handler_factory=completion_handler_factory,
+                init_resources=init_resources,
             )
-            yield
-        finally:
-            await _drain_in_flight(app, settings.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
-            if init_resources and settings.LANGFUSE_ENABLED:
-                await asyncio.to_thread(_flush_langfuse_client)
-            await close_application_resources(app)
+            try:
+                yield
+            finally:
+                await _drain_in_flight(app, settings.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
+                if init_resources and settings.LANGFUSE_ENABLED:
+                    await asyncio.to_thread(_flush_langfuse_client)
+        app.state.resources = ApplicationResources()
+        app.state.health_service = HealthService(check_external_dependencies=False)
 
     return lifespan
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING
-
-from fastapi import FastAPI
 
 from app.bootstrap.addons import BootstrapAddon
 from app.core.config import Settings
@@ -16,6 +16,7 @@ from app.core.database.engine import (
 from app.core.health import DependencyCheck, HealthService
 from app.core.redis import build_redis_client, check_redis_connection
 from app.modules.messaging.queue.factory import build_queue_gateway
+from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.factory import build_task_store
 from app.modules.messaging.tasks.service import TaskDispatcher, TaskService
 from app.modules.messaging.tasks.store import TaskStore
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
     from app.modules.ai.rag.service import KnowledgeRetrievalService
     from app.modules.business.completions.service import CompletionService
     from app.modules.messaging.outbox.store import OutboxStore
-    from app.modules.messaging.queue.gateway import QueueGateway
     from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
     from app.modules.messaging.webhooks.signing import WebhookSigner
     from app.modules.platform.cache.gateway import CacheGateway
@@ -49,6 +49,7 @@ class TaskServices:
     service: TaskService
     store: TaskStore
     dispatcher: TaskDispatcher
+    queue: QueueGateway
 
 
 @dataclass
@@ -76,59 +77,88 @@ class ApplicationResources:
     webhook_signer: WebhookSigner | None = None
     webhook_dispatcher: HttpWebhookDispatcher | None = None
     webhook_retry_policy: RetryPolicy | None = None
-    # Lifecycle bookkeeping (close in reverse)
+    # Addons opened for this runtime (closed in reverse by the exit stack)
     addons: list[BootstrapAddon] = field(default_factory=list)
 
 
+@asynccontextmanager
 async def open_application_resources(
-    app: FastAPI,
     settings: Settings,
     *,
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...] = (),
-) -> ApplicationResources:
-    resources: ApplicationResources = app.state.resources
+) -> AsyncIterator[ApplicationResources]:
+    """Open every lifecycle resource once; close them in reverse on exit.
+
+    Shared by the API lifespan and the worker, so both run the same resource
+    graph. Each opener registers its own close on the exit stack.
+    """
     validate_core_resource_requirements(
         settings=settings,
         init_resources=init_resources,
     )
+    resources = ApplicationResources()
+    async with AsyncExitStack() as stack:
+        if init_resources:
+            _open_database(resources, settings, stack)
+            _open_redis(resources, settings, stack)
+            _open_queue(resources, settings, stack)
 
-    if init_resources:
-        _open_database(resources, settings)
-        _open_redis(resources, settings)
-        _open_queue(resources, settings)
-        _open_tasks(resources, settings)
+        for addon in addons:
+            if addon.is_enabled(settings):
+                await addon.open(resources, settings)
+                stack.push_async_callback(addon.close, resources)
+                resources.addons.append(addon)
 
-    for addon in addons:
-        if addon.is_enabled(settings):
-            await addon.open(app, resources, settings)
-            resources.addons.append(addon)
+        if init_resources:
+            _open_tasks(resources, settings, stack)
 
-    _install_health_service(app, resources, init_resources=init_resources)
-
-    return resources
+        yield resources
 
 
-def _open_database(resources: ApplicationResources, settings: Settings) -> None:
+def _open_database(
+    resources: ApplicationResources,
+    settings: Settings,
+    stack: AsyncExitStack,
+) -> None:
     if not settings.DATABASE_ENABLED:
         return
-    resources.engine = build_engine(settings)
-    resources.sessionmaker = build_sessionmaker(resources.engine)
+    engine = build_engine(settings)
+    stack.push_async_callback(engine.dispose)
+    resources.engine = engine
+    resources.sessionmaker = build_sessionmaker(engine)
 
 
-def _open_redis(resources: ApplicationResources, settings: Settings) -> None:
+def _open_redis(
+    resources: ApplicationResources,
+    settings: Settings,
+    stack: AsyncExitStack,
+) -> None:
     if not settings.REDIS_ENABLED:
         return
-    resources.redis = build_redis_client(settings)
+    redis = build_redis_client(settings)
+    stack.push_async_callback(redis.aclose)
+    resources.redis = redis
 
 
-def _open_queue(resources: ApplicationResources, settings: Settings) -> None:
+def _open_queue(
+    resources: ApplicationResources,
+    settings: Settings,
+    stack: AsyncExitStack,
+) -> None:
     if not settings.QUEUE_ENABLED:
         return
-    resources.queue_gateway = build_queue_gateway(settings, redis=resources.redis)
+    queue = build_queue_gateway(settings, redis=resources.redis)
+    stack.push_async_callback(queue.close)
+    resources.queue_gateway = queue
 
 
-def _open_tasks(resources: ApplicationResources, settings: Settings) -> None:
+def _open_tasks(
+    resources: ApplicationResources,
+    settings: Settings,
+    stack: AsyncExitStack,
+) -> None:
+    """Runs after addons so the outbox dispatcher reuses OutboxAddon's store."""
     if not settings.TASKS_ENABLED:
         return
     if resources.queue_gateway is None:
@@ -138,22 +168,14 @@ def _open_tasks(resources: ApplicationResources, settings: Settings) -> None:
         sessionmaker=resources.sessionmaker,
         redis=resources.redis,
     )
-
-    outbox_store = None
-    if settings.TASKS_DISPATCH_BACKEND == "outbox":
-        if not settings.OUTBOX_ENABLED:
-            raise RuntimeError("TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED")
-        from app.modules.messaging.outbox.factory import build_outbox_store
-
-        outbox_store = build_outbox_store(settings, sessionmaker=resources.sessionmaker)
-        resources.outbox_store = outbox_store
+    stack.push_async_callback(store.close)
 
     from app.modules.messaging.tasks.factory import build_task_dispatcher
 
     dispatcher = build_task_dispatcher(
         settings,
         queue=resources.queue_gateway,
-        outbox=outbox_store,
+        outbox=resources.outbox_store,
     )
     resources.tasks = TaskServices(
         service=TaskService(
@@ -164,16 +186,16 @@ def _open_tasks(resources: ApplicationResources, settings: Settings) -> None:
         ),
         store=store,
         dispatcher=dispatcher,
+        queue=resources.queue_gateway,
     )
 
 
-def _install_health_service(
-    app: FastAPI,
+def build_health_service(
     resources: ApplicationResources,
     *,
     init_resources: bool,
-) -> None:
-    app.state.health_service = HealthService(
+) -> HealthService:
+    return HealthService(
         check_external_dependencies=init_resources,
         checks=_build_dependency_checks(resources),
     )
@@ -205,6 +227,11 @@ def validate_core_resource_requirements(
         return
     if settings.TASKS_ENABLED and not settings.QUEUE_ENABLED:
         raise RuntimeError("TASKS_ENABLED requires QUEUE_ENABLED")
+    if settings.TASKS_DISPATCH_BACKEND == "outbox" and settings.TASKS_ENABLED:
+        _require_enabled(
+            settings.OUTBOX_ENABLED,
+            "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
+        )
     if settings.QUEUE_ENABLED and settings.QUEUE_BACKEND == "redis":
         _require_enabled(
             settings.REDIS_ENABLED,
@@ -225,26 +252,3 @@ def validate_core_resource_requirements(
 def _require_enabled(enabled: bool, message: str) -> None:
     if not enabled:
         raise RuntimeError(message)
-
-
-async def close_application_resources(app: FastAPI) -> None:
-    resources: ApplicationResources = app.state.resources
-
-    for addon in reversed(resources.addons):
-        await addon.close(app, resources)
-    resources.addons.clear()
-
-    if resources.tasks is not None:
-        await resources.tasks.store.close()
-        resources.tasks = None
-    if resources.queue_gateway is not None:
-        await resources.queue_gateway.close()
-        resources.queue_gateway = None
-    if resources.redis is not None:
-        await resources.redis.aclose()
-        resources.redis = None
-    if resources.engine is not None:
-        await resources.engine.dispose()
-        resources.engine = None
-
-    app.state.health_service = HealthService(check_external_dependencies=False)

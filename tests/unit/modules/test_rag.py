@@ -210,11 +210,11 @@ def test_rag_addon_respects_enabled_flag():
 
 
 async def test_rag_addon_attaches_service_when_enabled():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources()
     addon = RagAddon()
 
-    await addon.open(app, resources, _rag_settings())
+    await addon.open(resources, _rag_settings())
 
     assert isinstance(resources.rag_service, KnowledgeRetrievalService)
 

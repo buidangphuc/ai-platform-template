@@ -56,13 +56,11 @@ def test_build_outbox_store_returns_postgres_store():
 
 
 async def test_outbox_addon_attaches_store_when_enabled():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources(sessionmaker=object())
     addon = OutboxAddon()
 
-    await addon.open(
-        app, resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True)
-    )
+    await addon.open(resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True))
 
     assert isinstance(resources.outbox_store, PostgresOutboxStore)
 

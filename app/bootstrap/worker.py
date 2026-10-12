@@ -1,51 +1,38 @@
+"""Standalone async worker: same resource graph and handler factory as the API."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from app.bootstrap.resources import validate_core_resource_requirements
+from app.bootstrap.addons import BootstrapAddon, default_resource_addons
+from app.bootstrap.resources import (
+    ApplicationResources,
+    TaskServices,
+    validate_core_resource_requirements,
+)
+from app.bootstrap.services import (
+    CompletionHandlerFactory,
+    default_completion_handler_factory,
+    open_runtime,
+)
 from app.core.config import Settings, get_settings
-from app.core.database.engine import build_engine, build_sessionmaker
-from app.core.redis import build_redis_client
-from app.modules.business.completions.handlers.echo import EchoCompletionHandler
-from app.modules.business.completions.ports import CompletionHandler
 from app.modules.business.completions.schemas import CompletionRequest
 from app.modules.business.completions.service import CompletionService
-from app.modules.messaging.queue.factory import build_queue_gateway
 from app.modules.messaging.queue.gateway import QueueMessage
 from app.modules.messaging.queue.worker import AsyncPollingWorker
-from app.modules.messaging.tasks.factory import build_task_store
 from app.modules.messaging.tasks.service import TaskService
-
-if TYPE_CHECKING:
-    from redis.asyncio import Redis
-    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
-    from app.modules.messaging.queue.gateway import QueueGateway
-    from app.modules.messaging.tasks.store import TaskStore
-
-
-@dataclass
-class WorkerResources:
-    queue: QueueGateway
-    store: TaskStore
-    service: TaskService
-    engine: AsyncEngine | None = None
-    sessionmaker: async_sessionmaker[AsyncSession] | None = None
-    redis: Redis | None = None
 
 
 @dataclass
 class WorkerContext:
     settings: Settings
     worker: AsyncPollingWorker
-    handler: CompletionHandler
-    completion_service: CompletionService
-    resources: WorkerResources
+    resources: ApplicationResources
+    tasks: TaskServices
 
 
 def validate_worker_runtime_settings(settings: Settings) -> None:
@@ -56,84 +43,23 @@ def validate_worker_runtime_settings(settings: Settings) -> None:
     validate_core_resource_requirements(settings=settings, init_resources=True)
 
 
-def build_worker_resources(settings: Settings) -> WorkerResources:
-    validate_worker_runtime_settings(settings)
-    engine = None
-    sessionmaker = None
-    redis = None
-
-    if _worker_needs_database(settings):
-        engine = build_engine(settings)
-        sessionmaker = build_sessionmaker(engine)
-
-    if _worker_needs_redis(settings):
-        redis = build_redis_client(settings)
-
-    queue = build_queue_gateway(settings, redis=redis)
-    store = build_task_store(settings, sessionmaker=sessionmaker, redis=redis)
-    from app.modules.messaging.tasks.factory import build_task_dispatcher
-
-    outbox_store = None
-    if settings.TASKS_DISPATCH_BACKEND == "outbox":
-        if not settings.OUTBOX_ENABLED:
-            raise RuntimeError("TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED")
-        from app.modules.messaging.outbox.factory import build_outbox_store
-
-        outbox_store = build_outbox_store(settings, sessionmaker=sessionmaker)
-
-    dispatcher = build_task_dispatcher(settings, queue=queue, outbox=outbox_store)
-    service = TaskService(
-        store=store,
-        dispatcher=dispatcher,
-        ttl_seconds=settings.TASK_TTL_SECONDS,
-        lease_seconds=settings.TASKS_LEASE_SECONDS,
-    )
-    return WorkerResources(
-        engine=engine,
-        sessionmaker=sessionmaker,
-        redis=redis,
-        queue=queue,
-        store=store,
-        service=service,
-    )
-
-
-async def close_worker_resources(resources: WorkerResources) -> None:
-    await resources.queue.close()
-    await resources.store.close()
-    if resources.redis is not None:
-        await resources.redis.aclose()
-    if resources.engine is not None:
-        await resources.engine.dispose()
-
-
-def build_worker_context(
-    settings: Settings | None = None,
+def build_polling_worker(
+    settings: Settings,
     *,
-    handler: CompletionHandler | None = None,
-) -> WorkerContext:
-    resolved = settings or get_settings()
-    resources = build_worker_resources(resolved)
-    resolved_handler: CompletionHandler = handler or EchoCompletionHandler()
-    completion_service = CompletionService(resolved_handler)
-    worker = AsyncPollingWorker(
-        gateway=resources.queue,
+    tasks: TaskServices,
+    completion_service: CompletionService,
+) -> AsyncPollingWorker:
+    return AsyncPollingWorker(
+        gateway=tasks.queue,
         handler=build_worker_message_handler(
-            service=resources.service,
+            service=tasks.service,
             completion_service=completion_service,
         ),
-        max_concurrent=resolved.WORKER_MAX_CONCURRENT,
-        max_attempts=resolved.WORKER_MAX_ATTEMPTS,
-        poll_interval_seconds=resolved.WORKER_POLL_INTERVAL_SECONDS,
-        receive_batch_size=resolved.WORKER_RECEIVE_BATCH_SIZE,
-        receive_wait_seconds=resolved.WORKER_RECEIVE_WAIT_SECONDS,
-    )
-    return WorkerContext(
-        settings=resolved,
-        worker=worker,
-        handler=resolved_handler,
-        completion_service=completion_service,
-        resources=resources,
+        max_concurrent=settings.WORKER_MAX_CONCURRENT,
+        max_attempts=settings.WORKER_MAX_ATTEMPTS,
+        poll_interval_seconds=settings.WORKER_POLL_INTERVAL_SECONDS,
+        receive_batch_size=settings.WORKER_RECEIVE_BATCH_SIZE,
+        receive_wait_seconds=settings.WORKER_RECEIVE_WAIT_SECONDS,
     )
 
 
@@ -179,24 +105,34 @@ def build_worker_message_handler(
 async def worker_context(
     settings: Settings | None = None,
     *,
-    handler: CompletionHandler | None = None,
+    completion_handler_factory: CompletionHandlerFactory = (
+        default_completion_handler_factory
+    ),
+    addons: tuple[BootstrapAddon, ...] | None = None,
 ) -> AsyncIterator[WorkerContext]:
-    ctx = build_worker_context(settings, handler=handler)
-    try:
-        yield ctx
-    finally:
-        await close_worker_resources(ctx.resources)
+    resolved = settings or get_settings()
+    validate_worker_runtime_settings(resolved)
+    async with open_runtime(
+        resolved,
+        init_resources=True,
+        addons=default_resource_addons() if addons is None else addons,
+        completion_handler_factory=completion_handler_factory,
+    ) as resources:
+        # Guaranteed by validate_worker_runtime_settings (TASKS_ENABLED).
+        tasks = resources.tasks
+        if tasks is None:
+            raise RuntimeError("Worker requires TASKS_ENABLED")
+        yield WorkerContext(
+            settings=resolved,
+            worker=build_polling_worker(
+                resolved,
+                tasks=tasks,
+                completion_service=resources.completion_service,
+            ),
+            resources=resources,
+            tasks=tasks,
+        )
 
 
 def check_worker_configuration(settings: Settings | None = None) -> None:
     validate_worker_runtime_settings(settings or get_settings())
-
-
-def _worker_needs_database(settings: Settings) -> bool:
-    return settings.DATABASE_ENABLED and settings.TASK_STORE_BACKEND == "postgres"
-
-
-def _worker_needs_redis(settings: Settings) -> bool:
-    return settings.REDIS_ENABLED and (
-        settings.QUEUE_BACKEND == "redis" or settings.TASK_STORE_BACKEND == "redis"
-    )

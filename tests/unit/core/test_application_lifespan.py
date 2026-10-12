@@ -1,5 +1,6 @@
 import sys
 import types
+from contextlib import asynccontextmanager
 
 import pytest
 from fastapi import FastAPI
@@ -40,14 +41,11 @@ def _bare_app() -> FastAPI:
 
 
 def _patch_resource_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _noop_open(app, settings, *, init_resources, addons=()):
-        return app.state.resources
+    @asynccontextmanager
+    async def _noop_runtime(settings, **_kwargs):
+        yield ApplicationResources()
 
-    async def _noop_close(app):
-        return None
-
-    monkeypatch.setattr(application_module, "open_application_resources", _noop_open)
-    monkeypatch.setattr(application_module, "close_application_resources", _noop_close)
+    monkeypatch.setattr(application_module, "open_runtime", _noop_runtime)
 
 
 async def test_lifespan_flushes_langfuse_client_when_enabled(
@@ -395,7 +393,7 @@ def test_resource_lifecycle_uses_named_open_steps():
         "_open_redis",
         "_open_queue",
         "_open_tasks",
-        "_install_health_service",
+        "build_health_service",
     ):
         assert callable(getattr(resources_module, name))
 

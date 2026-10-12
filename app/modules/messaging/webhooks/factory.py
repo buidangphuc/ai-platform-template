@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import FastAPI
-
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy, TimeoutPolicy
@@ -49,7 +47,6 @@ class WebhookAddon:
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
@@ -58,7 +55,7 @@ class WebhookAddon:
         resources.webhook_dispatcher = components.dispatcher
         resources.webhook_retry_policy = components.retry_policy
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
+    async def close(self, resources: ApplicationResources) -> None:
         if resources.webhook_dispatcher is not None:
             await resources.webhook_dispatcher.close()
         resources.webhook_signer = None

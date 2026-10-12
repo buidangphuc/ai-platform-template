@@ -7,8 +7,6 @@ from app.core.mongo import build_mongo_client
 from app.modules.platform.mongo.gateway import MongoGateway
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
-
     from app.bootstrap.resources import ApplicationResources
 
 
@@ -31,13 +29,12 @@ class MongoAddon:
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
         resources.mongo = build_mongo_gateway(settings)
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
+    async def close(self, resources: ApplicationResources) -> None:
         if resources.mongo is not None:
             await resources.mongo.close()
             resources.mongo = None

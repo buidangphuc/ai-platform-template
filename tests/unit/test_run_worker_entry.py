@@ -14,7 +14,6 @@ import pytest
 from app.bootstrap import worker as worker_module
 from app.bootstrap.worker import (
     WorkerContext,
-    build_worker_context,
     build_worker_message_handler,
     check_worker_configuration,
     validate_worker_runtime_settings,
@@ -42,21 +41,20 @@ def _settings() -> Settings:
     )
 
 
-def test_build_worker_context_wires_all_components():
+async def test_worker_context_wires_all_components():
     from app.modules.messaging.tasks.service import QueueTaskDispatcher
 
-    ctx = build_worker_context(_settings())
+    async with worker_context(_settings()) as ctx:
+        assert isinstance(ctx, WorkerContext)
+        assert isinstance(ctx.worker, AsyncPollingWorker)
+        assert isinstance(ctx.tasks.service, TaskService)
+        assert isinstance(ctx.tasks.dispatcher, QueueTaskDispatcher)
+        assert ctx.tasks.queue is ctx.tasks.dispatcher.queue
+        assert ctx.tasks.store is ctx.tasks.service.store
+        assert ctx.worker.max_concurrent == 4
 
-    assert isinstance(ctx, WorkerContext)
-    assert isinstance(ctx.worker, AsyncPollingWorker)
-    assert isinstance(ctx.resources.service, TaskService)
-    assert isinstance(ctx.resources.service.dispatcher, QueueTaskDispatcher)
-    assert ctx.resources.queue is ctx.resources.service.dispatcher.queue
-    assert ctx.resources.store is ctx.resources.service.store
-    assert ctx.worker.max_concurrent == 4
 
-
-def test_build_worker_context_does_not_open_unused_database_or_redis(monkeypatch):
+async def test_worker_context_does_not_open_disabled_database_or_redis(monkeypatch):
     settings = _settings().model_copy(
         update={
             "DATABASE_ENABLED": False,
@@ -67,36 +65,42 @@ def test_build_worker_context_does_not_open_unused_database_or_redis(monkeypatch
     )
 
     monkeypatch.setattr(
-        "app.bootstrap.worker.build_engine",
+        "app.bootstrap.resources.build_engine",
         lambda _settings: pytest.fail("database should not be opened"),
     )
     monkeypatch.setattr(
-        "app.bootstrap.worker.build_redis_client",
+        "app.bootstrap.resources.build_redis_client",
         lambda _settings: pytest.fail("redis should not be opened"),
     )
 
-    ctx = build_worker_context(settings)
-
-    assert ctx.resources.engine is None
-    assert ctx.resources.redis is None
-    assert ctx.resources.queue is ctx.resources.service.dispatcher.queue
-    assert ctx.resources.store is ctx.resources.service.store
+    async with worker_context(settings) as ctx:
+        assert ctx.resources.engine is None
+        assert ctx.resources.redis is None
 
 
-def test_build_worker_context_uses_default_echo_handler():
-    ctx = build_worker_context(_settings())
-    assert isinstance(ctx.handler, EchoCompletionHandler)
+async def test_worker_context_uses_default_echo_handler():
+    async with worker_context(_settings()) as ctx:
+        assert isinstance(
+            ctx.resources.completion_service.handler, EchoCompletionHandler
+        )
 
 
-def test_build_worker_context_accepts_custom_handler():
+async def test_worker_context_uses_the_same_handler_factory_as_the_api():
     class _CustomHandler:
         async def complete(self, request): ...
 
         async def stream(self, request): ...
 
     custom = _CustomHandler()
-    ctx = build_worker_context(_settings(), handler=custom)
-    assert ctx.handler is custom
+    seen = []
+
+    def factory(resources, settings):
+        seen.append(resources)
+        return custom
+
+    async with worker_context(_settings(), completion_handler_factory=factory) as ctx:
+        assert seen == [ctx.resources]
+        assert ctx.resources.completion_service.handler is custom
 
 
 async def test_worker_message_handler_marks_task_completed():
@@ -138,17 +142,6 @@ async def test_worker_message_handler_marks_task_completed():
             {"content": "echo: hello", "model": "echo", "metadata": {}},
         )
     ]
-
-
-async def test_worker_context_manager_cleans_up_resources():
-    settings = _settings()
-
-    async with worker_context(settings) as ctx:
-        assert ctx.worker is not None
-
-    if ctx.resources.engine is not None:
-        # Engine should be disposed after context exit (subsequent dispose is a no-op).
-        await ctx.resources.engine.dispose()
 
 
 async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
@@ -205,17 +198,17 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
     store = _FakeStore()
 
     monkeypatch.setattr(
-        "app.bootstrap.worker.build_queue_gateway",
+        "app.bootstrap.resources.build_queue_gateway",
         lambda settings, *, redis=None: queue,
     )
     monkeypatch.setattr(
-        "app.bootstrap.worker.build_task_store",
+        "app.bootstrap.resources.build_task_store",
         lambda settings, *, sessionmaker=None, redis=None: store,
     )
 
     async with worker_context(_settings()) as ctx:
-        assert ctx.resources.queue is queue
-        assert ctx.resources.store is store
+        assert ctx.tasks.queue is queue
+        assert ctx.tasks.store is store
 
     assert queue.closed is True
     assert store.closed is True
@@ -225,7 +218,7 @@ async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
     "queue_backend",
     ["memory", "redis"],
 )
-def test_build_worker_context_honors_queue_backend(queue_backend: str):
+async def test_worker_context_honors_queue_backend(queue_backend: str):
     settings = _settings().model_copy(
         update={
             "QUEUE_BACKEND": queue_backend,
@@ -233,8 +226,8 @@ def test_build_worker_context_honors_queue_backend(queue_backend: str):
             "REDIS_ENABLED": queue_backend == "redis",
         }
     )
-    ctx = build_worker_context(settings)
-    assert ctx.worker is not None
+    async with worker_context(settings) as ctx:
+        assert ctx.worker is not None
 
 
 def test_worker_runtime_settings_require_queue_and_tasks_enabled():
@@ -264,7 +257,7 @@ def test_worker_configuration_check_validates_without_opening_sessions(monkeypat
         lambda: settings,
     )
     monkeypatch.setattr(
-        "app.bootstrap.worker.build_engine",
+        "app.bootstrap.resources.build_engine",
         lambda _settings: pytest.fail("database should not be opened"),
     )
 

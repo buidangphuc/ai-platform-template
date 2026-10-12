@@ -29,6 +29,17 @@ Step 1 (this commit):
   `get_app_resources(request.app)` directly.
 - Tests run the app lifespan (`tests/factories.py:api_client_for`), as production does.
 
+Step 2:
+- `open_application_resources` is an async context manager built on `AsyncExitStack`. Each opener
+  registers its own close, so a failed open closes whatever was already opened.
+- `bootstrap/services.py:open_runtime` opens the resources and composes the business services. The API
+  lifespan and the worker both use it, with the same addons and the same handler factory.
+- Addon `open`/`close` drop the unused `app` parameter.
+- Tasks open after the addons and reuse the outbox store from `OutboxAddon`, so there is no second
+  instance.
+- Removed `WorkerResources`, `build_worker_context` and `_worker_needs_*`. This fixes the worker crash
+  with outbox dispatch on a non-Postgres task store.
+
 Later steps (same change, tracked in tasks.md):
 - One `open_core_resources`/`close` built on `AsyncExitStack` and shared by API and worker.
 - Outbox store built once.

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI
-
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.quota.models import QuotaPolicy
@@ -56,7 +54,6 @@ class QuotaAddon:
 
     async def open(
         self,
-        app: FastAPI,
         resources: ApplicationResources,
         settings: Settings,
     ) -> None:
@@ -74,7 +71,7 @@ class QuotaAddon:
             mongo=resources.mongo,
         )
 
-    async def close(self, app: FastAPI, resources: ApplicationResources) -> None:
+    async def close(self, resources: ApplicationResources) -> None:
         if resources.quota is not None:
             await resources.quota.close()
             resources.quota = None

@@ -245,12 +245,11 @@ def test_redis_rate_limiter_requires_redis_client():
 
 
 async def test_rate_limit_addon_attaches_both_limiters_when_enabled():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources(redis=FakeRedis())
     addon = RateLimitAddon()
 
     await addon.open(
-        app,
         resources,
         _settings(
             RATE_LIMIT_ENABLED=True,
@@ -264,12 +263,11 @@ async def test_rate_limit_addon_attaches_both_limiters_when_enabled():
 
 
 async def test_rate_limit_addon_skips_disabled_layers():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources()
     addon = RateLimitAddon()
 
     await addon.open(
-        app,
         resources,
         _settings(RATE_LIMIT_IP_ENABLED=False, RATE_LIMIT_PRINCIPAL_ENABLED=True),
     )
@@ -279,12 +277,12 @@ async def test_rate_limit_addon_skips_disabled_layers():
 
 
 async def test_rate_limit_addon_close_clears_both_limiters():
-    app = FastAPI()
+    FastAPI()
     resources = ApplicationResources()
     addon = RateLimitAddon()
-    await addon.open(app, resources, _settings())
+    await addon.open(resources, _settings())
 
-    await addon.close(app, resources)
+    await addon.close(resources)
 
     assert resources.principal_rate_limiter is None
     assert resources.ip_rate_limiter is None
