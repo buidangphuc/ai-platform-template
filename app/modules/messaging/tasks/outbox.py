@@ -43,9 +43,11 @@ class PostgresTaskOutboxDispatcher:
             session.add(new_task_row(task))
             _task_event(session, task_id=task.id, type=task.type)
 
-    async def reclaim(self, *, now: datetime, limit: int) -> int:
+    async def reclaim(self, *, now: datetime, limit: int, max_attempts: int) -> int:
         async with self.sessionmaker() as session, session.begin():
-            reclaimed = await reclaim_stale_in(session, now=now, limit=limit)
+            reclaimed = await reclaim_stale_in(
+                session, now=now, limit=limit, max_attempts=max_attempts
+            )
             for ref in reclaimed:
                 _task_event(session, task_id=ref.id, type=ref.type)
             return len(reclaimed)

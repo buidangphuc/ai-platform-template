@@ -31,3 +31,5 @@ Owns: `Dockerfile`, `.dockerignore`, `docker-compose.local.yaml`
 - [x] 4.1 Copy `scripts/` into the image (and stop `.dockerignore` excluding it; `scripts/smoke/` stays out)
 - [x] 4.2 `worker` compose service sharing `x-task-env` with the api
 - [x] 4.3 Verify: `docker build -t aipt-test . && docker run --rm aipt-test python -c "import scripts.run_worker"`; `docker compose -f docker-compose.local.yaml config -q`
+
+- Follow-ups (poison-task attempts cap, task/outbox retention loop, redundant quota index) are handled in `openspec/changes/task-outbox-hygiene`.

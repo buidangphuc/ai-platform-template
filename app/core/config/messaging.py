@@ -55,6 +55,13 @@ class MessagingSettingsMixin(BaseModel):
     TASKS_OUTBOX_RELAY_BATCH_SIZE: int = Field(default=100, gt=0)
     TASKS_RECLAIM_INTERVAL_SECONDS: float = Field(default=30.0, gt=0)
     TASKS_RECLAIM_BATCH_SIZE: int = Field(default=100, gt=0)
+    # A task whose lease expired this many times (it claimed, then its worker
+    # died) is failed with "max_attempts_exceeded" instead of being requeued.
+    TASKS_MAX_ATTEMPTS: int = Field(default=5, ge=1, le=100)
+    # Retention: the worker periodically deletes expired tasks and (when the
+    # outbox is enabled) published outbox events older than OUTBOX_RETENTION_SECONDS.
+    TASKS_CLEANUP_INTERVAL_SECONDS: float = Field(default=3600.0, gt=0)
+    TASKS_CLEANUP_BATCH_SIZE: int = Field(default=1000, gt=0)
 
     # Polling worker
     WORKER_MAX_CONCURRENT: int = Field(default=10, gt=0)
@@ -66,6 +73,7 @@ class MessagingSettingsMixin(BaseModel):
     # Outbox (transactional event publication)
     OUTBOX_ENABLED: bool = False
     OUTBOX_BACKEND: OutboxBackend = "postgres"
+    OUTBOX_RETENTION_SECONDS: int = Field(default=604_800, gt=0)
 
     # Webhook delivery
     WEBHOOKS_ENABLED: bool = False

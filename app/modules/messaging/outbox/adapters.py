@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.messaging.outbox.models import OutboxEvent
@@ -104,6 +104,23 @@ class PostgresOutboxStore:
             result = await session.execute(stmt)
             if getattr(result, "rowcount", 0) == 0:
                 raise KeyError(event_id)
+
+    async def delete_published_before(self, before: datetime, *, limit: int) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        old = (
+            select(OutboxEvent.id)
+            .where(
+                OutboxEvent.status == str(OutboxStatus.PUBLISHED),
+                OutboxEvent.published_at < before,
+            )
+            .limit(limit)
+        )
+        async with self.sessionmaker() as session, session.begin():
+            result = await session.execute(
+                delete(OutboxEvent).where(OutboxEvent.id.in_(old))
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
 
     async def close(self) -> None:
         return None

@@ -34,8 +34,11 @@ class TaskDispatcher(Protocol):
         """Persist a new QUEUED task and announce it to the worker."""
         ...
 
-    async def reclaim(self, *, now: datetime, limit: int) -> int:
-        """Requeue expired-lease PROCESSING tasks and announce them again."""
+    async def reclaim(self, *, now: datetime, limit: int, max_attempts: int) -> int:
+        """Settle expired-lease PROCESSING tasks (see ``TaskStore``); announce requeued.
+
+        Returns how many were requeued.
+        """
         ...
 
 
@@ -50,8 +53,10 @@ class QueueTaskDispatcher:
         await self.store.create(task)
         await self._announce(task.id, task.type)
 
-    async def reclaim(self, *, now: datetime, limit: int) -> int:
-        reclaimed = await self.store.reclaim_stale_processing(now=now, limit=limit)
+    async def reclaim(self, *, now: datetime, limit: int, max_attempts: int) -> int:
+        reclaimed = await self.store.reclaim_stale_processing(
+            now=now, limit=limit, max_attempts=max_attempts
+        )
         for ref in reclaimed:
             await self._announce(ref.id, ref.type)
         return len(reclaimed)
@@ -120,5 +125,8 @@ class TaskService:
         *,
         now: datetime | None = None,
         limit: int = 100,
+        max_attempts: int,
     ) -> int:
-        return await self.dispatcher.reclaim(now=now or datetime.now(UTC), limit=limit)
+        return await self.dispatcher.reclaim(
+            now=now or datetime.now(UTC), limit=limit, max_attempts=max_attempts
+        )

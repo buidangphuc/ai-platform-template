@@ -75,6 +75,7 @@ async def test_reclaim_stale_processing_via_service():
 
     reclaimed = await service.reclaim_stale_processing(
         now=datetime.now(UTC) + timedelta(seconds=120),
+        max_attempts=5,
     )
 
     assert reclaimed == 1

@@ -7,7 +7,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.modules.messaging.tasks.models import TaskStatus
-from app.modules.messaging.tasks.store import TaskRecord, TaskRef
+from app.modules.messaging.tasks.store import (
+    MAX_ATTEMPTS_EXCEEDED,
+    TaskRecord,
+    TaskRef,
+)
 
 _UNSET: Any = object()
 
@@ -62,29 +66,38 @@ class InMemoryTaskStore:
         )
 
     async def reclaim_stale_processing(
-        self, *, now: datetime, limit: int = 100
+        self, *, now: datetime, limit: int = 100, max_attempts: int
     ) -> list[TaskRef]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         reclaimed: list[TaskRef] = []
+        settled = 0
         async with self._lock:
             for task in self._tasks.values():
-                if len(reclaimed) >= limit:
+                if settled >= limit:
                     break
-                if _lease_expired(task, now):
+                if not _lease_expired(task, now):
+                    continue
+                settled += 1
+                task.locked_until = None
+                task.updated_at = now
+                if task.attempts >= max_attempts:
+                    task.status = TaskStatus.FAILED
+                    task.error = MAX_ATTEMPTS_EXCEEDED
+                else:
                     task.status = TaskStatus.QUEUED
-                    task.locked_until = None
-                    task.updated_at = now
                     reclaimed.append(TaskRef(id=task.id, type=task.type))
         return reclaimed
 
-    async def delete_expired(self, before: datetime) -> int:
+    async def delete_expired(self, before: datetime, *, limit: int) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
         async with self._lock:
             stale = [
                 task_id
                 for task_id, task in self._tasks.items()
                 if task.expires_at <= before
-            ]
+            ][:limit]
             for task_id in stale:
                 self._tasks.pop(task_id, None)
             return len(stale)

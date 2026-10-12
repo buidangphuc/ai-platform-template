@@ -65,4 +65,11 @@ class OutboxStore(Protocol):
         available_at: datetime | None = None,
     ) -> None: ...
 
+    async def delete_published_before(self, before: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` PUBLISHED events published before ``before``.
+
+        Returns the number deleted; pending and failed events are never touched.
+        """
+        ...
+
     async def close(self) -> None: ...

@@ -5,11 +5,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, case, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.messaging.tasks.models import Task, TaskStatus
-from app.modules.messaging.tasks.store import TaskRecord, TaskRef
+from app.modules.messaging.tasks.store import (
+    MAX_ATTEMPTS_EXCEEDED,
+    TaskRecord,
+    TaskRef,
+)
 
 
 class PostgresTaskStore:
@@ -76,14 +80,19 @@ class PostgresTaskStore:
         )
 
     async def reclaim_stale_processing(
-        self, *, now: datetime, limit: int = 100
+        self, *, now: datetime, limit: int = 100, max_attempts: int
     ) -> list[TaskRef]:
         async with self.sessionmaker() as session, session.begin():
-            return await reclaim_stale_in(session, now=now, limit=limit)
+            return await reclaim_stale_in(
+                session, now=now, limit=limit, max_attempts=max_attempts
+            )
 
-    async def delete_expired(self, before: datetime) -> int:
+    async def delete_expired(self, before: datetime, *, limit: int) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        expired = select(Task.id).where(Task.expires_at <= before).limit(limit)
         async with self.sessionmaker() as session, session.begin():
-            stmt = delete(Task).where(Task.expires_at <= before)
+            stmt = delete(Task).where(Task.id.in_(expired))
             result = await session.execute(stmt)
             return int(getattr(result, "rowcount", 0) or 0)
 
@@ -130,9 +139,12 @@ def new_task_row(task: TaskRecord) -> Task:
 
 
 async def reclaim_stale_in(
-    session: AsyncSession, *, now: datetime, limit: int
+    session: AsyncSession, *, now: datetime, limit: int, max_attempts: int
 ) -> list[TaskRef]:
-    """Requeue up to ``limit`` expired-lease tasks inside the caller's transaction.
+    """Settle up to ``limit`` expired-lease tasks inside the caller's transaction.
+
+    Tasks already claimed ``max_attempts`` times become FAILED in the same
+    statement; only the requeued ones are returned (and need announcing).
 
     The bounded sub-select with ``SKIP LOCKED`` keeps concurrent reclaimers from
     contending on (or double-claiming) the same rows.
@@ -150,15 +162,26 @@ async def reclaim_stale_in(
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
+    exhausted = Task.attempts >= max_attempts
     stmt = (
         update(Task)
         .where(Task.id.in_(stale))
-        .values(status=str(TaskStatus.QUEUED), locked_until=None)
-        .returning(Task.id, Task.type)
+        .values(
+            status=case(
+                (exhausted, str(TaskStatus.FAILED)), else_=str(TaskStatus.QUEUED)
+            ),
+            error=case((exhausted, MAX_ATTEMPTS_EXCEEDED), else_=Task.error),
+            locked_until=None,
+        )
+        .returning(Task.id, Task.type, Task.status)
         .execution_options(synchronize_session=False)
     )
     rows = (await session.execute(stmt)).all()
-    return [TaskRef(id=row.id, type=row.type) for row in rows]
+    return [
+        TaskRef(id=row.id, type=row.type)
+        for row in rows
+        if row.status == str(TaskStatus.QUEUED)
+    ]
 
 
 def _to_record(task: Task) -> TaskRecord:

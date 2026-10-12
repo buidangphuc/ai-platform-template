@@ -61,15 +61,15 @@ async def test_outbox_dispatch_writes_task_and_event_on_the_shared_sessionmaker(
         assert dispatcher.sessionmaker is resources.sessionmaker
 
 
-async def test_worker_owns_the_outbox_relay_and_reclaim_loops():
+async def test_worker_owns_the_outbox_relay_reclaim_and_cleanup_loops():
     async with worker_context(_outbox_settings()) as ctx:
-        assert len(ctx.loops) == 2
+        assert len(ctx.loops) == 3
 
 
-async def test_worker_with_queue_dispatch_runs_only_the_reclaim_loop():
+async def test_worker_with_queue_dispatch_runs_reclaim_and_cleanup_only():
     settings = _outbox_settings().model_copy(update={"TASKS_DISPATCH_BACKEND": "queue"})
     async with worker_context(settings) as ctx:
-        assert len(ctx.loops) == 1
+        assert len(ctx.loops) == 2
 
 
 async def test_addons_close_in_reverse_order():

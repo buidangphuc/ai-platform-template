@@ -47,7 +47,8 @@ class QuotaReservationRecord(Base, TimestampMixin):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    subject_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # No index=True on subject_id: uq_quota_reservations_idempotency leads with it.
+    subject_id: Mapped[str] = mapped_column(String(255), nullable=False)
     resource: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     window_key: Mapped[str] = mapped_column(String(64), nullable=False)
     cost: Mapped[int] = mapped_column(Integer, nullable=False)

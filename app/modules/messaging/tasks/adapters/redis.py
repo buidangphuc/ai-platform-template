@@ -15,7 +15,11 @@ from redis.asyncio import Redis
 from redis.exceptions import WatchError
 
 from app.modules.messaging.tasks.models import TaskStatus
-from app.modules.messaging.tasks.store import TaskRecord, TaskRef
+from app.modules.messaging.tasks.store import (
+    MAX_ATTEMPTS_EXCEEDED,
+    TaskRecord,
+    TaskRef,
+)
 
 
 class RedisTaskStore:
@@ -72,40 +76,48 @@ class RedisTaskStore:
         )
 
     async def reclaim_stale_processing(
-        self, *, now: datetime, limit: int = 100
+        self, *, now: datetime, limit: int = 100, max_attempts: int
     ) -> list[TaskRef]:
         if limit <= 0:
             raise ValueError("limit must be positive")
         reclaimed: list[TaskRef] = []
+        settled = 0
 
         def reclaim(task: TaskRecord) -> bool:
             if not _lease_expired(task, now):
                 return False
-            task.status = TaskStatus.QUEUED
             task.locked_until = None
             task.updated_at = now
+            if task.attempts >= max_attempts:
+                task.status = TaskStatus.FAILED
+                task.error = MAX_ATTEMPTS_EXCEEDED
+            else:
+                task.status = TaskStatus.QUEUED
             return True
 
         # Best-effort scan; Redis-backed task store is meant for low-volume
         # template demo so SCAN is acceptable. Production volumes should swap
         # to Postgres.
         cursor = 0
-        while len(reclaimed) < limit:
+        while settled < limit:
             cursor, keys = await self.redis.scan(
                 cursor=cursor, match=f"{self.prefix}:*", count=200
             )
             for raw_key in keys:
-                if len(reclaimed) >= limit:
+                if settled >= limit:
                     break
                 key = _decode(raw_key)
                 task, applied = await self._transition(key, reclaim)
-                if task is not None and applied:
+                if task is None or not applied:
+                    continue
+                settled += 1
+                if task.status == TaskStatus.QUEUED:
                     reclaimed.append(TaskRef(id=task.id, type=task.type))
             if cursor == 0:
                 break
         return reclaimed
 
-    async def delete_expired(self, before: datetime) -> int:
+    async def delete_expired(self, before: datetime, *, limit: int) -> int:
         return 0  # Redis TTL handles expiry automatically
 
     async def close(self) -> None:

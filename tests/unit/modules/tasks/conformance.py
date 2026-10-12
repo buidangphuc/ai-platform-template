@@ -9,7 +9,11 @@ from uuid import uuid4
 import pytest
 
 from app.modules.messaging.tasks.models import TaskStatus
-from app.modules.messaging.tasks.store import TaskRecord, TaskStore
+from app.modules.messaging.tasks.store import (
+    MAX_ATTEMPTS_EXCEEDED,
+    TaskRecord,
+    TaskStore,
+)
 
 StoreFactory = Callable[[], Awaitable[TaskStore]]
 
@@ -71,7 +75,7 @@ class TaskStoreConformance:
 
         # Forward "now" past the lease window
         future_now = datetime.now(UTC) + timedelta(seconds=120)
-        reclaimed = await store.reclaim_stale_processing(now=future_now)
+        reclaimed = await store.reclaim_stale_processing(now=future_now, max_attempts=5)
 
         assert [ref.id for ref in reclaimed] == [task.id]
         assert reclaimed[0].type == "completion"
@@ -107,7 +111,7 @@ class TaskStoreConformance:
         await store.create(fresh)
         await store.create(stale)
 
-        deleted = await store.delete_expired(before=now)
+        deleted = await store.delete_expired(before=now, limit=100)
         assert deleted >= 1
         assert await store.get(stale.id) is None
         assert await store.get(fresh.id) is not None
@@ -166,8 +170,10 @@ class TaskStoreConformance:
         await store.mark_processing(live.id, lease_seconds=3600)
 
         later = datetime.now(UTC) + timedelta(seconds=120)
-        first = await store.reclaim_stale_processing(now=later, limit=2)
-        second = await store.reclaim_stale_processing(now=later, limit=2)
+        first = await store.reclaim_stale_processing(now=later, limit=2, max_attempts=5)
+        second = await store.reclaim_stale_processing(
+            now=later, limit=2, max_attempts=5
+        )
 
         assert len(first) == 2
         assert len(second) == 1
@@ -175,3 +181,62 @@ class TaskStoreConformance:
         still_live = await store.get(live.id)
         assert still_live is not None
         assert still_live.status == TaskStatus.PROCESSING
+
+    async def test_reclaim_fails_a_task_that_used_up_its_attempts(
+        self, store: TaskStore
+    ):
+        poison = _make_task()
+        healthy = _make_task()
+        for task in (poison, healthy):
+            await store.create(task)
+        await store.mark_processing(healthy.id, lease_seconds=1)  # attempts = 1
+        start = datetime.now(UTC) - timedelta(seconds=60)
+        for n in range(3):  # claimed, "crashed", lease expired, claimed again
+            await store.mark_processing(
+                poison.id, lease_seconds=1, now=start + timedelta(seconds=10 * n)
+            )
+
+        later = datetime.now(UTC) + timedelta(seconds=120)
+        reclaimed = await store.reclaim_stale_processing(now=later, max_attempts=3)
+
+        assert [ref.id for ref in reclaimed] == [healthy.id]
+        failed = await store.get(poison.id)
+        assert failed is not None
+        assert failed.status == TaskStatus.FAILED
+        assert failed.error == MAX_ATTEMPTS_EXCEEDED
+        assert failed.locked_until is None
+        requeued = await store.get(healthy.id)
+        assert requeued is not None and requeued.status == TaskStatus.QUEUED
+        # Terminal: a later pass and a late claim both leave it alone.
+        assert await store.reclaim_stale_processing(now=later, max_attempts=3) == []
+        assert await store.mark_processing(poison.id, lease_seconds=60) is False
+
+    async def test_reclaim_limit_counts_failed_tasks_too(self, store: TaskStore):
+        tasks = [_make_task() for _ in range(3)]
+        for task in tasks:
+            await store.create(task)
+            await store.mark_processing(task.id, lease_seconds=1)
+
+        later = datetime.now(UTC) + timedelta(seconds=120)
+        assert (
+            await store.reclaim_stale_processing(now=later, limit=2, max_attempts=1)
+            == []
+        )
+        assert (
+            await store.reclaim_stale_processing(now=later, limit=2, max_attempts=1)
+            == []
+        )
+        statuses = [(await store.get(t.id)).status for t in tasks]  # type: ignore[union-attr]
+        assert statuses == [TaskStatus.FAILED] * 3
+
+    async def test_delete_expired_respects_the_batch_limit(self, store: TaskStore):
+        now = datetime.now(UTC)
+        stale = [_make_task(expires_at=now - timedelta(seconds=1)) for _ in range(3)]
+        for task in stale:
+            await store.create(task)
+
+        first = await store.delete_expired(before=now, limit=2)
+        second = await store.delete_expired(before=now, limit=2)
+
+        # Redis expires by TTL and reports 0 (see its module docstring).
+        assert (first, second) in {(2, 1), (0, 0)}

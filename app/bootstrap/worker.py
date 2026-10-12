@@ -28,7 +28,11 @@ from app.modules.messaging.queue.worker import (
 )
 from app.modules.messaging.tasks.message import TaskMessage
 from app.modules.messaging.tasks.outbox import TASK_EVENT_PREFIX, TaskQueueOutboxSink
-from app.modules.messaging.tasks.relay import run_outbox_relay, run_reclaim_loop
+from app.modules.messaging.tasks.relay import (
+    run_cleanup_loop,
+    run_outbox_relay,
+    run_reclaim_loop,
+)
 from app.modules.messaging.tasks.service import TaskService
 
 # A background loop runs until the stop event is set.
@@ -146,12 +150,23 @@ def build_background_loops(
             tasks.service,
             interval_seconds=settings.TASKS_RECLAIM_INTERVAL_SECONDS,
             batch_size=settings.TASKS_RECLAIM_BATCH_SIZE,
+            max_attempts=settings.TASKS_MAX_ATTEMPTS,
+            stop=stop,
+        )
+
+    async def cleanup(stop: asyncio.Event) -> None:
+        await run_cleanup_loop(
+            tasks.store,
+            resources.outbox_store,
+            interval_seconds=settings.TASKS_CLEANUP_INTERVAL_SECONDS,
+            batch_size=settings.TASKS_CLEANUP_BATCH_SIZE,
+            outbox_retention_seconds=settings.OUTBOX_RETENTION_SECONDS,
             stop=stop,
         )
 
     match settings.TASKS_DISPATCH_BACKEND:
         case "queue":
-            return (reclaim,)
+            return (reclaim, cleanup)
         case "outbox":
             publisher = OutboxPublisher(
                 store=opened(resources.outbox_store, "outbox store"),
@@ -167,7 +182,7 @@ def build_background_loops(
                     stop=stop,
                 )
 
-            return (relay, reclaim)
+            return (relay, reclaim, cleanup)
 
 
 @asynccontextmanager

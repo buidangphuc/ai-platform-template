@@ -29,6 +29,11 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+# Stored as ``TaskRecord.error`` when reclaim gives up on a task that keeps
+# losing its lease (a worker crash every time). A code, never exception text.
+MAX_ATTEMPTS_EXCEEDED = "max_attempts_exceeded"
+
+
 @dataclass(frozen=True)
 class TaskRef:
     """Just enough of a task to announce it to a worker again."""
@@ -63,14 +68,19 @@ class TaskStore(Protocol):
     async def mark_failed(self, task_id: str, error: str) -> None: ...
 
     async def reclaim_stale_processing(
-        self, *, now: datetime, limit: int = 100
+        self, *, now: datetime, limit: int = 100, max_attempts: int
     ) -> list[TaskRef]:
-        """Reset up to ``limit`` PROCESSING tasks whose lease expired to QUEUED.
+        """Settle up to ``limit`` PROCESSING tasks whose lease expired.
 
-        Returns the reclaimed tasks so the caller can dispatch them again.
+        A task that has already been claimed ``max_attempts`` times becomes
+        FAILED with error ``MAX_ATTEMPTS_EXCEEDED`` (it keeps crashing its
+        worker); every other one goes back to QUEUED. Returns only the requeued
+        tasks, which the caller must announce again.
         """
         ...
 
-    async def delete_expired(self, before: datetime) -> int: ...
+    async def delete_expired(self, before: datetime, *, limit: int) -> int:
+        """Delete up to ``limit`` tasks expired at ``before``; returns the count."""
+        ...
 
     async def close(self) -> None: ...
