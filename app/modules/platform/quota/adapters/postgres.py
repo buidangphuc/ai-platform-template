@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import case, delete, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -30,65 +30,89 @@ class PostgresQuotaStore:
                 return await _to_reservation(session, existing)
 
             await _ensure_counter(session, command)
+            inserted = await session.scalar(
+                pg_insert(QuotaReservationRecord)
+                .values(
+                    id=command.reservation_id,
+                    subject_id=command.subject_id,
+                    resource=command.resource,
+                    window_key=command.window_key,
+                    cost=command.cost,
+                    status=QuotaReservationStatus.RESERVED.value,
+                    idempotency_key=command.idempotency_key,
+                    reset_at=command.reset_at,
+                )
+                .on_conflict_do_nothing()
+                .returning(QuotaReservationRecord.id)
+            )
+            if inserted is None:
+                # A concurrent request with the same idempotency key won the
+                # race; the counter has not been touched yet, so just return it.
+                existing = await _find_idempotent_reservation(session, command)
+                if existing is None:
+                    raise RuntimeError("quota reservation conflict without a winner")
+                return await _to_reservation(session, existing)
+
             usage = await _try_increment_counter(session, command)
             if usage is None:
+                await session.execute(
+                    delete(QuotaReservationRecord).where(
+                        QuotaReservationRecord.id == command.reservation_id
+                    )
+                )
                 return None
 
-            record = QuotaReservationRecord(
+            return QuotaReservation(
                 id=command.reservation_id,
                 subject_id=command.subject_id,
                 resource=command.resource,
                 window_key=command.window_key,
                 cost=command.cost,
-                status=QuotaReservationStatus.RESERVED.value,
-                idempotency_key=command.idempotency_key,
-                reset_at=command.reset_at,
-            )
-            session.add(record)
-            await session.flush()
-            return QuotaReservation(
-                id=record.id,
-                subject_id=record.subject_id,
-                resource=record.resource,
-                window_key=record.window_key,
-                cost=record.cost,
-                status=QuotaReservationStatus(record.status),
+                status=QuotaReservationStatus.RESERVED,
                 usage=usage,
-                idempotency_key=record.idempotency_key,
+                idempotency_key=command.idempotency_key,
             )
 
     async def finalize(self, reservation_id: str) -> QuotaUsage:
         async with self.sessionmaker() as session, session.begin():
+            claimed = await _claim_reserved(
+                session, reservation_id, QuotaReservationStatus.FINALIZED
+            )
+            if claimed is not None:
+                return await _usage_for_reservation(session, claimed)
             record = await _require_reservation(session, reservation_id)
-            status = QuotaReservationStatus(record.status)
-            if status == QuotaReservationStatus.REFUNDED:
+            if QuotaReservationStatus(record.status) == QuotaReservationStatus.REFUNDED:
                 raise ValueError("refunded reservation cannot be finalized")
-            if status == QuotaReservationStatus.RESERVED:
-                record.status = QuotaReservationStatus.FINALIZED.value
-                await session.flush()
             return await _usage_for_reservation(session, record)
 
     async def refund(self, reservation_id: str) -> QuotaUsage:
         async with self.sessionmaker() as session, session.begin():
-            record = await _require_reservation(session, reservation_id)
-            status = QuotaReservationStatus(record.status)
-            if status == QuotaReservationStatus.FINALIZED:
-                raise ValueError("finalized reservation cannot be refunded")
-            if status == QuotaReservationStatus.REFUNDED:
+            claimed = await _claim_reserved(
+                session, reservation_id, QuotaReservationStatus.REFUNDED
+            )
+            if claimed is None:
+                record = await _require_reservation(session, reservation_id)
+                if (
+                    QuotaReservationStatus(record.status)
+                    == QuotaReservationStatus.FINALIZED
+                ):
+                    raise ValueError("finalized reservation cannot be refunded")
                 return await _usage_for_reservation(session, record)
 
+            # Only the transaction that flipped reserved -> refunded gets here,
+            # so the counter is decremented exactly once.
             statement = (
                 update(QuotaCounter)
                 .where(
-                    QuotaCounter.subject_id == record.subject_id,
-                    QuotaCounter.resource == record.resource,
-                    QuotaCounter.window_key == record.window_key,
+                    QuotaCounter.subject_id == claimed.subject_id,
+                    QuotaCounter.resource == claimed.resource,
+                    QuotaCounter.window_key == claimed.window_key,
                 )
                 .values(
                     used=case(
                         (
-                            QuotaCounter.used >= record.cost,
-                            QuotaCounter.used - record.cost,
+                            QuotaCounter.used >= claimed.cost,
+                            QuotaCounter.used - claimed.cost,
                         ),
                         else_=0,
                     )
@@ -103,10 +127,7 @@ class PostgresQuotaStore:
                 )
             )
             result = await session.execute(statement)
-            row = result.one()
-            record.status = QuotaReservationStatus.REFUNDED.value
-            await session.flush()
-            return _usage_from_row(row)
+            return _usage_from_row(result.one())
 
     async def get_usage(self, query: QuotaUsageQuery) -> QuotaUsage:
         async with self.sessionmaker() as session:
@@ -192,8 +213,11 @@ async def _ensure_counter(session: AsyncSession, command: ReserveQuota) -> None:
         .on_conflict_do_update(
             index_elements=["subject_id", "resource", "window_key"],
             set_={
-                "limit": command.limit,
+                # Keys are column names (the ``limit`` attribute maps to
+                # ``quota_limit``).
+                "quota_limit": command.limit,
                 "reset_at": command.reset_at,
+                "updated_at": func.now(),
             },
         )
     )
@@ -242,6 +266,29 @@ async def _find_idempotent_reservation(
         QuotaReservationRecord.resource == command.resource,
         QuotaReservationRecord.window_key == command.window_key,
         QuotaReservationRecord.idempotency_key == command.idempotency_key,
+    )
+    return await session.scalar(statement)
+
+
+async def _claim_reserved(
+    session: AsyncSession,
+    reservation_id: str,
+    new_status: QuotaReservationStatus,
+) -> QuotaReservationRecord | None:
+    """Atomically move ``reserved`` -> ``new_status``; None if not reserved.
+
+    A concurrent claimer blocks on the row lock, then re-evaluates the
+    ``status = 'reserved'`` predicate and matches nothing.
+    """
+    statement = (
+        update(QuotaReservationRecord)
+        .where(
+            QuotaReservationRecord.id == reservation_id,
+            QuotaReservationRecord.status == QuotaReservationStatus.RESERVED.value,
+        )
+        .values(status=new_status.value)
+        .returning(QuotaReservationRecord)
+        .execution_options(synchronize_session=False)
     )
     return await session.scalar(statement)
 

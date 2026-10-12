@@ -12,6 +12,7 @@ from app.modules.messaging.outbox import models as outbox_models  # noqa: F401
 from app.modules.messaging.tasks import models as tasks_models  # noqa: F401
 from app.modules.platform.audit import models as audit_models  # noqa: F401
 from app.modules.platform.idempotency import models as idempotency_models  # noqa: F401
+from app.modules.platform.quota import records as quota_records  # noqa: F401
 
 config = context.config
 
