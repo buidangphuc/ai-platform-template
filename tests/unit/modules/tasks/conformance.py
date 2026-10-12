@@ -58,6 +58,32 @@ class TaskStoreConformance:
         assert fetched is not None
         assert fetched.principal_id == "alice"
 
+    async def test_request_id_round_trips_and_defaults_to_none(self, store: TaskStore):
+        traced = _make_task(request_id="req_abc")
+        untraced = _make_task()
+        await store.create(traced)
+        await store.create(untraced)
+
+        fetched_traced = await store.get(traced.id)
+        fetched_untraced = await store.get(untraced.id)
+        assert fetched_traced is not None and fetched_traced.request_id == "req_abc"
+        assert fetched_untraced is not None and fetched_untraced.request_id is None
+
+    async def test_reclaim_returns_the_submitting_request_id(self, store: TaskStore):
+        traced = _make_task(request_id="req_abc")
+        untraced = _make_task()
+        for task in (traced, untraced):
+            await store.create(task)
+            await store.mark_processing(task.id, lease_seconds=1)
+
+        later = datetime.now(UTC) + timedelta(seconds=120)
+        reclaimed = await store.reclaim_stale_processing(now=later, max_attempts=5)
+
+        assert {ref.id: ref.request_id for ref in reclaimed} == {
+            traced.id: "req_abc",
+            untraced.id: None,
+        }
+
     async def test_get_scoped_to_principal_hides_other_owners_tasks(
         self, store: TaskStore
     ):

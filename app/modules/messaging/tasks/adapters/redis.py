@@ -117,7 +117,9 @@ class RedisTaskStore:
                     continue
                 settled += 1
                 if task.status == TaskStatus.QUEUED:
-                    reclaimed.append(TaskRef(id=task.id, type=task.type))
+                    reclaimed.append(
+                        TaskRef(id=task.id, type=task.type, request_id=task.request_id)
+                    )
             if cursor == 0:
                 break
         return reclaimed
@@ -194,6 +196,7 @@ def _serialize(task: TaskRecord) -> str:
         "id": task.id,
         "type": task.type,
         "principal_id": task.principal_id,
+        "request_id": task.request_id,
         "status": str(task.status),
         "payload": task.payload,
         "result": task.result,
@@ -213,6 +216,7 @@ def _deserialize(raw: str) -> TaskRecord:
         id=data["id"],
         type=data["type"],
         principal_id=data.get("principal_id", ""),
+        request_id=data.get("request_id"),
         status=TaskStatus(data["status"]),
         payload=data["payload"],
         result=data.get("result"),

@@ -93,7 +93,9 @@ class InMemoryTaskStore:
                     task.error = MAX_ATTEMPTS_EXCEEDED
                 else:
                     task.status = TaskStatus.QUEUED
-                    reclaimed.append(TaskRef(id=task.id, type=task.type))
+                    reclaimed.append(
+                        TaskRef(id=task.id, type=task.type, request_id=task.request_id)
+                    )
         return reclaimed
 
     async def delete_expired(self, before: datetime, *, limit: int) -> int:

@@ -30,6 +30,9 @@ class TaskRecord:
     # Authenticated subject that submitted the task. "" only for rows created
     # before ownership existed (no principal matches it, so the API never serves them).
     principal_id: str = ""
+    # Id of the HTTP request that submitted the task; reclaim re-announces with it
+    # so worker logs of a retry still correlate. ``None`` when unknown.
+    request_id: str | None = None
 
 
 # Stored as ``TaskRecord.error`` when reclaim gives up on a task that keeps
@@ -43,6 +46,7 @@ class TaskRef:
 
     id: str
     type: str
+    request_id: str | None = None
 
 
 class TaskStore(Protocol):

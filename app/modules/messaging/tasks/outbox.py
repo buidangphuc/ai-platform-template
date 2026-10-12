@@ -30,7 +30,7 @@ def _task_event(
     *,
     task_id: str,
     type: str,
-    request_id: str | None = None,
+    request_id: str | None,
 ) -> None:
     message = TaskMessage(task_id=task_id, type=type, request_id=request_id)
     session.add(
@@ -44,10 +44,12 @@ class PostgresTaskOutboxDispatcher:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self.sessionmaker = sessionmaker
 
-    async def submit(self, task: TaskRecord, *, request_id: str | None = None) -> None:
+    async def submit(self, task: TaskRecord) -> None:
         async with self.sessionmaker() as session, session.begin():
             session.add(new_task_row(task))
-            _task_event(session, task_id=task.id, type=task.type, request_id=request_id)
+            _task_event(
+                session, task_id=task.id, type=task.type, request_id=task.request_id
+            )
 
     async def reclaim(self, *, now: datetime, limit: int, max_attempts: int) -> int:
         async with self.sessionmaker() as session, session.begin():
@@ -55,7 +57,9 @@ class PostgresTaskOutboxDispatcher:
                 session, now=now, limit=limit, max_attempts=max_attempts
             )
             for ref in reclaimed:
-                _task_event(session, task_id=ref.id, type=ref.type)
+                _task_event(
+                    session, task_id=ref.id, type=ref.type, request_id=ref.request_id
+                )
             return len(reclaimed)
 
 

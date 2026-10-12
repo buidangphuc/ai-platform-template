@@ -140,3 +140,42 @@ async def test_submit_forwards_request_id_into_the_queue_message():
         "type": "completion",
         "request_id": "req_abc",
     }
+
+
+async def test_submit_persists_the_request_id_on_the_task():
+    service, _, store = _service()
+
+    task = await service.submit(
+        type="completion", payload={}, principal_id="alice", request_id="req_abc"
+    )
+
+    assert task.request_id == "req_abc"
+    stored = await store.get(task.id)
+    assert stored is not None and stored.request_id == "req_abc"
+
+
+async def test_reclaimed_task_is_announced_with_its_original_request_id():
+    store = InMemoryTaskStore()
+    queue = InMemoryQueueGateway()
+    service = TaskService(
+        store=store,
+        dispatcher=QueueTaskDispatcher(store, queue),
+        ttl_seconds=3600,
+        lease_seconds=1,
+    )
+    task = await service.submit(
+        type="completion", payload={}, principal_id="alice", request_id="req_abc"
+    )
+    await service.mark_processing(task.id)  # worker "crashes" holding the lease
+    await queue.receive()  # drain the submit announcement
+
+    await service.reclaim_stale_processing(
+        now=datetime.now(UTC) + timedelta(seconds=120), max_attempts=5
+    )
+
+    [message] = await queue.receive()
+    assert message.body == {
+        "task_id": task.id,
+        "type": "completion",
+        "request_id": "req_abc",
+    }

@@ -134,6 +134,7 @@ def new_task_row(task: TaskRecord) -> Task:
         id=task.id,
         type=task.type,
         principal_id=task.principal_id,
+        request_id=task.request_id,
         status=str(task.status),
         payload=task.payload,
         result=task.result,
@@ -179,12 +180,12 @@ async def reclaim_stale_in(
             error=case((exhausted, MAX_ATTEMPTS_EXCEEDED), else_=Task.error),
             locked_until=None,
         )
-        .returning(Task.id, Task.type, Task.status)
+        .returning(Task.id, Task.type, Task.status, Task.request_id)
         .execution_options(synchronize_session=False)
     )
     rows = (await session.execute(stmt)).all()
     return [
-        TaskRef(id=row.id, type=row.type)
+        TaskRef(id=row.id, type=row.type, request_id=row.request_id)
         for row in rows
         if row.status == str(TaskStatus.QUEUED)
     ]
@@ -195,6 +196,7 @@ def _to_record(task: Task) -> TaskRecord:
         id=task.id,
         type=task.type,
         principal_id=task.principal_id,
+        request_id=task.request_id,
         status=TaskStatus(task.status),
         payload=task.payload,
         result=task.result,

@@ -165,6 +165,35 @@ async def test_reclaimed_task_is_announced_again_in_the_same_transaction(session
     assert refreshed is not None and refreshed.status == TaskStatus.QUEUED
 
 
+async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
+    sessionmaker,
+):
+    stack = _Stack(sessionmaker)
+    task = await stack.service.submit(
+        type="completion",
+        payload=PAYLOAD,
+        principal_id="alice",
+        request_id="req_abc",
+    )
+    await stack.publisher.publish_pending()
+    [first] = await stack.queue.receive()
+    await stack.queue.ack(first)
+    assert await stack.service.mark_processing(task.id) is True  # worker "crashes"
+
+    reclaimed = await stack.service.reclaim_stale_processing(
+        now=datetime.now(UTC) + timedelta(seconds=60), max_attempts=5
+    )
+    assert reclaimed == 1
+    await stack.publisher.publish_pending()
+
+    [again] = await stack.queue.receive()
+    assert again.body == {
+        "task_id": task.id,
+        "type": "completion",
+        "request_id": "req_abc",
+    }
+
+
 async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
     sessionmaker,
 ):

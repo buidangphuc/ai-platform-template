@@ -62,6 +62,7 @@ class Task(Base, TimestampMixin):
     principal_id: Mapped[str] = mapped_column(
         String(255), nullable=False, default="", server_default=""
     )
+    request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB_TYPE, nullable=False)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB_TYPE, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
