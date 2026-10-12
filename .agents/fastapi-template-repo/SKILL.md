@@ -75,6 +75,45 @@ Use this sequence:
 
 Adding a new endpoint usually should not touch bootstrap. Touch bootstrap only when the endpoint introduces a new app-level service or a new lifecycle-owned runtime dependency.
 
+## Canonical Feature: completions
+
+`app/api/v1/completions/` is the reference. For a new feature `<domain>`, copy its shape; reuse the
+service rules above (`<Domain>Service`, one bootstrap instance, `get_app_resources`).
+
+- API package `app/api/v1/<domain>/`: an empty `__init__.py` and `router.py`, which declares
+  `APIRouter(prefix=..., tags=..., dependencies=[Depends(require_principal)])` once. A feature behind a
+  `*_ENABLED` flag adds a second file (e.g. `tasks.py`) with a plain `APIRouter()`, mounted in
+  `app/api/router.py` only when enabled; its routes take `principal: Principal = Depends(require_principal)`
+  as a parameter when they need the id.
+- View: `get_app_resources(request.app).<domain>_service`, one service call,
+  `<Response>.model_validate(result, from_attributes=True)`. Response ids default in the response schema
+  (`Field(default_factory=...)`). A view does not time, log, record telemetry, apply deadlines or mint ids.
+- Streaming: the view passes an async generator of `ServerSentEvent` to `event_stream_response(request, events)`
+  from `app/api/sse.py`, which owns headers, heartbeat, first-event priming (errors before it stay JSON
+  errors), `event: error` frames and shielded close. The generator closes the service stream with
+  `contextlib.aclosing`. A feature owns no SSE engine, heartbeat or deadline code.
+- Timing, deadlines, outcome labels and telemetry live in the business service, behind ports
+  (`CompletionSink`, `StreamPolicy`) that `compose_business_services` in `app/bootstrap/services.py`
+  builds once. The API and the worker share that instance, so both are observed.
+- Task routes: the task type constant lives in the business schemas (`COMPLETION_TASK_TYPE`); reads use
+  `require_owned(task_id, principal_id=..., type=...)`; responses use `TaskResponse.model_validate(task)`.
+
+Reference views (`app/api/v1/completions/router.py`):
+
+```python
+@router.post("", response_model=CompletionResponse)
+async def complete(payload: CompletionRequest, request: Request) -> CompletionResponse:
+    service = get_app_resources(request.app).completion_service
+    result = await service.complete(payload)
+    return CompletionResponse.model_validate(result, from_attributes=True)
+
+
+@router.post("/stream")
+async def stream(payload: CompletionRequest, request: Request) -> StreamingResponse:
+    service = get_app_resources(request.app).completion_service
+    return await event_stream_response(request, _events(service.stream(payload)))
+```
+
 ## Verification Defaults
 
 Run the narrowest useful checks, then widen:

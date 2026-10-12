@@ -129,17 +129,23 @@ Factory + bootstrap-addon pattern (`factory.py`):
 - `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`;
   `stream` yields `CompletionStreamChunk` only (the last chunk may carry `usage`,
   `finish_reason`, `model`).
-- `service.py`: `CompletionService` wraps one handler and exposes the same two
-  methods. The service is stable; behavior lives in the handler. One instance per
-  app lives on `ApplicationResources.completion_service`.
+- `service.py`: `CompletionService(handler, *, guards, sink, policy)` wraps one handler and
+  exposes the same two methods. Behavior lives in the handler. One instance per app lives on
+  `ApplicationResources.completion_service`; the API and the worker share it.
+- Observation: each `complete()`/`stream()` call records one `CompletionObservation` (mode, outcome
+  `ok|error|timeout|disconnected`, duration, ttft for streams, model, finish reason, tokens; never
+  content) to the `CompletionSink`. Bootstrap composes `FanOutSink([LogCompletionSink(), otel?])`,
+  so every completion logs one `completion mode=...` line.
+- Stream deadlines: `StreamPolicy(first_token_timeout, idle_timeout)` comes from
+  `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_IDLE_TIMEOUT_SECONDS`; a missed deadline raises
+  `StreamTimeoutError` (504, `stream_timeout`).
 - `handlers/echo.py` is the scaffold handler.
-- Stream contract (`app/api/v1/completions/streaming.py`): the endpoint awaits the
-  first chunk before it sends headers, so guard violations and handler startup errors
-  are normal JSON errors; first-token timeout is a JSON 504 `stream_timeout`. After the
-  first chunk a failure is `event: error` with a safe code (no exception text), an idle
-  gap past `STREAM_IDLE_TIMEOUT_SECONDS` is `stream_timeout`, and `: ping` comments go
-  out every `SSE_HEARTBEAT_SECONDS`. Each completion logs one line (latency, ttft,
-  usage, model; never content). A handler must not swallow `CancelledError`.
+- Stream contract (`app/api/sse.py` `event_stream_response` + `CompletionService.stream`): the
+  first event is awaited before headers, so guard violations, handler startup errors and the
+  first-token timeout are normal JSON errors (422 / 500 / 504). After the first event a failure is
+  `event: error` with a safe code (no exception text), an idle gap past the policy is
+  `stream_timeout`, and `: ping` comments go out every `SSE_HEARTBEAT_SECONDS`. A handler must not
+  swallow `CancelledError`.
 
 To add a real model-backed completion:
 

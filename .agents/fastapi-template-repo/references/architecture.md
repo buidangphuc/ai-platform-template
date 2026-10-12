@@ -132,7 +132,7 @@ legacy endpoint path stays the same
   -> platform capabilities provide shared infrastructure
 ```
 
-Do not force legacy endpoints into the template `/api/v1/completions` pattern unless the user explicitly asks for a new endpoint. The completions surface is a scaffold pattern, not a replacement for migrated legacy contracts.
+Do not force legacy endpoints into the template `/api/v1/completions` pattern unless the user explicitly asks for a new endpoint. The completions surface is a scaffold pattern, not a replacement for migrated legacy contracts. Its shape (thin views, shared SSE helper `app/api/sse.py`, observation and stream deadlines in `CompletionService`) is described in SKILL.md under "Canonical Feature: completions".
 
 ## Codegraph Checklist
 

@@ -46,8 +46,8 @@ Owns: `app/api/v1/completions/tasks.py`, `app/modules/messaging/tasks/service.py
 
 Owns: `.agents/fastapi-template-repo/SKILL.md`, `.agents/fastapi-template-repo/references/architecture.md`, `.agents/senior-ai-engineer/references/ai-engineering.md`, `README.md` (completions/streaming sections only).
 
-- [ ] 3.1 "Canonical feature" section in SKILL.md: API package = `router.py` (+ gated `tasks.py`); view = read service → one call → `model_validate`; streaming only via `app/api/sse.py`; timing, deadlines, telemetry inside the service via ports composed in bootstrap
-- [ ] 3.2 Fix paths in `architecture.md` and `ai-engineering.md` (stream contract now `app/api/sse.py` + `CompletionService`)
+- [x] 3.1 "Canonical feature" section in SKILL.md: API package = `router.py` (+ gated `tasks.py`); view = read service → one call → `model_validate`; streaming only via `app/api/sse.py`; timing, deadlines, telemetry inside the service via ports composed in bootstrap
+- [x] 3.2 Fix paths in `architecture.md` and `ai-engineering.md` (stream contract now `app/api/sse.py` + `CompletionService`)
 
 ## 4. Convention dry-run (wave 3, not merged)
 

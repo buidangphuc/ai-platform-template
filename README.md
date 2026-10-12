@@ -92,7 +92,7 @@ within `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS`) return the normal JSON error envelo
 Handlers yield `CompletionStreamChunk`; the last chunk may set `usage` and
 `finish_reason`.
 
-Each sync and stream completion logs one `completion mode=... outcome=... model=...
+Each sync and stream completion (API and worker) logs one `completion mode=... outcome=... model=...
 duration_ms=... ttft_ms=... finish_reason=... input_tokens=...` line (no content).
 
 ## Docker
