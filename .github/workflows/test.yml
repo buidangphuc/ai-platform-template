@@ -57,6 +57,36 @@ jobs:
           uv run --no-dev --env-file .env.example
           python -c "import main, scripts.run_worker; print('ok')"
 
+  redis-adapters:
+    # fakeredis hid real behaviour twice (stream trimming, XDEL); re-run on Redis.
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install (all extras)
+        run: uv sync --dev --all-extras
+      - name: Redis-backed tests on a real Redis
+        env:
+          REAL_REDIS_URL: redis://localhost:6379/15
+        run: >-
+          uv run --all-extras pytest -q -p tests.plugins.real_redis
+          tests/unit/modules/queues/test_redis_stream.py
+          tests/unit/modules/tasks/test_redis_store.py
+          tests/unit/modules/cache/test_redis.py
+          tests/unit/modules/test_rate_limit.py
+
   mongo-adapters:
     # Concurrency on the Mongo quota store needs a real server (fakes serialize).
     runs-on: ubuntu-latest

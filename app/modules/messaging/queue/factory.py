@@ -68,4 +68,5 @@ def build_redis_queue_gateway(settings: Settings, redis: Redis) -> QueueGateway:
         consumer_name=settings.QUEUE_REDIS_CONSUMER_NAME or None,
         min_idle_seconds=settings.QUEUE_REDIS_MIN_IDLE_SECONDS,
         max_deliveries=settings.QUEUE_REDIS_MAX_DELIVERIES,
+        dead_letter_maxlen=settings.QUEUE_REDIS_DEAD_LETTER_MAXLEN,
     )

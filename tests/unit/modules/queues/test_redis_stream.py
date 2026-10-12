@@ -118,3 +118,27 @@ async def test_consumer_name_is_stable_from_hostname(monkeypatch):
     assert _gateway(redis, consumer_name="explicit").consumer_name == "explicit"
     monkeypatch.delenv("HOSTNAME")
     assert _gateway(redis).consumer_name.startswith("worker-")
+
+
+async def test_ack_removes_the_entry_so_the_stream_does_not_grow():
+    redis = aioredis.FakeRedis(decode_responses=True)
+    gateway = _gateway(redis, consumer_name="c1")
+    for value in range(3):
+        await gateway.send({"value": value})
+    for message in await gateway.receive(max_messages=3, wait_seconds=1.0):
+        await gateway.ack(message)
+
+    assert await redis.xlen("s") == 0
+
+
+async def test_dead_lettering_removes_the_entry_and_caps_the_dead_stream():
+    redis = aioredis.FakeRedis(decode_responses=True)
+    gateway = _gateway(redis, consumer_name="c1", dead_letter_maxlen=2)
+    for value in range(3):
+        await gateway.send({"value": value})
+    for message in await gateway.receive(max_messages=3, wait_seconds=1.0):
+        await gateway.nack(message, requeue=False)
+
+    assert await redis.xlen("s") == 0
+    dead = await redis.xrange("s:dead")
+    assert [json.loads(fields["body"])["value"] for _, fields in dead] == [1, 2]

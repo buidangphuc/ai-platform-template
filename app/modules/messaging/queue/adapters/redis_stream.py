@@ -35,6 +35,7 @@ class RedisStreamQueueGateway:
         consumer_name: str | None = None,
         min_idle_seconds: float = 60.0,
         max_deliveries: int = 5,
+        dead_letter_maxlen: int = 10_000,
     ) -> None:
         self.redis = redis
         self.stream = stream
@@ -47,6 +48,7 @@ class RedisStreamQueueGateway:
         )
         self.min_idle_ms = int(min_idle_seconds * 1000)
         self.max_deliveries = max_deliveries
+        self.dead_letter_maxlen = dead_letter_maxlen
         self._group_ready = False
 
     async def send(self, payload: dict[str, Any]) -> str:
@@ -83,7 +85,12 @@ class RedisStreamQueueGateway:
         return messages
 
     async def ack(self, message: QueueMessage) -> None:
-        await self.redis.xack(self.stream, self.consumer_group, message.id)
+        # XACK only clears the pending entry; XDEL frees the stream entry so a
+        # long-running queue doesn't grow without bound.
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.xack(self.stream, self.consumer_group, message.id)
+            pipe.xdel(self.stream, message.id)
+            await pipe.execute()
 
     async def nack(self, message: QueueMessage, *, requeue: bool = True) -> None:
         if not requeue:
@@ -154,8 +161,14 @@ class RedisStreamQueueGateway:
             fields["receive_count"] = str(count)
         # MULTI/EXEC: the entry is never acked without also landing in the DLQ.
         async with self.redis.pipeline(transaction=True) as pipe:
-            pipe.xadd(self.dead_stream, fields)
+            pipe.xadd(
+                self.dead_stream,
+                fields,
+                maxlen=self.dead_letter_maxlen,
+                approximate=False,  # low-volume stream: keep the cap exact
+            )
             pipe.xack(self.stream, self.consumer_group, message_id)
+            pipe.xdel(self.stream, message_id)
             await pipe.execute()
 
     async def _ensure_group(self) -> None:

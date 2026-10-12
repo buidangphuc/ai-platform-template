@@ -39,6 +39,8 @@ class MessagingSettingsMixin(BaseModel):
     QUEUE_REDIS_CONSUMER_NAME: str = ""
     QUEUE_REDIS_MIN_IDLE_SECONDS: float = Field(default=60.0, gt=0)
     QUEUE_REDIS_MAX_DELIVERIES: int = Field(default=5, gt=0)
+    # Dead-letter stream keeps at most this many entries (oldest trimmed).
+    QUEUE_REDIS_DEAD_LETTER_MAXLEN: int = Field(default=10_000, gt=0)
 
     # Async task store + service
     TASKS_ENABLED: bool = False
