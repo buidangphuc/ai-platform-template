@@ -51,4 +51,25 @@ Owns: `.agents/fastapi-template-repo/SKILL.md`, `.agents/fastapi-template-repo/r
 
 ## 4. Convention dry-run (wave 3, not merged)
 
-- [ ] 4.1 A fresh agent with only `.agents/` and platform code, in a worktree where `app/api/v1/completions/` is deleted, rebuilds it from the skill; diff against packet 1+2 output. Every divergence becomes a docs fix in packet 3's files.
+- [x] 4.1 A fresh agent with only `.agents/` and platform code, in a worktree where `app/api/v1/completions/` is deleted, rebuilds it from the skill; diff against packet 1+2 output. Every divergence becomes a docs fix in packet 3's files.
+
+## 5. Close the dry-run gaps (wave 4)
+
+Dry-run findings: the agent rebuilding from `.agents/` put task routes at `/api/v1/tasks` (the `/completions` prefix came from a wrapper in `router.py` the docs never named), `TaskSubmitResponse.model_validate(task)` failed (no `id` alias), and SSE frame shapes, task payload serialisation and the `request_id` source were undocumented.
+
+Owns: `app/api/v1/completions/{router,tasks}.py`, `app/api/router.py`, `app/modules/messaging/tasks/schemas.py`, `tests/unit/core/test_application_wiring.py` (only if an import path it checks moves), `.agents/fastapi-template-repo/SKILL.md` (Canonical Feature section).
+
+Contracts:
+```python
+# app/api/v1/completions/tasks.py — owns its prefix; no wrapper in router.py
+router = APIRouter(prefix="/completions", tags=["completions"])
+# app/api/router.py — mounts it only when TASKS_ENABLED
+from app.api.v1.completions.tasks import router as completion_tasks_router
+# app/modules/messaging/tasks/schemas.py — record field `id` validates into task_id, JSON key stays `task_id`
+class TaskSubmitResponse(SchemaBase):
+    task_id: str = Field(validation_alias=AliasChoices("task_id", "id"))
+```
+
+- [ ] 5.1 `tasks.py` declares its own prefix router; delete `tasks_router` from `router.py`; `app/api/router.py` imports `tasks.router`; verify `test_task_routes_mount_only_when_tasks_enabled`, `test_task_routes_are_not_mounted_when_tasks_disabled`
+- [ ] 5.2 `TaskSubmitResponse` accepts the record's `id`; submit view returns `TaskSubmitResponse.model_validate(task)`; verify `test_task_completion_submit_and_poll` (JSON key `task_id` unchanged)
+- [ ] 5.3 SKILL.md: every router file declares its own prefix/tags; SSE frame shapes (`content.delta` `{type, delta, metadata}` only for non-empty deltas, `done` = `{type: "done", **summary.model_dump(exclude_none=True)}`); task submit = `payload.model_dump(mode="json")`, `request_id=get_request_id()`, `202`, both task responses via `model_validate`
