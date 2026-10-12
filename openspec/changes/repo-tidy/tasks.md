@@ -26,5 +26,5 @@ Owns: `.agents/**` (delete), new `docs/agents/{project,architecture,ai-engineeri
 
 Owns: `README.md`, move `TEMPLATE_GUIDE.md` to `docs/template-guide.md`, new `docs/usage.md`.
 
-- [ ] 3.1 `README.md` ≤ ~120 lines: what it is, scope, minimal core vs opt-in capabilities (short), project layout (with the new paths), minimal quickstart, links to `docs/usage.md`, `docs/template-guide.md`, `docs/agents/project.md`, `openspec/`
-- [ ] 3.2 `docs/usage.md` takes the README's usage material verbatim-in-substance (requirements, full quickstart, docker with new compose paths, local commands, secrets, env defaults, bearer auth); `docs/template-guide.md` = `TEMPLATE_GUIDE.md` with links fixed; verify every relative link in the three files resolves
+- [x] 3.1 `README.md` ≤ ~120 lines: what it is, scope, minimal core vs opt-in capabilities (short), project layout (with the new paths), minimal quickstart, links to `docs/usage.md`, `docs/template-guide.md`, `docs/agents/project.md`, `openspec/`
+- [x] 3.2 `docs/usage.md` takes the README's usage material verbatim-in-substance (requirements, full quickstart, docker with new compose paths, local commands, secrets, env defaults, bearer auth); `docs/template-guide.md` = `TEMPLATE_GUIDE.md` with links fixed; verify every relative link in the three files resolves

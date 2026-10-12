@@ -4,11 +4,7 @@ This repo is a **minimal-core template**: a fresh boot serves health + bearer
 auth + Swagger and opens **zero** addons. Every capability below is opt-in, so
 your product starts simple and grows only where it actually needs to.
 
-Architecture rules live in `.agents/fastapi-template-repo/` (SKILL.md +
-references/architecture.md) — read those before wiring anything. For
-LLM/RAG/eval work there is a second skill: `.agents/senior-ai-engineer/`
-(engineering judgment + the repo's AI patterns) — use it alongside, not
-instead of, the template skill.
+Architecture rules live in [agents/architecture.md](agents/architecture.md) — read it before wiring anything. For LLM/RAG/eval work there is a second doc, [agents/ai-engineering.md](agents/ai-engineering.md) (engineering judgment + the repo's AI patterns) — use it alongside, not instead of, the architecture doc. Project facts and checks are indexed in [agents/project.md](agents/project.md).
 
 ## 0. Fork checklist
 
@@ -35,7 +31,7 @@ instead of, the template skill.
 | LLM + tracing + RAG | `uv sync --extra ai`, then `CHAT_MODEL=...`, `LANGFUSE_ENABLED`, `RAG_ENABLED` | provider keys / langfuse |
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +
-RATE_LIMIT. `docker-compose.local.yaml` is the worked example of the
+RATE_LIMIT. [`ops/compose/local.yaml`](../ops/compose/local.yaml) is the worked example of the
 DATABASE + REDIS half; flip `QUEUE_ENABLED`/`TASKS_ENABLED`/`RATE_LIMIT_ENABLED`
 in `.env` on top of it, and when you enable TASKS add a second compose service
 running the worker (`python -m scripts.run_worker` — the same command
@@ -73,7 +69,7 @@ reference for the thin-transport shape; its handler comes from
 > its own sync endpoint only.
 
 Rules that keep the template clean (enforced by review, spelled out in
-`.agents/`): endpoints never build clients/stores; business services never
+[agents/architecture.md](agents/architecture.md)): endpoints never build clients/stores; business services never
 read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
 ## 3. Optional installs (extras)
@@ -98,7 +94,7 @@ per-project by design. When your product needs it, the recipe is small:
    `prometheus-fastapi-instrumentator`) behind your product's enable flag.
 2. Stack: a compose overlay with Prometheus (+ scrape config), Grafana
    (provisioned datasource + dashboard), Loki+Promtail for logs,
-   Alertmanager for rules — layer it like `docker-compose.langfuse.yaml`.
+   Alertmanager for rules — layer it like `ops/compose/langfuse.yaml`.
 3. Container CPU/mem: add cadvisor; GPU needs nvidia-dcgm-exporter on a
    GPU host.
 
