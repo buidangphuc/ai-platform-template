@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from app.bootstrap.addons import BootstrapAddon, default_resource_addons
+from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
 from app.bootstrap.resources import (
     ApplicationResources,
     TaskServices,

@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.bootstrap.addons.webhooks import WebhookAddon
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy, TimeoutPolicy
 from app.modules.messaging.webhooks.dispatcher import (
@@ -9,7 +10,6 @@ from app.modules.messaging.webhooks.dispatcher import (
     HttpWebhookDispatcher,
 )
 from app.modules.messaging.webhooks.envelope import WebhookEnvelope
-from app.modules.messaging.webhooks.factory import WebhookAddon
 from app.modules.messaging.webhooks.signing import WebhookSigner
 from tests.factories import build_test_settings
 

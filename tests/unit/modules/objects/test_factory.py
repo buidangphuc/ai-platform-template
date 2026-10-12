@@ -1,10 +1,11 @@
 import pytest
 from fastapi import FastAPI
 
+from app.bootstrap.addons.objects import ObjectAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.objects.adapters.memory import MemoryObjectGateway
-from app.modules.platform.objects.factory import ObjectAddon, build_object_gateway
+from app.modules.platform.objects.factory import build_object_gateway
 from tests.factories import build_test_settings
 
 

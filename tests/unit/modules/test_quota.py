@@ -6,10 +6,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 
+from app.bootstrap.addons.quota import QuotaAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.errors import RateLimitError
 from app.modules.platform.quota.adapters.memory import MemoryQuotaStore
-from app.modules.platform.quota.factory import QuotaAddon, build_quota_service
+from app.modules.platform.quota.factory import build_quota_service
 from app.modules.platform.quota.models import (
     QuotaPolicy,
     QuotaReservationStatus,

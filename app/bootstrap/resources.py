@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING
 
-from app.bootstrap.addons import BootstrapAddon
+from app.bootstrap.addons.base import BootstrapAddon
 from app.core.config import Settings
 from app.core.database.engine import (
     build_engine,

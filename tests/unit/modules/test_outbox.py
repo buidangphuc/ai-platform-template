@@ -3,11 +3,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 
+from app.bootstrap.addons.outbox import OutboxAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy
 from app.modules.messaging.outbox.adapters import PostgresOutboxStore
-from app.modules.messaging.outbox.factory import OutboxAddon, build_outbox_store
+from app.modules.messaging.outbox.factory import build_outbox_store
 from app.modules.messaging.outbox.models import OutboxEvent
 from app.modules.messaging.outbox.publisher import (
     OutboxPublisher,

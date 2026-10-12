@@ -15,6 +15,8 @@
 
 ## 3. Addons and factories (step 3, parallel per addon)
 
-- [ ] 3.1 Move addon classes into `app/bootstrap/addons/`; factories keep `build_*` with non-optional deps; drop `app` param; declare `requires`
+- [x] 3.1 Move addon classes into `app/bootstrap/addons/<name>.py` (protocol + registry in `addons/base.py`); factories no longer import bootstrap or FastAPI; verify `rg "app.bootstrap.resources|fastapi" app/modules/*/*/factory.py` is empty
 - [ ] 3.2 Cross-setting "X requires Y" rules in one `Settings` model validator; remove repeated checks
 - [ ] 3.3 `MongoQuotaStore.ensure_indexes()` called at open (from quota-db-correctness)
+- [ ] 3.4 Factories take non-optional dependencies (per-backend constructors); addons pass them; drop `if dep is None: raise` guards
+- [ ] 3.5 Addon `close` only closes what it opened (exit stack owns order); drop `= None` resets and `is not None` guards

@@ -42,7 +42,7 @@ class _Addon:
 
 
 async def test_outbox_store_is_built_once_and_shared_with_dispatcher():
-    from app.bootstrap.addons import default_resource_addons
+    from app.bootstrap.addons.base import default_resource_addons
 
     async with open_application_resources(
         _outbox_settings(),

@@ -2,13 +2,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.bootstrap.addons.idempotency import IdempotencyAddon
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
-from app.modules.platform.idempotency.factory import (
-    IdempotencyAddon,
-    build_idempotency_store,
-)
+from app.modules.platform.idempotency.factory import build_idempotency_store
 from app.modules.platform.idempotency.models import IdempotencyKey
 from app.modules.platform.idempotency.service import (
     IdempotencyCachedResponse,

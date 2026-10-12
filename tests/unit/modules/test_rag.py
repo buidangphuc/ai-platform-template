@@ -6,11 +6,12 @@ from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.embeddings import MockEmbedding
 from llama_index.core.node_parser import SentenceSplitter
 
+from app.bootstrap.addons.rag import RagAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.redaction import RedactionPolicy
 from app.core.resilience import TimeoutPolicy
-from app.modules.ai.rag.factory import RagAddon, build_rag_service
+from app.modules.ai.rag.factory import build_rag_service
 from app.modules.ai.rag.service import (
     KnowledgeRetrievalService,
     build_rag_node_parser,

@@ -2,12 +2,12 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
+from app.bootstrap.addons.mongo import MongoAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.errors import ServiceUnavailableError
 from app.modules.platform.mongo.dependency import get_mongo
 from app.modules.platform.mongo.factory import (
-    MongoAddon,
     build_mongo_gateway,
     check_mongo_connection,
 )

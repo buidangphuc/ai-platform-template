@@ -1,10 +1,11 @@
 import pytest
 from fakeredis import aioredis
 
+from app.bootstrap.addons.cache import CacheAddon
 from app.core.config import Settings
 from app.modules.platform.cache.adapters.memory import MemoryCacheGateway
 from app.modules.platform.cache.adapters.redis import RedisCacheGateway
-from app.modules.platform.cache.factory import CacheAddon, build_cache_gateway
+from app.modules.platform.cache.factory import build_cache_gateway
 from tests.factories import build_test_settings
 
 

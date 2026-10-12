@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.platform.idempotency.store import IdempotencyStore
 
@@ -27,29 +26,3 @@ def build_idempotency_store(
         return build_postgres_idempotency_store(settings, sessionmaker=sessionmaker)
 
     raise ValueError(f"Unknown IDEMPOTENCY_BACKEND={settings.IDEMPOTENCY_BACKEND!r}")
-
-
-class IdempotencyAddon:
-    name = "idempotency"
-
-    def is_enabled(self, settings: Settings) -> bool:
-        return settings.IDEMPOTENCY_ENABLED
-
-    async def open(
-        self,
-        resources: ApplicationResources,
-        settings: Settings,
-    ) -> None:
-        if settings.IDEMPOTENCY_BACKEND == "postgres" and not settings.DATABASE_ENABLED:
-            raise RuntimeError(
-                "IdempotencyAddon with IDEMPOTENCY_BACKEND=postgres requires DATABASE_ENABLED"
-            )
-        resources.idempotency_store = build_idempotency_store(
-            settings,
-            sessionmaker=resources.sessionmaker,
-        )
-
-    async def close(self, resources: ApplicationResources) -> None:
-        if resources.idempotency_store is not None:
-            await resources.idempotency_store.close()
-            resources.idempotency_store = None

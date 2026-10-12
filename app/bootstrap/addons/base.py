@@ -22,15 +22,15 @@ class BootstrapAddon(Protocol):
 
 
 def default_resource_addons() -> tuple[BootstrapAddon, ...]:
-    from app.modules.ai.rag.factory import RagAddon
-    from app.modules.messaging.outbox.factory import OutboxAddon
-    from app.modules.messaging.webhooks.factory import WebhookAddon
-    from app.modules.platform.cache.factory import CacheAddon
-    from app.modules.platform.idempotency.factory import IdempotencyAddon
-    from app.modules.platform.mongo.factory import MongoAddon
-    from app.modules.platform.objects.factory import ObjectAddon
-    from app.modules.platform.quota.factory import QuotaAddon
-    from app.modules.platform.rate_limit.factory import RateLimitAddon
+    from app.bootstrap.addons.cache import CacheAddon
+    from app.bootstrap.addons.idempotency import IdempotencyAddon
+    from app.bootstrap.addons.mongo import MongoAddon
+    from app.bootstrap.addons.objects import ObjectAddon
+    from app.bootstrap.addons.outbox import OutboxAddon
+    from app.bootstrap.addons.quota import QuotaAddon
+    from app.bootstrap.addons.rag import RagAddon
+    from app.bootstrap.addons.rate_limit import RateLimitAddon
+    from app.bootstrap.addons.webhooks import WebhookAddon
 
     return (
         RateLimitAddon(),

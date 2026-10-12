@@ -7,7 +7,7 @@ can take whatever it needs (LLM instance, RAG, stores) from ``resources``.
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
-from app.bootstrap.addons import BootstrapAddon
+from app.bootstrap.addons.base import BootstrapAddon
 from app.bootstrap.resources import ApplicationResources, open_application_resources
 from app.core.config import Settings
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler

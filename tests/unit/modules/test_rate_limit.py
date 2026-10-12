@@ -1,11 +1,11 @@
 import pytest
 from fastapi import FastAPI
 
+from app.bootstrap.addons.rate_limit import RateLimitAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.middleware import IPRateLimitMiddleware
 from app.modules.platform.rate_limit.factory import (
-    RateLimitAddon,
     build_ip_rate_limiter,
     build_principal_rate_limiter,
 )

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 
 from app.api.router import build_api_router
-from app.bootstrap.addons import BootstrapAddon, default_resource_addons
+from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
 from app.bootstrap.middleware import install_core_middlewares
 from app.bootstrap.resources import ApplicationResources, build_health_service
 from app.bootstrap.services import (
