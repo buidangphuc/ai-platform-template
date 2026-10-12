@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import pytest
 from fastapi import FastAPI
 
-from app.bootstrap.addons import BootstrapAddon
 from app.bootstrap.application import create_app
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
@@ -66,12 +65,6 @@ async def test_disabled_resource_addon_is_skipped(test_settings: Settings):
         assert addon not in app.state.resources.addons
 
     assert addon.closed is False
-
-
-def test_bootstrap_addon_protocol_accepts_recording_addon():
-    addon = _RecordingAddon(name="recording")
-
-    assert isinstance(addon, BootstrapAddon)
 
 
 async def test_addon_self_validates_required_resources_in_open(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from app.core.config import Settings
 
 
-@runtime_checkable
 class BootstrapAddon(Protocol):
     name: str
 

@@ -9,7 +9,7 @@ so business code can swap backends without touching call sites.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,6 @@ class QueueMessage:
     raw: Any = field(default=None, repr=False, compare=False)
 
 
-@runtime_checkable
 class QueueGateway(Protocol):
     async def send(self, payload: dict[str, Any]) -> str: ...
 

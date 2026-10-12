@@ -16,7 +16,7 @@ Pick via ``Settings.TASKS_DISPATCH_BACKEND`` (``"queue"`` or ``"outbox"``).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 from uuid import uuid4
 
 from app.core.errors import NotFoundError
@@ -26,7 +26,6 @@ from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.store import TaskRecord, TaskStore
 
 
-@runtime_checkable
 class TaskDispatcher(Protocol):
     async def dispatch(self, task_id: str, *, type: str) -> None: ...
 

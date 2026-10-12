@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from app.core.resilience import RetryPolicy
 from app.modules.messaging.outbox.store import OutboxRecord, OutboxStore
@@ -11,7 +11,6 @@ from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
 from app.modules.messaging.webhooks.envelope import WebhookEnvelope
 
 
-@runtime_checkable
 class OutboxSink(Protocol):
     async def publish(self, record: OutboxRecord, *, now: datetime) -> None: ...
 

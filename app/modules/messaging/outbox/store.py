@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 
 class OutboxStatus(StrEnum):
@@ -27,7 +27,6 @@ class OutboxRecord:
     error: str | None = None
 
 
-@runtime_checkable
 class OutboxStore(Protocol):
     async def enqueue(
         self,

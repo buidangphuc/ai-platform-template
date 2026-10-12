@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,6 @@ class EvalScore:
     comment: str | None = None
 
 
-@runtime_checkable
 class Evaluator(Protocol):
     """Sync or async evaluator.
 

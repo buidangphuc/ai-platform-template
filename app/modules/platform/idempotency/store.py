@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,7 +12,6 @@ class IdempotencyCachedResponse:
     body: dict[str, Any]
 
 
-@runtime_checkable
 class IdempotencyStore(Protocol):
     async def check_or_store(
         self,

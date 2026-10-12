@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from app.modules.messaging.tasks.models import TaskStatus
 
@@ -29,7 +29,6 @@ class TaskRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@runtime_checkable
 class TaskStore(Protocol):
     async def create(self, task: TaskRecord) -> None: ...
 

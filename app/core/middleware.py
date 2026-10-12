@@ -7,6 +7,7 @@ from uuid import uuid4
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.bootstrap.state import get_app_resources
 from app.core.request_context import get_request_id
 
 access_logger = logging.getLogger("app.access")
@@ -340,13 +341,7 @@ class IPRateLimitMiddleware:
         return any(pattern in path for pattern in self.exclude_patterns)
 
     def _lookup_limiter(self, scope: Scope):
-        starlette_app = scope.get("app")
-        if starlette_app is None:
-            return None
-        resources = getattr(starlette_app.state, "resources", None)
-        if resources is None:
-            return None
-        return resources.ip_rate_limiter
+        return get_app_resources(scope["app"]).ip_rate_limiter
 
     def _extract_client_ip(self, scope: Scope) -> str:
         for header_name, header_value in scope.get("headers", []):

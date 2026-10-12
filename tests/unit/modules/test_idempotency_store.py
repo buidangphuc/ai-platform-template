@@ -18,7 +18,6 @@ from app.modules.platform.idempotency.service import (
     delete_expired_idempotency_keys,
     store_idempotency_response,
 )
-from app.modules.platform.idempotency.store import IdempotencyStore
 from tests.factories import build_test_settings
 
 
@@ -266,15 +265,6 @@ async def test_delete_expired_returns_row_count():
 
 
 # ---------------------------------------------------------------- factory
-
-
-def test_postgres_idempotency_store_matches_protocol():
-    store = PostgresIdempotencyStore(
-        sessionmaker=object(),
-        in_progress_timeout_seconds=60,
-    )
-
-    assert isinstance(store, IdempotencyStore)
 
 
 def test_build_idempotency_store_requires_sessionmaker_for_postgres():

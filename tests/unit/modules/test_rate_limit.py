@@ -3,6 +3,7 @@ from fastapi import FastAPI
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
+from app.core.middleware import IPRateLimitMiddleware
 from app.modules.platform.rate_limit.factory import (
     RateLimitAddon,
     build_ip_rate_limiter,
@@ -294,3 +295,38 @@ def test_rate_limit_addon_respects_enabled_flag():
 
     assert addon.is_enabled(_settings(RATE_LIMIT_ENABLED=True)) is True
     assert addon.is_enabled(_settings(RATE_LIMIT_ENABLED=False)) is False
+
+
+async def test_ip_rate_limit_middleware_reads_limiter_from_app_resources():
+    app = FastAPI()
+    app.state.resources = ApplicationResources(
+        ip_rate_limiter=InMemoryRateLimiter(limit=1, window_seconds=60)
+    )
+    called = 0
+
+    async def downstream(scope, receive, send):
+        nonlocal called
+        called += 1
+
+    sent: list[dict] = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "http.request"}
+
+    middleware = IPRateLimitMiddleware(downstream)
+    scope = {
+        "type": "http",
+        "path": "/x",
+        "headers": [],
+        "client": ("1.2.3.4", 1),
+        "app": app,
+    }
+
+    await middleware(scope, receive, send)
+    await middleware(scope, receive, send)
+
+    assert called == 1
+    assert sent[0]["status"] == 429

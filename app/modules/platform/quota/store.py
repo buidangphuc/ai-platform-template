@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from app.modules.platform.quota.models import (
     QuotaPolicy,
@@ -11,7 +11,6 @@ from app.modules.platform.quota.models import (
 )
 
 
-@runtime_checkable
 class QuotaStore(Protocol):
     async def reserve(self, command: ReserveQuota) -> QuotaReservation | None:
         """Atomically reserve quota or return ``None`` when the limit is exhausted."""
@@ -30,7 +29,6 @@ class QuotaStore(Protocol):
     async def close(self) -> None: ...
 
 
-@runtime_checkable
 class QuotaPolicyStore(Protocol):
     async def get_policy(self, resource: str) -> QuotaPolicy | None: ...
 

@@ -11,10 +11,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.bootstrap.state import get_app_resources, require
-from app.core.config import Settings, get_settings
-
-_engine: AsyncEngine | None = None
-_sessionmaker: async_sessionmaker[AsyncSession] | None = None
+from app.core.config import Settings
 
 
 def build_engine(settings: Settings) -> AsyncEngine:
@@ -32,27 +29,6 @@ def build_sessionmaker(
     engine: AsyncEngine,
 ) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
-
-
-def get_sessionmaker(
-    settings: Settings | None = None,
-) -> async_sessionmaker[AsyncSession]:
-    global _engine, _sessionmaker
-
-    if _sessionmaker is None:
-        resolved_settings = settings or get_settings()
-        _engine = build_engine(resolved_settings)
-        _sessionmaker = build_sessionmaker(_engine)
-    return _sessionmaker
-
-
-async def dispose_engine() -> None:
-    global _engine, _sessionmaker
-
-    if _engine is not None:
-        await _engine.dispose()
-    _engine = None
-    _sessionmaker = None
 
 
 async def check_postgres_connection(

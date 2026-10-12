@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import RetryPolicy
+from app.modules.messaging.outbox.adapters import PostgresOutboxStore
 from app.modules.messaging.outbox.factory import OutboxAddon, build_outbox_store
 from app.modules.messaging.outbox.models import OutboxEvent
 from app.modules.messaging.outbox.publisher import (
@@ -13,7 +14,7 @@ from app.modules.messaging.outbox.publisher import (
     QueueOutboxSink,
     WebhookOutboxSink,
 )
-from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus, OutboxStore
+from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus
 from app.modules.messaging.webhooks.dispatcher import WebhookDeliveryResult
 from tests.factories import build_test_settings
 
@@ -48,10 +49,10 @@ def test_build_outbox_store_requires_sessionmaker_for_postgres():
         build_outbox_store(_settings(OUTBOX_ENABLED=True))
 
 
-def test_build_outbox_store_returns_protocol_implementation():
+def test_build_outbox_store_returns_postgres_store():
     store = build_outbox_store(_settings(OUTBOX_ENABLED=True), sessionmaker=object())
 
-    assert isinstance(store, OutboxStore)
+    assert isinstance(store, PostgresOutboxStore)
 
 
 async def test_outbox_addon_attaches_store_when_enabled():
@@ -63,7 +64,7 @@ async def test_outbox_addon_attaches_store_when_enabled():
         app, resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True)
     )
 
-    assert isinstance(resources.outbox_store, OutboxStore)
+    assert isinstance(resources.outbox_store, PostgresOutboxStore)
 
 
 def test_outbox_addon_respects_enabled_flag():
