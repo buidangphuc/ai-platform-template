@@ -50,6 +50,9 @@ async def test_sqs_gateway_passes_endpoint_and_receive_attributes(monkeypatch):
         def __init__(self) -> None:
             self.receive_kwargs: list[dict] = []
 
+        async def get_queue_attributes(self, **_kwargs):
+            return {"Attributes": {"QueueArn": "arn:aws:sqs:us-test-1:0:q"}}
+
         async def receive_message(self, **kwargs):
             self.receive_kwargs.append(kwargs)
             return {

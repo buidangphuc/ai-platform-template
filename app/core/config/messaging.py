@@ -26,6 +26,10 @@ class MessagingSettingsMixin(BaseModel):
     SQS_REGION: str = "ap-southeast-1"
     SQS_ENDPOINT_URL: str = ""
     SQS_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=0, ge=0)
+    # Optional explicit dead-letter queue. Set: nack(requeue=False) sends the
+    # message there and deletes the original. Empty: rely on the work queue's own
+    # RedrivePolicy (maxReceiveCount + deadLetterTargetArn).
+    SQS_DEAD_LETTER_QUEUE_URL: str = ""
     RABBITMQ_URL: str = ""
     # Dead-letter topology for the work queue. Empty names derive from
     # QUEUE_NAME (<name>.dlx / <name>.dead). Set ENABLED=false to keep declaring

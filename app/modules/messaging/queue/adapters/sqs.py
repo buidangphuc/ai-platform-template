@@ -29,6 +29,7 @@ class SQSQueueGateway:
         region_name: str = "ap-southeast-1",
         endpoint_url: str | None = None,
         visibility_timeout: int | None = None,
+        dead_letter_queue_url: str | None = None,
     ) -> None:
         _require_aioboto3()
         if not queue_url:
@@ -37,15 +38,31 @@ class SQSQueueGateway:
         self.region_name = region_name
         self.endpoint_url = endpoint_url
         self.visibility_timeout = visibility_timeout
+        self.dead_letter_queue_url = dead_letter_queue_url
         self._session = aioboto3.Session()
 
     async def open(self) -> Self:
-        """Create the SQS client; call once, before any operation, then ``close``."""
+        """Create the SQS client and verify the queue with one cheap call.
+
+        Call once, before any operation, then ``close``. A wrong endpoint,
+        credentials or queue URL fails here (the client is closed first), not on
+        the first request.
+        """
         kwargs: dict[str, Any] = {"region_name": self.region_name}
         if self.endpoint_url:
             kwargs["endpoint_url"] = self.endpoint_url
         self._client_cm = self._session.client("sqs", **kwargs)
         self._client = await self._client_cm.__aenter__()
+        try:
+            await self._client.get_queue_attributes(
+                QueueUrl=self.queue_url, AttributeNames=["QueueArn"]
+            )
+        except Exception as exc:
+            await self._client_cm.__aexit__(None, None, None)
+            raise RuntimeError(
+                f"SQS queue {self.queue_url!r} is not reachable"
+                f" (endpoint {self.endpoint_url or 'default'}): {exc}"
+            ) from exc
         return self
 
     async def send(self, payload: dict[str, Any]) -> str:
@@ -96,13 +113,43 @@ class SQSQueueGateway:
         )
 
     async def nack(self, message: QueueMessage, *, requeue: bool = True) -> None:
-        if not requeue:
-            # Leave the message in place: SQS redrive policy (configured at
-            # queue level via ``maxReceiveCount``) moves it to the DLQ after
-            # the threshold is hit. Deleting here would bypass the DLQ.
-            return
+        """Release a message; ``requeue=False`` means dead-letter it.
+
+        ``requeue=True`` makes the message visible again at once. With
+        ``requeue=False``: when ``dead_letter_queue_url`` is set, the body goes to
+        that queue (with ``reason``, ``original_message_id`` and ``receive_count``
+        attributes) and the original is deleted, so it dead-letters immediately
+        like the Redis and RabbitMQ backends. When it is unset, the message is
+        left in place and the work queue's own RedrivePolicy
+        (``maxReceiveCount`` + ``deadLetterTargetArn``) must be configured, or the
+        message is redelivered until the retention period expires.
+        """
         client = self._client
         receipt_handle = (message.raw or {}).get("ReceiptHandle")
+        if not requeue:
+            if self.dead_letter_queue_url is None:
+                return
+            if not receipt_handle:
+                raise ValueError("missing ReceiptHandle on SQS message")
+            await client.send_message(
+                QueueUrl=self.dead_letter_queue_url,
+                MessageBody=(message.raw or {})["Body"],
+                MessageAttributes={
+                    "reason": {"DataType": "String", "StringValue": "nack_no_requeue"},
+                    "original_message_id": {
+                        "DataType": "String",
+                        "StringValue": message.id,
+                    },
+                    "receive_count": {
+                        "DataType": "Number",
+                        "StringValue": str(message.receive_count),
+                    },
+                },
+            )
+            await client.delete_message(
+                QueueUrl=self.queue_url, ReceiptHandle=receipt_handle
+            )
+            return
         if receipt_handle:
             await client.change_message_visibility(
                 QueueUrl=self.queue_url,

@@ -1,3 +1,5 @@
+import pytest
+
 from app.modules.platform.objects.adapters.s3 import S3ObjectGateway
 
 
@@ -15,6 +17,13 @@ class _FakeS3Client:
         self.get_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.head_calls: list[dict[str, object]] = []
+        self.head_bucket_calls: list[dict[str, object]] = []
+        self.head_bucket_error: Exception | None = None
+
+    async def head_bucket(self, **kwargs: object) -> None:
+        self.head_bucket_calls.append(kwargs)
+        if self.head_bucket_error is not None:
+            raise self.head_bucket_error
 
     async def put_object(self, **kwargs: object) -> None:
         self.put_calls.append(kwargs)
@@ -122,4 +131,33 @@ async def test_s3_object_gateway_uses_injected_session_and_custom_endpoint():
         signed_url
         == "https://signed.test/get_object/artifacts/reports/output.json?ttl=60"
     )
+    assert session.context.exited is True
+
+
+async def test_open_verifies_the_bucket():
+    client = _FakeS3Client()
+    gateway = await S3ObjectGateway(
+        bucket="bucket", region_name="r", session_factory=lambda: _FakeSession(client)
+    ).open()
+
+    assert client.head_bucket_calls == [{"Bucket": "bucket"}]
+    await gateway.close()
+
+
+async def test_open_closes_the_client_and_raises_when_the_bucket_is_unreachable():
+    client = _FakeS3Client()
+    client.head_bucket_error = RuntimeError("404 Not Found")
+    session = _FakeSession(client)
+    gateway = S3ObjectGateway(
+        bucket="missing",
+        region_name="r",
+        endpoint_url="http://s3.test",
+        session_factory=lambda: session,
+    )
+
+    with pytest.raises(RuntimeError, match="missing") as excinfo:
+        await gateway.open()
+
+    assert "http://s3.test" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
     assert session.context.exited is True

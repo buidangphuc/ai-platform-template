@@ -157,3 +157,45 @@ jobs:
           tests/unit/modules/test_idempotency_postgres_store.py
           tests/unit/modules/tasks/test_postgres_store.py
           tests/integration/test_task_outbox_flow.py
+
+  aws-adapters:
+    # The SQS/S3 gateways verify their target at open() and SQS dead-letters
+    # explicitly; fakes cannot prove either, so run against ElasticMQ and LocalStack.
+    runs-on: ubuntu-latest
+    services:
+      elasticmq:
+        image: softwaremill/elasticmq-native:1.6.9
+        ports:
+          - 9324:9324
+      localstack:
+        image: localstack/localstack:3.8
+        env:
+          SERVICES: s3
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install (all extras)
+        run: uv sync --dev --all-extras
+      - name: Wait for ElasticMQ
+        run: >-
+          for i in $(seq 1 30); do
+          curl -s -o /dev/null http://localhost:9324/ && exit 0; sleep 1; done; exit 1
+      - name: SQS and S3 tests on real servers
+        env:
+          AWS_ACCESS_KEY_ID: test # pragma: allowlist secret
+          AWS_SECRET_ACCESS_KEY: test # pragma: allowlist secret
+          SQS_TEST_ENDPOINT_URL: http://localhost:9324
+          S3_TEST_ENDPOINT_URL: http://localhost:4566
+        run: >-
+          uv run --all-extras pytest -q
+          tests/unit/modules/queues/test_sqs_real.py
+          tests/unit/modules/objects/test_s3_real.py

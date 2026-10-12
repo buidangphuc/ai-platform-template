@@ -42,6 +42,7 @@ async def open_queue_gateway(
                     if settings.SQS_VISIBILITY_TIMEOUT_SECONDS > 0
                     else None
                 ),
+                dead_letter_queue_url=settings.SQS_DEAD_LETTER_QUEUE_URL or None,
             ).open()
         case "rabbitmq":
             from app.modules.messaging.queue.adapters.rabbitmq import (

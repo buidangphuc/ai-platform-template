@@ -41,12 +41,25 @@ class S3ObjectGateway:
         )
 
     async def open(self) -> Self:
-        """Create the S3 client; call once, before any operation, then ``close``."""
+        """Create the S3 client and verify the bucket with one ``head_bucket``.
+
+        Call once, before any operation, then ``close``. A wrong endpoint,
+        credentials or bucket fails here (the client is closed first), not on
+        the first request.
+        """
         kwargs: dict[str, Any] = {"region_name": self.region_name}
         if self.endpoint_url:
             kwargs["endpoint_url"] = self.endpoint_url
         self._client_cm = self._session.client("s3", **kwargs)
         self._client = await self._client_cm.__aenter__()
+        try:
+            await self._client.head_bucket(Bucket=self.bucket)
+        except Exception as exc:
+            await self._client_cm.__aexit__(None, None, None)
+            raise RuntimeError(
+                f"S3 bucket {self.bucket!r} is not reachable"
+                f" (endpoint {self.endpoint_url or 'default'}): {exc}"
+            ) from exc
         return self
 
     async def put(
