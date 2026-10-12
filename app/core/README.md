@@ -58,7 +58,7 @@ Reserve `@field_validator` and `@model_validator` for cross-field or semantic ch
 
 ### Adding a backend / adapter
 
-**Don't** add `RATE_LIMIT_BACKENDS = {"memory", "redis"}` style allowlists here. The factory (`app/modules/<X>/factory.py`) handles dispatch and raises `ValueError` on unknown. Allowlisting in config layer duplicates work and blocks scaling.
+Backends are `Literal` aliases (e.g. `RateLimitBackend = Literal["memory", "redis"]`), so `Settings` rejects unknown values. Dispatch is an exhaustive `match` with no default branch; pyright (`reportMatchNotExhaustive`) fails until a new value has its `case`.
 
 ### Adding a new section
 
