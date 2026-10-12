@@ -316,3 +316,17 @@ def test_breaker_policy_rejects_invalid_configuration() -> None:
 def test_timeout_policy_rejects_non_positive_timeout() -> None:
     with pytest.raises(ValueError, match="positive"):
         TimeoutPolicy(timeout_seconds=0)
+
+
+def test_released_probe_can_be_retaken_without_another_cooldown() -> None:
+    clock = _Clock()
+    breaker = _breaker(clock, threshold=1, cooldown=30.0)
+    breaker.record_failure(_StatusError(503))
+    clock.now += 31
+
+    assert breaker.try_acquire() is True  # half-open probe taken
+    assert breaker.try_acquire() is False  # slot held
+    breaker.release_probe()  # our own deadline cut the probe short
+
+    assert breaker.state is BreakerState.HALF_OPEN
+    assert breaker.try_acquire() is True

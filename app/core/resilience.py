@@ -208,6 +208,11 @@ class CircuitBreaker:
         self._probe_lease_until = now + self.cooldown_seconds
         return True
 
+    def release_probe(self) -> None:
+        """Give back a half-open probe slot whose attempt was abandoned by the
+        caller (e.g. its own deadline); says nothing about provider health."""
+        self._probe_lease_until = None
+
     def record_success(self) -> None:
         self.failure_count = 0
         self.state = BreakerState.CLOSED

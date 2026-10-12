@@ -81,6 +81,7 @@ class LLMInstance:
                     message = await self._call(target, input, context)
             except Exception as exc:
                 if budget.expired():
+                    self.router.release(target, role=role)
                     raise LLMDeadlineExceeded(deadline_seconds) from exc
                 self.router.record_error(target, error=exc, role=role)
                 if not is_transient_error(exc):

@@ -120,6 +120,10 @@ class ModelRouter:
             code="llm_unavailable",
         )
 
+    def release(self, target: str, *, role: ModelRole = "default") -> None:
+        """Return an admission taken by ``try_acquire`` without an outcome."""
+        self._breaker(role, target).release_probe()
+
     def record_success(self, target: str, *, role: ModelRole = "default") -> None:
         self._breaker(role, target).record_success()
 
