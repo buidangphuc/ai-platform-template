@@ -33,6 +33,7 @@ from app.core.config.runtime import (
     Environment,
     RuntimeSettingsMixin,
 )
+from app.core.config.transport import TransportSettingsMixin
 
 __all__ = [
     "WEAK_AUTH_TOKENS",
@@ -53,6 +54,7 @@ class Settings(
     AISettingsMixin,
     MessagingSettingsMixin,
     PlatformSettingsMixin,
+    TransportSettingsMixin,
 ):
     model_config = SettingsConfigDict(
         env_file=".env",

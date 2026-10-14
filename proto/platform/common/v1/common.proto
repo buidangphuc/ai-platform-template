@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+// Shared building blocks reused by every service contract in the platform.
+// Nothing product-specific belongs here — only cross-cutting envelopes.
+package platform.common.v1;
+
+// ── Identity ────────────────────────────────────────────────────────────────
+// Language-neutral counterpart of the Principal used across the platform.
+// Auth mechanism (bearer today, JWT/cookie later — see ADR-0003) is resolved at
+// the edge/interceptor; services only ever see a resolved Principal.
+enum PrincipalType {
+  PRINCIPAL_TYPE_UNSPECIFIED = 0;
+  PRINCIPAL_TYPE_ANONYMOUS = 1;
+  PRINCIPAL_TYPE_USER = 2;
+  PRINCIPAL_TYPE_SERVICE = 3;
+}
+
+message Principal {
+  string id = 1;
+  PrincipalType type = 2;
+  // Coarse-grained RBAC scopes; enforced via require_scopes-style checks.
+  repeated string scopes = 3;
+}
+
+// ── Errors ──────────────────────────────────────────────────────────────────
+// A stable, machine-readable error envelope. gRPC status codes carry transport
+// semantics; this carries the domain-stable `code` clients switch on.
+message Error {
+  // Stable, kebab/snake string (e.g. "insufficient_scope", "not_found").
+  string code = 1;
+  string message = 2;
+  map<string, string> metadata = 3;
+}
+
+// ── Pagination ──────────────────────────────────────────────────────────────
+message PageRequest {
+  // Opaque cursor from a prior PageResponse.next_cursor; empty = first page.
+  string cursor = 1;
+  // Server clamps to a max; 0 = server default.
+  int32 page_size = 2;
+}
+
+message PageResponse {
+  // Empty when there are no further pages.
+  string next_cursor = 1;
+  // Best-effort total; -1 when unknown/not computed.
+  int64 total = 2;
+}
+
+// ── Tracing keys (documentation-only constants) ─────────────────────────────
+// Canonical metadata keys interceptors propagate on every hop. See ADR-0004.
+//   traceparent  → W3C trace context
+//   x-request-id → human-facing correlation id (bridged from repo convention)
+// Interceptors read/write these gRPC metadata keys; they are lowercase because
+// gRPC metadata keys are case-insensitive and normalized to lowercase.

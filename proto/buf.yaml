@@ -1,0 +1,12 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  # Seed protos keep names simple; relax the enum-zero-prefix rule only.
+  except:
+    - ENUM_ZERO_VALUE_SUFFIX
+breaking:
+  use:
+    - FILE

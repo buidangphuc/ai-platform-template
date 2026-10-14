@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+// SEED contract — proves codegen + breaking-check wiring. team-ai (Python) owns
+// this later: semantic/vector search over Qdrant.
+package platform.search.v1;
+
+import "platform/common/v1/common.proto";
+
+// Owned by team-ai. Reads the shared Qdrant collection; never joins another
+// service's DB — cross-service data comes via gRPC (Rule 3).
+service SearchService {
+  rpc SearchListings(SearchListingsRequest) returns (SearchListingsResponse);
+}
+
+message SearchListingsRequest {
+  string query = 1;
+  platform.common.v1.PageRequest page = 2;
+  // Optional structured filters, applied alongside vector similarity.
+  map<string, string> filters = 3;
+}
+
+message SearchHit {
+  string listing_id = 1;
+  float score = 2;
+}
+
+message SearchListingsResponse {
+  repeated SearchHit hits = 1;
+  platform.common.v1.PageResponse page = 2;
+}

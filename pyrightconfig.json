@@ -8,6 +8,7 @@
     ".venv",
     ".uv-cache",
     "alembic/versions",
+    "app/transport/grpc/_pb",
     "scripts",
     "docs",
     "app/modules/messaging/queue/adapters/sqs.py",

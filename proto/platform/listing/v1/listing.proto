@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+// SEED contract — proves codegen + breaking-check wiring. Not the final
+// listing domain model; team-domain (JVM) owns and extends this later.
+package platform.listing.v1;
+
+import "platform/common/v1/common.proto";
+
+// Owned by team-domain. DB-per-service: only this service touches listing_db.
+service ListingService {
+  rpc GetListing(GetListingRequest) returns (GetListingResponse);
+  rpc ListListings(ListListingsRequest) returns (ListListingsResponse);
+}
+
+message Listing {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  int64 price = 4; // minor units (e.g. VND), integer to avoid float money
+  string currency = 5; // ISO 4217, e.g. "VND"
+  ListingStatus status = 6;
+}
+
+enum ListingStatus {
+  LISTING_STATUS_UNSPECIFIED = 0;
+  LISTING_STATUS_DRAFT = 1;
+  LISTING_STATUS_PUBLISHED = 2;
+  LISTING_STATUS_REJECTED = 3;
+}
+
+message GetListingRequest {
+  string id = 1;
+}
+
+message GetListingResponse {
+  Listing listing = 1;
+}
+
+message ListListingsRequest {
+  platform.common.v1.PageRequest page = 1;
+}
+
+message ListListingsResponse {
+  repeated Listing listings = 1;
+  platform.common.v1.PageResponse page = 2;
+}

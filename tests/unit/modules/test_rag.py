@@ -10,7 +10,11 @@ from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.redaction import RedactionPolicy
 from app.core.resilience import TimeoutPolicy
-from app.modules.ai.rag.factory import RagAddon, build_rag_service
+from app.modules.ai.rag.factory import (
+    RagAddon,
+    build_embed_model,
+    build_rag_service,
+)
 from app.modules.ai.rag.service import (
     KnowledgeRetrievalService,
     build_rag_node_parser,
@@ -195,7 +199,8 @@ def _rag_settings(**overrides: object) -> Settings:
 
 
 def test_build_rag_service_uses_settings_defaults():
-    service = build_rag_service(_rag_settings())
+    settings = _rag_settings()
+    service = build_rag_service(settings, embed_model=build_embed_model(settings))
 
     assert isinstance(service, KnowledgeRetrievalService)
     assert service.default_top_k == 5
@@ -219,10 +224,20 @@ async def test_rag_addon_attaches_service_when_enabled():
     assert isinstance(resources.rag_service, KnowledgeRetrievalService)
 
 
-def test_build_embed_model_raises_for_unimplemented_provider():
-    from app.modules.ai.rag.factory import build_embed_model
+def test_build_embed_model_raises_for_unknown_backend():
+    with pytest.raises(RuntimeError, match="not supported"):
+        build_embed_model(_rag_settings(RAG_EMBED_BACKEND="nope"))
 
-    with pytest.raises(RuntimeError, match="not implemented"):
+
+def test_model_server_backend_requires_url():
+    with pytest.raises(RuntimeError, match="RAG_EMBED_SERVER_URL"):
         build_embed_model(
-            _rag_settings(RAG_EMBED_MODEL="openai:text-embedding-3-small")
+            _rag_settings(RAG_EMBED_BACKEND="model_server", RAG_EMBED_SERVER_URL="")
         )
+
+
+def test_build_storage_context_raises_for_unknown_backend():
+    from app.modules.ai.rag.factory import build_storage_context
+
+    with pytest.raises(RuntimeError, match="not supported"):
+        build_storage_context(_rag_settings(RAG_BACKEND="nope"))

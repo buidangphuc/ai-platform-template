@@ -1,4 +1,4 @@
-.PHONY: help dev test eval lint format typecheck check ci hooks-install \
+.PHONY: help dev worker grpc proto test eval lint format typecheck check ci hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse
@@ -17,6 +17,12 @@ dev: ## Run dev server with autoreload
 
 worker: ## Run async task worker
 	$(UV_RUN) python -m scripts.run_worker
+
+grpc: ## Run the gRPC server (platform-core contract: Search + Chat)
+	$(UV_RUN) python -m scripts.run_grpc
+
+proto: ## Regenerate gRPC stubs from the vendored proto (proto/ -> app/transport/grpc/_pb)
+	$(UV_RUN) python -m scripts.gen_proto
 
 test: ## Run pytest
 	$(UV_RUN) pytest -v

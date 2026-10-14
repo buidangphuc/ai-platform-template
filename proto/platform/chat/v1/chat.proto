@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+// SEED contract — proves codegen + breaking-check wiring, and exercises a
+// SERVER-STREAMING RPC (AI token streaming). team-ai (Python) owns this later.
+package platform.chat.v1;
+
+service ChatService {
+  // Server-streaming: one request, a stream of token chunks back. The Gateway
+  // adapts this to SSE for browsers at the edge (out of scope this phase).
+  rpc StreamChat(StreamChatRequest) returns (stream StreamChatResponse);
+}
+
+message StreamChatRequest {
+  string session_id = 1;
+  string message = 2;
+}
+
+message StreamChatResponse {
+  // Incremental token/text delta.
+  string delta = 1;
+  // True on the final chunk of the stream.
+  bool done = 2;
+}
