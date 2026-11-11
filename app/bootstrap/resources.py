@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from app.bootstrap.addons.base import BootstrapAddon
 from app.core.config import Settings
@@ -13,6 +13,7 @@ from app.core.database.engine import (
     build_sessionmaker,
     check_postgres_connection,
 )
+from app.core.errors import ServiceUnavailableError
 from app.core.health import HealthChecks, HealthService
 from app.core.redis import build_redis_client, check_redis_connection
 from app.modules.messaging.queue.factory import (
@@ -39,7 +40,6 @@ if TYPE_CHECKING:
 
     from app.core.telemetry_otel import Telemetry
     from app.modules.ai.rag.service import KnowledgeRetrievalService
-    from app.modules.business.completions.service import CompletionService
     from app.modules.messaging.outbox.store import OutboxStore
     from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
     from app.modules.messaging.webhooks.signing import WebhookSigner
@@ -76,9 +76,9 @@ class TaskServices:
 
 @dataclass
 class ApplicationResources:
-    # Business services: one instance per app, composed in lifespan after the
+    # Business services: one instance per feature, composed in lifespan after the
     # platform resources below are open (see app/bootstrap/services.py).
-    completion_service: CompletionService = field(init=False)
+    services: dict[type[Any], Any] = field(default_factory=dict)
     # Core infrastructure
     engine: AsyncEngine | None = None
     sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -103,6 +103,15 @@ class ApplicationResources:
     addons: list[BootstrapAddon] = field(default_factory=list)
     # Readiness checks, registered by each opener as its resource comes up
     health_checks: HealthChecks = field(default_factory=HealthChecks)
+
+    def service(self, cls: type[_T]) -> _T:
+        try:
+            return self.services[cls]
+        except KeyError:
+            raise ServiceUnavailableError(
+                f"{cls.__name__} is not available",
+                code="service_not_configured",
+            ) from None
 
 
 @asynccontextmanager

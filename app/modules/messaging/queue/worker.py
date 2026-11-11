@@ -31,50 +31,6 @@ class NonRetryableMessageError(Exception):
     """
 
 
-class TypedMessageDispatcher:
-    """Routes ``QueueMessage`` to a handler keyed by ``body['type']``.
-
-    Conforms to ``MessageHandler`` so it can be passed straight to
-    ``AsyncPollingWorker(handler=...)``. Use when one queue carries multiple
-    event kinds (e.g. completion tasks + eval tasks on the same worker pool).
-
-    Example::
-
-        dispatcher = TypedMessageDispatcher(
-            handlers={
-                "completion": handle_completion_task,
-                "eval.completion": handle_eval_task,
-            }
-        )
-        worker = AsyncPollingWorker(gateway=queue, handler=dispatcher)
-    """
-
-    def __init__(
-        self,
-        handlers: dict[str, MessageHandler],
-        *,
-        type_field: str = "type",
-        unknown_type: MessageHandler | None = None,
-    ) -> None:
-        if not handlers:
-            raise ValueError("handlers must not be empty")
-        self.handlers = dict(handlers)
-        self.type_field = type_field
-        self.unknown_type = unknown_type
-
-    async def __call__(self, message: QueueMessage) -> None:
-        message_type = message.body.get(self.type_field)
-        if message_type is None:
-            raise ValueError(f"message {message.id} missing {self.type_field!r} field")
-        handler = self.handlers.get(message_type)
-        if handler is None:
-            if self.unknown_type is None:
-                raise ValueError(f"no handler registered for type {message_type!r}")
-            await self.unknown_type(message)
-            return
-        await handler(message)
-
-
 class AsyncPollingWorker:
     def __init__(
         self,

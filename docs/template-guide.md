@@ -48,19 +48,22 @@ app/modules/business/<domain>/
   integrations/     # external HTTP APIs — __init__(self, client, settings)
 app/api/v1/<domain>/
   router.py         # mounts leaf routers, attaches Depends(require_principal)
-  <leaf>.py         # thin endpoints: get_app_resources(request.app).<domain>_service -> one call
-app/bootstrap/services.py
-  build the single <Domain>Service instance in compose_business_services() and
-  store it on a typed ApplicationResources.<domain>_service field
+  <leaf>.py         # thin endpoints: get_app_resources(request.app).service(<Domain>Service) -> one call
+app/bootstrap/features/<domain>.py
+  <domain>_feature(...) -> Feature: service type, build(resources, settings),
+  routers, task_routers, tasks (type -> handler), models, enabled(settings)
+app/bootstrap/features/registry.py
+  one entry in FEATURES; create_app, the worker and alembic/env.py read it
 app/core/config/<domain>.py
   <Domain>SettingsMixin(BaseModel) — *_ENABLED defaults False; add to Settings
 ```
 
-If the domain needs a new lifecycle resource, add an addon in
-`app/bootstrap/addons/base.py:default_resource_addons()`. Include your router in
-`app/api/router.py` gated on your flag. The `completions` surface is the living
-reference for the thin-transport shape; its handler comes from
-`create_app(completion_handler_factory=...)`.
+A new domain is one file under `app/bootstrap/features/` plus one entry in
+`registry.py`; no edit to `resources.py`, `services.py`, `api/router.py`,
+`worker.py` or `alembic/env.py`. If the domain needs a new lifecycle resource,
+add an addon in `app/bootstrap/addons/base.py:default_resource_addons()`. The
+`completions` surface is the living reference for the thin-transport shape; its
+handler comes from `completions_feature(handler_factory=...)`.
 
 > **Deliberate: no structured-output enforcement at the transport.** The
 > completions contract serves both sync and streaming, and schema validation

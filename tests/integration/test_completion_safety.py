@@ -73,7 +73,7 @@ async def test_guard_violation_maps_to_422_with_stable_code(test_settings: Setti
     app = create_app(settings=test_settings, init_resources=False)
 
     async with api_client_for(app) as client:
-        get_app_resources(app).completion_service = CompletionService(
+        get_app_resources(app).services[CompletionService] = CompletionService(
             EchoCompletionHandler(), guards=(_DenyOutputGuard(),)
         )
         response = await client.post(

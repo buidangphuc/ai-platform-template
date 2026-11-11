@@ -16,6 +16,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.core.telemetry_otel import Telemetry
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -79,7 +80,9 @@ class _RigAddon:
 
 async def _call(rig: _Rig, path: str, *, handler=None):
     kwargs = (
-        {} if handler is None else {"completion_handler_factory": lambda r, s: handler}
+        {}
+        if handler is None
+        else {"features": (completions_feature(handler_factory=lambda r, s: handler),)}
     )
     app = create_app(
         settings=build_test_settings(),

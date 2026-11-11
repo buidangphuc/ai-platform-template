@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from loguru import logger
 
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.modules.business.completions.guards import GuardrailViolation
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -62,8 +63,12 @@ async def _post(
 ):
     app = create_app(
         settings=build_test_settings(**settings),
-        completion_handler_factory=lambda resources, s: handler,
-        completion_guards_factory=lambda resources, s: guards,
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, s: handler,
+                guards_factory=lambda resources, s: guards,
+            ),
+        ),
         init_resources=False,
     )
     # After create_app: configure_logging() resets every loguru sink.

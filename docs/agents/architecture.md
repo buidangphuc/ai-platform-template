@@ -39,7 +39,8 @@ Prefer existing repo patterns over new abstractions.
   - `resources.py`: `ApplicationResources`, open/close lifecycle.
   - `addons/base.py`: `BootstrapAddon` protocol and default addon order.
   - `state.py`: typed helpers such as `get_app_resources(...)`, `get_task_services(...)`.
-  - `services.py`: `compose_business_services`, handler factories.
+  - `features/base.py`: the `Feature` declaration. `features/registry.py`: `FEATURES`, the one list `create_app(features=FEATURES)` and `worker_context(features=FEATURES)` read. `features/<domain>.py`: one file per domain (e.g. `completions.py`).
+  - `services.py`: `compose_business_services`, `open_runtime`; builds each enabled feature's service and rejects duplicate service or task types at startup.
   - `addons/<name>.py`: one addon per capability. Contract (`addons/base.py`): `open(resources, settings, stack)` builds the capability with factory functions that take required dependencies, stores it on `resources`, and pushes its close onto `stack`. No `close` method.
 - Cross-setting rules ("X requires Y") live in a `@model_validator` on the owning settings mixin, not in addons or factories.
 
@@ -69,10 +70,13 @@ service consumes interface/capability
 
 1. Define one `<Domain>Service` class in `app/modules/business/<domain>/service.py` (e.g. `CompletionService`); add schemas/types/models/stores/integrations under the same domain.
 2. Keep stores, handlers and external integrations as constructor dependencies.
-3. Decide scope: request-scoped uses an existing FastAPI dependency or session boundary; app-lifetime is built once per app in lifespan after resources open (`app/bootstrap/services.py`) and stored on a typed `ApplicationResources` field (e.g. `completion_service: CompletionService`). No module-level singletons.
-4. A feature behind a `*_ENABLED` flag gets a feature group (e.g. `TaskServices`) that exists only when enabled; `app/api/router.py` mounts its router only when enabled; one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`) resolves it.
-5. Endpoint functions read the service from `get_app_resources(request.app)`, parse HTTP input, call one service method, and return the existing response contract. No per-surface getter helpers.
-6. Tests: unit test for orchestration and failure modes; bootstrap test that lifespan composes the service; integration test for the API contract (tests run the app lifespan, see `tests/factories.py:api_client_for`).
+3. Declare the domain once: `app/bootstrap/features/<domain>.py` returns a `Feature` (`name`, `service`, `build(resources, settings)`, `routers`, `task_routers`, `tasks`, `models`, `upstreams`, `enabled(settings)`), and `app/bootstrap/features/registry.py` gets one entry in `FEATURES`. That is the only shared-file edit: `resources.py`, `services.py`, `api/router.py`, `worker.py` and `alembic/env.py` read the registry.
+4. Scope: the service is built once per app in lifespan after resources open (`Feature.build`) and stored on `resources.services`; read it with `resources.service(<Domain>Service)`, which raises `ServiceUnavailableError` when the feature is disabled. No module-level singletons.
+5. A feature behind a `*_ENABLED` flag sets `enabled=lambda settings: settings.<DOMAIN>_ENABLED`: a disabled feature is not built, not mounted and not resolvable. Routes that need `TASKS_ENABLED` go in `task_routers`. A platform capability behind a flag still gets a feature group (e.g. `TaskServices`) and one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
+6. Background tasks: `tasks={TASK_TYPE: handler}` with `handler(resources, task) -> dict`; the worker dispatches by `task.type`. An unknown type fails the task and dead-letters the message; two features registering the same task type or service type fail at startup.
+7. ORM tables: list the model modules in `models=(...)`; `alembic/env.py` imports them.
+8. Endpoint functions read the service from `get_app_resources(request.app).service(<Domain>Service)`, parse HTTP input, call one service method, and return the existing response contract. No per-surface getter helpers.
+9. Tests: unit test for orchestration and failure modes; bootstrap test that lifespan composes the service (`tests/unit/core/test_features.py` shows a second feature); integration test for the API contract (tests run the app lifespan, see `tests/factories.py:api_client_for`; build the app with `create_app(features=(<domain>_feature(...),))`).
 
 ## Adding an endpoint
 
@@ -87,27 +91,27 @@ Leave bootstrap alone when the service already has its dependencies. Touch boots
 
 ## Canonical Feature: completions
 
-`app/api/v1/completions/` is the reference. For a new feature `<domain>`, copy its shape; reuse the service rules above (`<Domain>Service`, one bootstrap instance, `get_app_resources`).
+`app/api/v1/completions/` and `app/bootstrap/features/completions.py` are the reference. For a new feature `<domain>`, copy their shape; reuse the service rules above (`<Domain>Service`, one `Feature` entry in `FEATURES`, `get_app_resources`). Products pass their handler to `completions_feature(handler_factory=..., guards_factory=...)`.
 
 - API package `app/api/v1/<domain>/`: an empty `__init__.py` and `router.py`, which declares `APIRouter(prefix=..., tags=..., dependencies=[Depends(require_principal)])` once. Every router file declares its own prefix/tags (no wrapper router in `app/api/router.py`). A feature behind a `*_ENABLED` flag adds a second file (e.g. `tasks.py`, `APIRouter(prefix="/<domain>", tags=["<domain>"])`) that `app/api/router.py` imports and mounts only when enabled; its routes take `principal: Principal = Depends(require_principal)` as a parameter when they need the id.
-- View: `get_app_resources(request.app).<domain>_service`, one service call, `<Response>.model_validate(result, from_attributes=True)`. Response ids default in the response schema (`Field(default_factory=...)`). A view does not time, log, record telemetry, apply deadlines or mint ids.
+- View: `get_app_resources(request.app).service(<Domain>Service)`, one service call, `<Response>.model_validate(result, from_attributes=True)`. Response ids default in the response schema (`Field(default_factory=...)`). A view does not time, log, record telemetry, apply deadlines or mint ids.
 - Streaming: the view passes an async generator of `ServerSentEvent` to `event_stream_response(request, events)` from `app/api/sse.py`, which owns headers, heartbeat, first-event priming (errors before it stay JSON errors), `event: error` frames and shielded close. The generator closes the service stream with `contextlib.aclosing`. A feature owns no SSE engine, heartbeat or deadline code. Frames: each non-empty delta yields `ServerSentEvent({"type": "content.delta", "delta": ..., "metadata": ...})`; the stream ends with `ServerSentEvent({"type": "done", **summary.model_dump(exclude_none=True)})`.
-- Timing, deadlines, outcome labels and telemetry live in the business service, behind ports (`CompletionSink`, `StreamPolicy`) that `compose_business_services` in `app/bootstrap/services.py` builds once. The API and the worker share that instance, so both are observed.
-- Task routes: the task type constant lives in the business schemas (`COMPLETION_TASK_TYPE`). Submit calls `service.submit(type=..., payload=payload.model_dump(mode="json"), principal_id=principal.id, request_id=get_request_id())` and returns `202`; reads use `require_owned(task_id, principal_id=..., type=...)`. Both responses are `TaskSubmitResponse.model_validate(task)` / `TaskResponse.model_validate(task)`.
+- Timing, deadlines, outcome labels and telemetry live in the business service, behind ports (`CompletionSink`, `StreamPolicy`) that `completions_feature(...).build` in `app/bootstrap/features/completions.py` builds once. The API and the worker share that instance, so both are observed.
+- Task routes: the task type constant lives in the business schemas (`COMPLETION_TASK_TYPE`) and is registered in the feature's `tasks` (the worker runs that handler; the worker module knows no domain). Submit calls `service.submit(type=..., payload=payload.model_dump(mode="json"), principal_id=principal.id, request_id=get_request_id())` and returns `202`; reads use `require_owned(task_id, principal_id=..., type=...)`. Both responses are `TaskSubmitResponse.model_validate(task)` / `TaskResponse.model_validate(task)`.
 
 Reference views (`app/api/v1/completions/router.py`):
 
 ```python
 @router.post("", response_model=CompletionResponse)
 async def complete(payload: CompletionRequest, request: Request) -> CompletionResponse:
-    service = get_app_resources(request.app).completion_service
+    service = get_app_resources(request.app).service(CompletionService)
     result = await service.complete(payload)
     return CompletionResponse.model_validate(result, from_attributes=True)
 
 
 @router.post("/stream")
 async def stream(payload: CompletionRequest, request: Request) -> StreamingResponse:
-    service = get_app_resources(request.app).completion_service
+    service = get_app_resources(request.app).service(CompletionService)
     return await event_stream_response(request, _events(service.stream(payload)))
 ```
 

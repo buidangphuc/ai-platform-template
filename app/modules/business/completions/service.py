@@ -72,8 +72,8 @@ class _Observation:
 class CompletionService:
     """Completion business service; behavior lives in the injected handler.
 
-    Bootstrap builds exactly one instance per app, after resources open, and
-    stores it on ``ApplicationResources.completion_service``. The API and the
+    The completions feature builds exactly one instance per app, after resources
+    open, and registers it on ``ApplicationResources.services``. The API and the
     worker share it, so every completion is observed the same way: one
     ``CompletionObservation`` per ``complete``/``stream`` call.
 

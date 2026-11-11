@@ -1,8 +1,10 @@
 from app.bootstrap import application as application_module
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
+from app.modules.business.completions.service import CompletionService
 
 
 def test_completion_http_router_lives_in_api_layer():
@@ -49,7 +51,7 @@ async def test_lifespan_composes_completion_service_from_handler_factory(
         return handler
 
     app = create_app(
-        completion_handler_factory=factory,
+        features=(completions_feature(handler_factory=factory),),
         settings=test_settings,
         init_resources=False,
     )
@@ -57,7 +59,7 @@ async def test_lifespan_composes_completion_service_from_handler_factory(
     async with app.router.lifespan_context(app):
         resources = app.state.resources
         assert seen == [resources]
-        assert resources.completion_service.handler is handler
+        assert resources.service(CompletionService).handler is handler
 
 
 def test_task_routes_mount_only_when_tasks_enabled(test_settings: Settings):

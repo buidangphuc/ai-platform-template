@@ -182,11 +182,13 @@ capabilities such as Mongo, quota, cache, objects, LLM, queues, and task stores;
 
 Business services should receive explicit constructor dependencies and must not
 read FastAPI `Request`, `app.state`, or a global service locator. When a product
-service needs lifespan-owned runtime dependencies, build it in the bootstrap
-composition root (`app/bootstrap/services.py`) from already-open platform
-resources, as exactly one instance per app stored on a typed
-`ApplicationResources` field (e.g. `completion_service`). Views read it with
-`get_app_resources(request.app)`; no per-surface getter helpers.
+service needs lifespan-owned runtime dependencies, declare a `Feature` in
+`app/bootstrap/features/<domain>.py` and add one entry to `FEATURES` in
+`registry.py`. Its `build(resources, settings)` runs once per app, after the
+platform resources are open, and the instance lives on
+`ApplicationResources.services`. Views read it with
+`get_app_resources(request.app).service(<Domain>Service)`; no per-surface getter
+helpers.
 
 Adding a new endpoint usually should not touch bootstrap. Add or extend the
 business service method, then call it from the API router. Update bootstrap only
@@ -198,7 +200,7 @@ back on unhandled exceptions and always closes the session, but it does not
 auto-commit. Business services own explicit `commit()` calls.
 
 Mongo access is an opt-in platform resource. Install the `mongo` extra, set
-`MONGO_ENABLED=true`, and use `app.modules.platform.mongo.MongoDep` or
+`MONGO_ENABLED=true`, and use `app.modules.platform.mongo.dependency.MongoDep` or
 `get_mongo(...)` to access the lifespan-managed `MongoGateway`. Product modules
 should build their own stores on top of the gateway instead of opening clients
 or reading app state directly.
@@ -227,7 +229,7 @@ this contract.
 App observability, experiment tracking, LLM response caching, object storage,
 and job queues are intentionally not wrapped by template adapters in this phase.
 Use the tools required by the target project directly at the module boundary.
-Database access goes through `app.core.database.DbSession`, a normal SQLAlchemy
+Database access goes through `app.core.database.engine.DbSession`, a normal SQLAlchemy
 session dependency.
 
 Langfuse is only wired at the AI execution boundary. Use
@@ -237,7 +239,7 @@ per-instance Langfuse tracker. Pass `instance.trace_config(...)` into LangChain
 calls to keep parallel LLM services separated by instance, service, session,
 user, and request metadata.
 
-To use the completions transport, pass a handler factory. It runs in lifespan
+To use the completions transport, pass a handler factory to `completions_feature`. It runs in lifespan
 with the opened resources, so the handler can take an LLM instance, RAG service
 or stores from them:
 
@@ -250,6 +252,7 @@ from app.modules.business.completions.schemas import (
     CompletionStreamChunk,
 )
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 
@@ -269,11 +272,13 @@ def build_handler(resources: ApplicationResources, settings: Settings) -> MyComp
     return MyCompletionHandler()
 
 
-app = create_app(completion_handler_factory=build_handler)
+app = create_app(features=(completions_feature(handler_factory=build_handler),))
 ```
 
-Without a factory, the scaffold `EchoCompletionHandler` answers (the worker uses
-the same default). The async task routes (`/api/v1/completions/tasks`) are mounted
+Without a factory, the scaffold `EchoCompletionHandler` answers. Both processes
+read the registry in `app/bootstrap/features/registry.py` (`FEATURES`), so register
+your handler factory there (`completions_feature(handler_factory=build_handler)`)
+to make the worker run it too. The async task routes (`/api/v1/completions/tasks`) are mounted
 only when `TASKS_ENABLED=true`.
 
 The app factory registers a FastAPI lifespan that calls
