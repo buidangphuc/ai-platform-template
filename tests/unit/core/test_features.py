@@ -18,7 +18,7 @@ from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.queue.worker import NonRetryableMessageError
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.store import TaskRecord
-from tests.factories import api_client_for, build_test_settings
+from tests.factories import api_client_for
 
 URL = "/api/v1/completions"
 HEADERS = {"Authorization": "Bearer test-token"}
@@ -62,15 +62,6 @@ def ping_feature(**overrides: object) -> Feature:
     return replace(feature, **overrides)
 
 
-def _worker_settings() -> Settings:
-    return build_test_settings(
-        QUEUE_ENABLED=True,
-        TASKS_ENABLED=True,
-        QUEUE_BACKEND="memory",
-        TASK_STORE_BACKEND="memory",
-    )
-
-
 def _paths(app) -> set[str]:
     return {getattr(route, "path", "") for route in app.routes}
 
@@ -101,7 +92,11 @@ async def test_second_feature_route_service_and_task_need_no_shared_edits(
         )
         assert completion.status_code == 200
 
-    async with worker_context(_worker_settings(), features=features) as ctx:
+
+async def test_second_feature_task_runs_in_the_worker(worker_settings: Settings):
+    features = (completions_feature(), ping_feature())
+
+    async with worker_context(worker_settings, features=features) as ctx:
         task = await ctx.tasks.service.submit(
             type="ping", payload={"word": "w"}, principal_id="alice"
         )
@@ -190,8 +185,10 @@ async def test_duplicate_check_ignores_disabled_features(test_settings: Settings
         assert get_app_resources(app).service(PingService).word == "ping"
 
 
-async def test_worker_fails_a_task_of_unknown_type_without_retry():
-    async with worker_context(_worker_settings(), features=(ping_feature(),)) as ctx:
+async def test_worker_fails_a_task_of_unknown_type_without_retry(
+    worker_settings: Settings,
+):
+    async with worker_context(worker_settings, features=(ping_feature(),)) as ctx:
         task = await ctx.tasks.service.submit(
             type="nope", payload={}, principal_id="alice"
         )

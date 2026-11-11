@@ -13,7 +13,7 @@ def _outbox_settings() -> Settings:
     return build_test_settings(
         DATABASE_ENABLED=True,
         QUEUE_ENABLED=True,
-        QUEUE_BACKEND="memory",
+        REDIS_ENABLED=True,
         TASKS_ENABLED=True,
         TASK_STORE_BACKEND="postgres",
         TASKS_DISPATCH_BACKEND="outbox",

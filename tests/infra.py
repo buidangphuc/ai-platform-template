@@ -23,6 +23,9 @@ from sqlalchemy.pool import NullPool
 from alembic import command
 from alembic.config import Config
 from app.core.config import Settings
+from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
+from app.modules.messaging.tasks.factory import build_postgres_task_store
+from app.modules.messaging.tasks.store import TaskStore
 from app.modules.platform.mongo.factory import build_mongo_gateway
 from app.modules.platform.mongo.gateway import MongoGateway
 from tests.factories import build_test_settings
@@ -287,3 +290,37 @@ def infra_settings(request: pytest.FixtureRequest) -> Callable[..., Settings]:
         return settings_from_env(**values)
 
     return build
+
+
+@pytest.fixture()
+def worker_settings(
+    infra_settings: Callable[..., Settings],
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+    redis_client: aioredis.Redis,
+    redis_prefix: str,
+) -> Settings:
+    return infra_settings(
+        QUEUE_ENABLED=True,
+        TASKS_ENABLED=True,
+        REDIS_ENABLED=True,
+        DATABASE_ENABLED=True,
+        QUEUE_NAME=f"{redis_prefix}:queue",
+        TASK_REDIS_PREFIX=f"{redis_prefix}:tasks",
+    )
+
+
+@pytest.fixture()
+def task_store(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+) -> TaskStore:
+    return build_postgres_task_store(pg_sessionmaker)
+
+
+@pytest.fixture()
+def redis_queue(
+    redis_client: aioredis.Redis, redis_prefix: str
+) -> RedisStreamQueueGateway:
+    return RedisStreamQueueGateway(
+        redis=redis_client,
+        stream=f"{redis_prefix}:queue",
+    )

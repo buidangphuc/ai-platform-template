@@ -1,48 +1,56 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from fastapi import Depends, Request
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.application import create_app
 from app.bootstrap.resources import ApplicationResources
 from app.bootstrap.state import get_app_resources
 from app.core.config import Settings
 from app.modules.platform.identity.auth import require_principal
-from tests.factories import build_test_settings
+from tests.infra import S3Target
 
 
-def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "DATABASE_ENABLED": True,
-        "REDIS_ENABLED": True,
-        "QUEUE_ENABLED": True,
-        "QUEUE_BACKEND": "memory",
-        "TASKS_ENABLED": True,
-        "TASK_STORE_BACKEND": "memory",
-        "RATE_LIMIT_ENABLED": True,
-        "RATE_LIMIT_BACKEND": "memory",
-        "IDEMPOTENCY_ENABLED": True,
-        "IDEMPOTENCY_BACKEND": "postgres",
-        "CACHE_ENABLED": True,
-        "CACHE_BACKEND": "memory",
-        "WEBHOOKS_ENABLED": True,
-        "WEBHOOK_SIGNING_SECRET": "test-webhook-secret",  # pragma: allowlist secret
-        "OBJECTS_ENABLED": True,
-        "OBJECT_BACKEND": "memory",
-        "OUTBOX_ENABLED": True,
-        "OUTBOX_BACKEND": "postgres",
-        "GZIP_ENABLED": True,
-        "REQUEST_TIMEOUT_ENABLED": True,
-        "GRACEFUL_SHUTDOWN_ENABLED": True,
-        "DOCS_ENABLED": True,
-    }
-    base.update(overrides)
-    return build_test_settings(**base)
+def _settings(
+    infra_settings: Callable[..., Settings], s3_target: S3Target, redis_prefix: str
+) -> Settings:
+    return infra_settings(
+        DATABASE_ENABLED=True,
+        REDIS_ENABLED=True,
+        QUEUE_ENABLED=True,
+        QUEUE_NAME=f"{redis_prefix}:queue",
+        TASKS_ENABLED=True,
+        TASK_STORE_BACKEND="postgres",
+        TASK_REDIS_PREFIX=f"{redis_prefix}:tasks",
+        RATE_LIMIT_ENABLED=True,
+        RATE_LIMIT_REDIS_PREFIX=f"{redis_prefix}:rate-limit",
+        IDEMPOTENCY_ENABLED=True,
+        IDEMPOTENCY_BACKEND="postgres",
+        CACHE_ENABLED=True,
+        CACHE_PREFIX=f"{redis_prefix}:cache",
+        WEBHOOKS_ENABLED=True,
+        WEBHOOK_SIGNING_SECRET="test-webhook-secret",  # pragma: allowlist secret
+        OBJECTS_ENABLED=True,
+        OBJECT_PREFIX=s3_target.prefix,
+        OBJECT_S3_BUCKET=s3_target.bucket,
+        OBJECT_S3_REGION=s3_target.region,
+        OBJECT_S3_ENDPOINT_URL=s3_target.endpoint_url,
+        OUTBOX_ENABLED=True,
+        OUTBOX_BACKEND="postgres",
+        GZIP_ENABLED=True,
+        REQUEST_TIMEOUT_ENABLED=True,
+        GRACEFUL_SHUTDOWN_ENABLED=True,
+        DOCS_ENABLED=True,
+    )
 
 
 @dataclass
@@ -74,7 +82,7 @@ class _ExampleService:
             principal_id="smoke",
         )
         messages = await resources.queue_gateway.receive(
-            max_messages=1, wait_seconds=0.01
+            max_messages=1, wait_seconds=1.0
         )
         if messages:
             await resources.queue_gateway.ack(messages[0])
@@ -134,9 +142,18 @@ async def _service_smoke(request: Request) -> dict[str, Any]:
     return await _EXAMPLE_ADDON.service.run(request)
 
 
-async def test_simple_service_app_runs_with_all_local_safe_feature_flags_enabled():
+async def test_simple_service_app_runs_with_every_capability_enabled(
+    infra_settings: Callable[..., Settings],
+    s3_target: S3Target,
+    redis_client: Redis,
+    redis_prefix: str,
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", s3_target.access_key)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", s3_target.secret_key)
     app = create_app(
-        settings=_settings(),
+        settings=_settings(infra_settings, s3_target, redis_prefix),
         init_resources=True,
         resource_addons=(_EXAMPLE_ADDON,),
     )

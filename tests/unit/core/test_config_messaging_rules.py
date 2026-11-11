@@ -15,15 +15,24 @@ _TASKS_ON = {"QUEUE_ENABLED": True, "TASKS_ENABLED": True}
             "QUEUE_BACKEND=redis requires REDIS_ENABLED",
         ),
         (
-            {**_TASKS_ON, "TASK_STORE_BACKEND": "postgres"},
+            {**_TASKS_ON, "REDIS_ENABLED": True},
             "TASK_STORE_BACKEND=postgres requires DATABASE_ENABLED",
         ),
         (
-            {**_TASKS_ON, "TASK_STORE_BACKEND": "redis"},
+            {
+                **_TASKS_ON,
+                "QUEUE_BACKEND": "sqs",
+                "TASK_STORE_BACKEND": "redis",
+            },
             "TASK_STORE_BACKEND=redis requires REDIS_ENABLED",
         ),
         (
-            {**_TASKS_ON, "TASKS_DISPATCH_BACKEND": "outbox"},
+            {
+                **_TASKS_ON,
+                "REDIS_ENABLED": True,
+                "DATABASE_ENABLED": True,
+                "TASKS_DISPATCH_BACKEND": "outbox",
+            },
             "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
         ),
         (
@@ -32,7 +41,8 @@ _TASKS_ON = {"QUEUE_ENABLED": True, "TASKS_ENABLED": True}
                 "DATABASE_ENABLED": True,
                 "OUTBOX_ENABLED": True,
                 "TASKS_DISPATCH_BACKEND": "outbox",
-                "TASK_STORE_BACKEND": "memory",
+                "TASK_STORE_BACKEND": "redis",
+                "REDIS_ENABLED": True,
             },
             "TASKS_DISPATCH_BACKEND=outbox requires TASK_STORE_BACKEND=postgres",
         ),
@@ -60,9 +70,10 @@ def test_settings_reject_inconsistent_messaging_config(
         {"QUEUE_ENABLED": False, "QUEUE_BACKEND": "redis"},
         {"OUTBOX_ENABLED": False},
         {"WEBHOOKS_ENABLED": False},
-        {**_TASKS_ON},
+        {**_TASKS_ON, "REDIS_ENABLED": True, "DATABASE_ENABLED": True},
         {
             **_TASKS_ON,
+            "REDIS_ENABLED": True,
             "DATABASE_ENABLED": True,
             "OUTBOX_ENABLED": True,
             "TASKS_DISPATCH_BACKEND": "outbox",

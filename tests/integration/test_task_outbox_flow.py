@@ -15,7 +15,7 @@ from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.outbox.adapters import PostgresOutboxStore, new_outbox_row
 from app.modules.messaging.outbox.models import OutboxEvent
 from app.modules.messaging.outbox.publisher import OutboxPublisher
-from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
+from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
 from app.modules.messaging.queue.worker import AsyncPollingWorker
 from app.modules.messaging.tasks.adapters.postgres import PostgresTaskStore
 from app.modules.messaging.tasks.models import Task, TaskStatus
@@ -31,9 +31,13 @@ PAYLOAD = {"messages": [{"role": "user", "content": "hello"}]}
 
 
 class _Stack:
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        queue: RedisStreamQueueGateway,
+    ) -> None:
         self.sessionmaker = sessionmaker
-        self.queue = InMemoryQueueGateway()
+        self.queue = queue
         self.store = PostgresTaskStore(sessionmaker)
         self.service = TaskService(
             store=self.store,
@@ -61,6 +65,12 @@ class _Stack:
             receive_wait_seconds=0.05,
         )
 
+    async def queue_is_empty(self) -> bool:
+        return await self.queue.redis.xlen(self.queue.stream) == 0
+
+    async def dead_letters(self) -> int:
+        return await self.queue.redis.xlen(self.queue.dead_stream)
+
     async def wait_for_status(self, task_id: str, status: TaskStatus) -> None:
         for _ in range(200):
             task = await self.store.get(task_id)
@@ -70,8 +80,10 @@ class _Stack:
         pytest.fail(f"task {task_id} never reached {status}")
 
 
-async def test_submitted_task_is_relayed_processed_and_completed(pg_sessionmaker):
-    stack = _Stack(pg_sessionmaker)
+async def test_submitted_task_is_relayed_processed_and_completed(
+    pg_sessionmaker, redis_queue
+):
+    stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -101,14 +113,14 @@ async def test_submitted_task_is_relayed_processed_and_completed(pg_sessionmaker
     }
     assert done.attempts == 1
     assert done.principal_id == "alice"  # stored by the task+outbox insert
-    assert stack.queue.dead_letter_count() == 0
-    assert stack.queue.pending_count() == 0 and stack.queue.inflight_count() == 0
+    assert await stack.dead_letters() == 0
+    assert await stack.queue_is_empty()
 
 
 async def test_task_row_and_outbox_event_commit_atomically(
-    pg_sessionmaker, monkeypatch
+    pg_sessionmaker, redis_queue, monkeypatch
 ):
-    stack = _Stack(pg_sessionmaker)
+    stack = _Stack(pg_sessionmaker, redis_queue)
 
     def _boom(*args, **kwargs):
         raise RuntimeError("outbox insert failed")
@@ -126,9 +138,9 @@ async def test_task_row_and_outbox_event_commit_atomically(
 
 
 async def test_reclaimed_task_is_announced_again_in_the_same_transaction(
-    pg_sessionmaker,
+    pg_sessionmaker, redis_queue
 ):
-    stack = _Stack(pg_sessionmaker)
+    stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -151,9 +163,9 @@ async def test_reclaimed_task_is_announced_again_in_the_same_transaction(
 
 
 async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
-    pg_sessionmaker,
+    pg_sessionmaker, redis_queue
 ):
-    stack = _Stack(pg_sessionmaker)
+    stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion",
         payload=PAYLOAD,
@@ -180,9 +192,9 @@ async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
 
 
 async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
-    pg_sessionmaker,
+    pg_sessionmaker, redis_queue
 ):
-    stack = _Stack(pg_sessionmaker)
+    stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -194,7 +206,7 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
     try:
         await stack.wait_for_status(task.id, TaskStatus.COMPLETED)
         for _ in range(200):
-            if stack.queue.pending_count() == 0 and stack.queue.inflight_count() == 0:
+            if await stack.queue_is_empty():
                 break
             await asyncio.sleep(0.02)
     finally:
@@ -203,11 +215,13 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
 
     done = await stack.store.get(task.id)
     assert done is not None and done.attempts == 1
-    assert stack.queue.dead_letter_count() == 0
+    assert await stack.dead_letters() == 0
 
 
-async def test_poison_task_is_failed_without_a_new_outbox_event(pg_sessionmaker):
-    stack = _Stack(pg_sessionmaker)
+async def test_poison_task_is_failed_without_a_new_outbox_event(
+    pg_sessionmaker, redis_queue
+):
+    stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )

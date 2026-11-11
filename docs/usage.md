@@ -132,7 +132,7 @@ The values below are what `.env.example` ships for the local golden path — the
 are **not** the code defaults. In code every capability `*_ENABLED` flag
 defaults to `false` (`LANGFUSE_ENABLED` included, `app/core/config/ai.py`),
 `AUTH_API_KEYS` defaults to `""` (no keys, no implicit admin), and `LANGFUSE_BASE_URL` defaults to
-`https://cloud.langfuse.com`. `.env.example` pre-enables Langfuse with dummy
+`https://cloud.langfuse.com`. Capability backends default to real services (queue `redis`, task store `postgres`, rate limit and cache `redis`, objects `s3`, quota `postgres`); there is no in-memory backend, so enabling a capability also needs its service. `.env.example` pre-enables Langfuse with dummy
 local keys only so `make docker-run-langfuse` works out of the box.
 
 - `CHAT_MODEL=`

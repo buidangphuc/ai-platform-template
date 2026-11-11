@@ -16,8 +16,11 @@ from tests.infra import (
     rabbitmq_url as rabbitmq_url,
     redis_client as redis_client,
     redis_prefix as redis_prefix,
+    redis_queue as redis_queue,
     s3_target as s3_target,
     sqs_queue as sqs_queue,
+    task_store as task_store,
+    worker_settings as worker_settings,
 )
 
 

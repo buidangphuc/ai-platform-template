@@ -6,10 +6,7 @@ from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
-from app.modules.platform.cache.factory import (
-    build_memory_cache_gateway,
-    build_redis_cache_gateway,
-)
+from app.modules.platform.cache.factory import build_redis_cache_gateway
 from app.modules.platform.cache.gateway import CacheGateway
 
 
@@ -27,8 +24,6 @@ class CacheAddon:
     ) -> None:
         cache: CacheGateway
         match settings.CACHE_BACKEND:
-            case "memory":
-                cache = build_memory_cache_gateway(settings)
             case "redis":
                 cache = build_redis_cache_gateway(
                     settings, opened(resources.redis, "redis")

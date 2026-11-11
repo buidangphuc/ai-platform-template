@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-QueueBackend = Literal["memory", "redis", "sqs", "rabbitmq"]
-TaskStoreBackend = Literal["memory", "postgres", "redis"]
+QueueBackend = Literal["redis", "sqs", "rabbitmq"]
+TaskStoreBackend = Literal["postgres", "redis"]
 TaskDispatchBackend = Literal["queue", "outbox"]
 OutboxBackend = Literal["postgres"]
 
@@ -20,7 +20,7 @@ class MessagingSettingsMixin(BaseModel):
 
     # Queue gateway
     QUEUE_ENABLED: bool = False
-    QUEUE_BACKEND: QueueBackend = "memory"
+    QUEUE_BACKEND: QueueBackend = "redis"
     QUEUE_NAME: str = "completions"
     SQS_QUEUE_URL: str = ""
     SQS_REGION: str = "ap-southeast-1"
@@ -48,7 +48,7 @@ class MessagingSettingsMixin(BaseModel):
 
     # Async task store + service
     TASKS_ENABLED: bool = False
-    TASK_STORE_BACKEND: TaskStoreBackend = "memory"
+    TASK_STORE_BACKEND: TaskStoreBackend = "postgres"
     TASK_REDIS_PREFIX: str = "tasks"
     TASK_TTL_SECONDS: int = Field(default=86_400, gt=0)
     TASKS_LEASE_SECONDS: int = Field(default=300, gt=0)

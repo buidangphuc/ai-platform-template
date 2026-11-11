@@ -5,6 +5,7 @@ from loguru import logger
 
 from app.bootstrap.application import create_app
 from app.bootstrap.worker import worker_context
+from app.core.config import Settings
 from tests.factories import build_test_settings
 
 HEADERS = {"Authorization": "Bearer test-token"}
@@ -71,14 +72,8 @@ async def test_default_settings_still_echo():
     assert response.json()["content"] == "echo: hello"
 
 
-async def test_worker_task_uses_the_same_llm_handler():
-    settings = build_test_settings(
-        LLM_ENABLED=True,
-        QUEUE_ENABLED=True,
-        TASKS_ENABLED=True,
-        QUEUE_BACKEND="memory",
-        TASK_STORE_BACKEND="memory",
-    )
+async def test_worker_task_uses_the_same_llm_handler(worker_settings: Settings):
+    settings = worker_settings.model_copy(update={"LLM_ENABLED": True})
 
     async with worker_context(settings) as ctx:
         assert ctx.resources.llm is not None
@@ -93,15 +88,9 @@ async def test_worker_task_uses_the_same_llm_handler():
     assert done.result["content"] == "fake response"
 
 
-async def test_worker_completion_is_observed_once():
+async def test_worker_completion_is_observed_once(worker_settings: Settings):
     lines: list[str] = []
-    settings = build_test_settings(
-        LLM_ENABLED=True,
-        QUEUE_ENABLED=True,
-        TASKS_ENABLED=True,
-        QUEUE_BACKEND="memory",
-        TASK_STORE_BACKEND="memory",
-    )
+    settings = worker_settings.model_copy(update={"LLM_ENABLED": True})
 
     async with worker_context(settings) as ctx:
         sink = logger.add(lines.append, format="{message}")

@@ -1,8 +1,9 @@
 import asyncio
 
 import pytest
+from redis.asyncio import Redis
 
-from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
+from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
 from app.modules.messaging.queue.gateway import QueueMessage
 from app.modules.messaging.queue.worker import AsyncPollingWorker
 
@@ -33,8 +34,18 @@ class _RecordingGateway:
         return None
 
 
-async def test_worker_processes_messages_and_acks_them():
-    gateway = InMemoryQueueGateway()
+@pytest.fixture()
+def gateway(redis_client: Redis, redis_prefix: str) -> RedisStreamQueueGateway:
+    return RedisStreamQueueGateway(
+        redis=redis_client,
+        stream=f"{redis_prefix}:queue",
+        min_idle_seconds=0.01,
+    )
+
+
+async def test_worker_processes_messages_and_acks_them(
+    gateway: RedisStreamQueueGateway,
+):
     await gateway.send({"value": 1})
     await gateway.send({"value": 2})
 
@@ -63,11 +74,14 @@ async def test_worker_processes_messages_and_acks_them():
     await stopper
 
     assert sorted(m["value"] for m in seen) == [1, 2]
-    assert gateway.inflight_count() == 0
+    assert (await gateway.redis.xpending(gateway.stream, gateway.consumer_group))[
+        "pending"
+    ] == 0
 
 
-async def test_worker_nacks_message_on_handler_exception():
-    gateway = InMemoryQueueGateway()
+async def test_worker_nacks_message_on_handler_exception(
+    gateway: RedisStreamQueueGateway,
+):
     await gateway.send({"value": 1})
 
     call_count = 0
@@ -138,9 +152,9 @@ async def test_worker_drops_failed_message_at_max_attempts():
     assert gateway.nacked == [(message, False)]
 
 
-async def test_worker_rejects_invalid_concurrency():
-    gateway = InMemoryQueueGateway()
-
+async def test_worker_rejects_invalid_concurrency(
+    gateway: RedisStreamQueueGateway,
+):
     async def noop(_):
         pass
 

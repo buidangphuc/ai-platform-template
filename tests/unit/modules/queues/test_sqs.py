@@ -216,3 +216,17 @@ async def test_failed_dlq_send_keeps_the_original_message(
         await gateway.close()
 
     assert _counts(sqs_client, sqs_queue.url) == (0, 1)
+
+
+async def test_visibility_timeout_redelivers_an_unacked_message(sqs_queue: SqsQueue):
+    gateway = await _gateway(sqs_queue, visibility_timeout=1).open()
+    try:
+        await gateway.send({"task": 1})
+        (first,) = await gateway.receive(max_messages=1, wait_seconds=21.5)
+        assert first.receive_count == 1
+
+        (second,) = await gateway.receive(max_messages=1, wait_seconds=5)
+        assert second.id == first.id
+        assert second.receive_count == 2
+    finally:
+        await gateway.close()

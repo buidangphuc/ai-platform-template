@@ -3,16 +3,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.errors import AppError
-from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
-from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
+from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.schemas import TaskSubmitResponse
 from app.modules.messaging.tasks.service import QueueTaskDispatcher, TaskService
+from app.modules.messaging.tasks.store import TaskStore
 
 
-def _service() -> tuple[TaskService, InMemoryQueueGateway, InMemoryTaskStore]:
-    store = InMemoryTaskStore()
-    queue = InMemoryQueueGateway()
+@pytest.fixture()
+def service_parts(
+    task_store: TaskStore, redis_queue: QueueGateway
+) -> tuple[TaskService, QueueGateway, TaskStore]:
+    store, queue = task_store, redis_queue
     service = TaskService(
         store=store,
         dispatcher=QueueTaskDispatcher(store, queue),
@@ -21,8 +23,8 @@ def _service() -> tuple[TaskService, InMemoryQueueGateway, InMemoryTaskStore]:
     return service, queue, store
 
 
-async def test_submit_creates_task_and_enqueues_message():
-    service, queue, store = _service()
+async def test_submit_creates_task_and_enqueues_message(service_parts):
+    service, queue, store = service_parts
 
     task = await service.submit(
         type="completion", payload={"prompt": "hi"}, principal_id="alice"
@@ -30,13 +32,12 @@ async def test_submit_creates_task_and_enqueues_message():
 
     assert task.status == TaskStatus.QUEUED
     assert (await store.get(task.id)) is not None
-    assert queue.pending_count() == 1
     [message] = await queue.receive()
     assert message.body == {"task_id": task.id, "type": "completion"}
 
 
-async def test_require_raises_not_found_for_unknown_task():
-    service, _, _ = _service()
+async def test_require_raises_not_found_for_unknown_task(service_parts):
+    service, _, _ = service_parts
 
     with pytest.raises(AppError) as excinfo:
         await service.require("nope")
@@ -44,8 +45,8 @@ async def test_require_raises_not_found_for_unknown_task():
     assert excinfo.value.status_code == 404
 
 
-async def test_submit_records_the_owning_principal():
-    service, _, store = _service()
+async def test_submit_records_the_owning_principal(service_parts):
+    service, _, store = service_parts
 
     task = await service.submit(type="completion", payload={}, principal_id="alice")
 
@@ -54,8 +55,8 @@ async def test_submit_records_the_owning_principal():
     assert stored is not None and stored.principal_id == "alice"
 
 
-async def test_require_owned_returns_the_owners_task():
-    service, _, _ = _service()
+async def test_require_owned_returns_the_owners_task(service_parts):
+    service, _, _ = service_parts
     task = await service.submit(type="completion", payload={}, principal_id="alice")
 
     assert (
@@ -63,8 +64,8 @@ async def test_require_owned_returns_the_owners_task():
     ).id == task.id
 
 
-async def test_require_owned_hides_another_principals_task_as_not_found():
-    service, _, _ = _service()
+async def test_require_owned_hides_another_principals_task_as_not_found(service_parts):
+    service, _, _ = service_parts
     task = await service.submit(type="completion", payload={}, principal_id="alice")
 
     with pytest.raises(AppError) as excinfo:
@@ -73,8 +74,8 @@ async def test_require_owned_hides_another_principals_task_as_not_found():
     assert excinfo.value.status_code == 404
 
 
-async def test_require_owned_hides_another_task_type_as_not_found():
-    service, _, _ = _service()
+async def test_require_owned_hides_another_task_type_as_not_found(service_parts):
+    service, _, _ = service_parts
     task = await service.submit(type="other", payload={}, principal_id="alice")
 
     with pytest.raises(AppError) as excinfo:
@@ -82,15 +83,15 @@ async def test_require_owned_hides_another_task_type_as_not_found():
     assert excinfo.value.code == "task_not_found"
 
 
-async def test_worker_require_is_owner_agnostic():
-    service, _, _ = _service()
+async def test_worker_require_is_owner_agnostic(service_parts):
+    service, _, _ = service_parts
     task = await service.submit(type="completion", payload={}, principal_id="alice")
 
     assert (await service.require(task.id)).principal_id == "alice"
 
 
-async def test_full_state_transitions_via_service():
-    service, _, store = _service()
+async def test_full_state_transitions_via_service(service_parts):
+    service, _, store = service_parts
     task = await service.submit(
         type="completion", payload={"q": 1}, principal_id="alice"
     )
@@ -109,9 +110,11 @@ async def test_full_state_transitions_via_service():
     assert fetched.locked_until is None
 
 
-async def test_reclaim_stale_processing_via_service():
-    store = InMemoryTaskStore()
-    queue = InMemoryQueueGateway()
+async def test_reclaim_stale_processing_via_service(
+    task_store: TaskStore,
+    redis_queue: QueueGateway,
+):
+    store, queue = task_store, redis_queue
     service = TaskService(
         store=store,
         dispatcher=QueueTaskDispatcher(store, queue),
@@ -136,8 +139,8 @@ async def test_reclaim_stale_processing_via_service():
     assert refreshed.status == TaskStatus.QUEUED
 
 
-async def test_submit_forwards_request_id_into_the_queue_message():
-    service, queue, _ = _service()
+async def test_submit_forwards_request_id_into_the_queue_message(service_parts):
+    service, queue, _ = service_parts
 
     task = await service.submit(
         type="completion",
@@ -154,8 +157,8 @@ async def test_submit_forwards_request_id_into_the_queue_message():
     }
 
 
-async def test_submit_persists_the_request_id_on_the_task():
-    service, _, store = _service()
+async def test_submit_persists_the_request_id_on_the_task(service_parts):
+    service, _, store = service_parts
 
     task = await service.submit(
         type="completion", payload={}, principal_id="alice", request_id="req_abc"
@@ -166,9 +169,11 @@ async def test_submit_persists_the_request_id_on_the_task():
     assert stored is not None and stored.request_id == "req_abc"
 
 
-async def test_reclaimed_task_is_announced_with_its_original_request_id():
-    store = InMemoryTaskStore()
-    queue = InMemoryQueueGateway()
+async def test_reclaimed_task_is_announced_with_its_original_request_id(
+    task_store: TaskStore,
+    redis_queue: QueueGateway,
+):
+    store, queue = task_store, redis_queue
     service = TaskService(
         store=store,
         dispatcher=QueueTaskDispatcher(store, queue),
@@ -193,8 +198,8 @@ async def test_reclaimed_task_is_announced_with_its_original_request_id():
     }
 
 
-async def test_submit_response_validates_from_the_task_record():
-    service, _, _ = _service()
+async def test_submit_response_validates_from_the_task_record(service_parts):
+    service, _, _ = service_parts
     task = await service.submit(
         type="completion", payload={"prompt": "hi"}, principal_id="alice"
     )

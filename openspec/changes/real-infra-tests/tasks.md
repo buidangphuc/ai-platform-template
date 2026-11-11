@@ -53,10 +53,10 @@ Owns: `tests/unit/modules/queues/test_rabbitmq.py` (new), `pyproject.toml` cover
 
 Owns: `app/modules/messaging/{queue,tasks}/adapters/memory.py`, `InMemoryRateLimiter`, cache/object/quota/rag memory backends, their factories, `app/core/config/{messaging,platform,ai}.py` literals and defaults, `.env.example`, tests of memory backends, `README.md`, `docs/template-guide.md`, `docs/usage.md`.
 
-- [ ] 6.1 Delete memory adapters and their tests; `*_BACKEND` literals lose `memory`
-- [ ] 6.2 New defaults point at the real backend; validators require the matching `*_ENABLED`
+- [x] 6.1 Delete memory adapters and their tests; `*_BACKEND` literals lose `memory`
+- [x] 6.2 New defaults point at the real backend; validators require the matching `*_ENABLED`
 - [ ] 6.3 `.env.example` matches `bin/li env aipt`; `scripts/check_env_example` passes
-- [ ] 6.4 Eval gate runs with real infra (or only the fake LLM path if it needs none)
+- [x] 6.4 Eval gate runs with real infra (or only the fake LLM path if it needs none)
 
 ## 8. CI and local gate (A′)
 

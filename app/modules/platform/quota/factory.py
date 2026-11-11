@@ -13,12 +13,6 @@ if TYPE_CHECKING:
     from app.modules.platform.quota.adapters.mongo import MongoQuotaStore
 
 
-def build_memory_quota_store() -> QuotaStore:
-    from app.modules.platform.quota.adapters.memory import MemoryQuotaStore
-
-    return MemoryQuotaStore()
-
-
 def build_postgres_quota_store(
     sessionmaker: async_sessionmaker[AsyncSession],
 ) -> QuotaStore:

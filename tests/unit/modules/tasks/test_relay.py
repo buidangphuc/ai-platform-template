@@ -1,16 +1,17 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
-from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
+from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.relay import run_cleanup_loop, run_reclaim_loop
 from app.modules.messaging.tasks.service import QueueTaskDispatcher, TaskService
+from app.modules.messaging.tasks.store import TaskRecord, TaskStore
 
 
-async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops():
-    store = InMemoryTaskStore()
-    queue = InMemoryQueueGateway()
+async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops(
+    task_store: TaskStore, redis_queue: QueueGateway
+):
+    store, queue = task_store, redis_queue
     service = TaskService(
         store=store,
         dispatcher=QueueTaskDispatcher(store, queue),
@@ -46,7 +47,7 @@ async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops():
             stop=stop,
         )
     )
-    [message] = await asyncio.wait_for(queue.receive(), timeout=2)
+    [message] = await asyncio.wait_for(queue.receive(wait_seconds=2), timeout=5)
     stop.set()
     await asyncio.wait_for(loop, timeout=2)
 
@@ -54,10 +55,10 @@ async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops():
     assert calls >= 2
 
 
-async def test_cleanup_loop_purges_expired_tasks_and_old_published_events_in_batches():
-    from app.modules.messaging.tasks.store import TaskRecord
-
-    store = InMemoryTaskStore()
+async def test_cleanup_loop_purges_expired_tasks_and_old_published_events_in_batches(
+    task_store: TaskStore,
+):
+    store = task_store
     now = datetime.now(UTC)
     for n in range(5):
         await store.create(
@@ -105,12 +106,14 @@ async def test_cleanup_loop_purges_expired_tasks_and_old_published_events_in_bat
     )
 
 
-async def test_cleanup_loop_purges_expired_idempotency_keys_in_batches():
+async def test_cleanup_loop_purges_expired_idempotency_keys_in_batches(
+    task_store: TaskStore,
+):
     idempotency = _CountingIdempotency(expired=5)
     stop = asyncio.Event()
     loop = asyncio.create_task(
         run_cleanup_loop(
-            InMemoryTaskStore(),
+            task_store,
             None,
             idempotency,  # type: ignore[arg-type]
             interval_seconds=0.01,
@@ -130,8 +133,10 @@ async def test_cleanup_loop_purges_expired_idempotency_keys_in_batches():
     )
 
 
-async def test_cleanup_loop_without_an_outbox_only_purges_tasks():
-    store = InMemoryTaskStore()
+async def test_cleanup_loop_without_an_outbox_only_purges_tasks(
+    task_store: TaskStore,
+):
+    store = task_store
     stop = asyncio.Event()
     loop = asyncio.create_task(
         run_cleanup_loop(

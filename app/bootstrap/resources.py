@@ -22,7 +22,6 @@ from app.modules.messaging.queue.factory import (
 )
 from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.factory import (
-    build_memory_task_store,
     build_postgres_task_store,
     build_redis_task_store,
 )
@@ -50,10 +49,7 @@ if TYPE_CHECKING:
     from app.modules.platform.mongo.gateway import MongoGateway
     from app.modules.platform.objects.gateway import ObjectGateway
     from app.modules.platform.quota.service import QuotaService
-    from app.modules.platform.rate_limit.service import (
-        InMemoryRateLimiter,
-        RedisRateLimiter,
-    )
+    from app.modules.platform.rate_limit.service import RedisRateLimiter
 
 
 _T = TypeVar("_T")
@@ -95,8 +91,8 @@ class ApplicationResources:
     mongo: MongoGateway | None = None
     quota: QuotaService | None = None
     outbox_store: OutboxStore | None = None
-    principal_rate_limiter: InMemoryRateLimiter | RedisRateLimiter | None = None
-    ip_rate_limiter: InMemoryRateLimiter | RedisRateLimiter | None = None
+    principal_rate_limiter: RedisRateLimiter | None = None
+    ip_rate_limiter: RedisRateLimiter | None = None
     rag_service: KnowledgeRetrievalService | None = None
     webhook_signer: WebhookSigner | None = None
     webhook_dispatcher: HttpWebhookDispatcher | None = None
@@ -217,7 +213,7 @@ async def _open_queue(
             queue = build_redis_queue_gateway(
                 settings, opened(resources.redis, "redis")
             )
-        case "memory" | "sqs" | "rabbitmq" as backend:
+        case "sqs" | "rabbitmq" as backend:
             queue = await open_queue_gateway(settings, backend)
     stack.push_async_callback(queue.close)
     resources.queue_gateway = queue
@@ -233,8 +229,6 @@ def _open_tasks(
         return
     queue = opened(resources.queue_gateway, "queue gateway")
     match settings.TASK_STORE_BACKEND:
-        case "memory":
-            store = build_memory_task_store()
         case "postgres":
             store = build_postgres_task_store(
                 opened(resources.sessionmaker, "sessionmaker")

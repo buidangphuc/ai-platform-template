@@ -22,14 +22,14 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 |---|---|---|
 | Postgres (SQLAlchemy + Alembic) | `DATABASE_ENABLED=true` + `POSTGRES_*` | postgres |
 | Redis | `REDIS_ENABLED=true` + `REDIS_*` | redis |
-| Async jobs (queue + tasks + worker) | `QUEUE_ENABLED=true TASKS_ENABLED=true` | redis (or memory/sqs/rabbitmq) |
-| Rate limiting | `RATE_LIMIT_ENABLED=true` | memory or redis |
-| Caching | `CACHE_ENABLED=true` | memory or redis |
-| Object storage | `OBJECTS_ENABLED=true` | memory or S3 (`uv sync --extra aws`) |
+| Async jobs (queue + tasks + worker) | `QUEUE_ENABLED=true TASKS_ENABLED=true` | redis (or sqs/rabbitmq) + postgres or redis task store |
+| Rate limiting | `RATE_LIMIT_ENABLED=true` | redis |
+| Caching | `CACHE_ENABLED=true` | redis |
+| Object storage | `OBJECTS_ENABLED=true` | S3 (`uv sync --extra aws`) |
 | MongoDB | `MONGO_ENABLED=true` | mongo (`--extra mongo`) |
 | Idempotency keys | `IDEMPOTENCY_ENABLED=true` | postgres |
 | Outbox / webhooks | `OUTBOX_ENABLED` / `WEBHOOKS_ENABLED` | postgres |
-| Quota | `QUOTA_ENABLED=true` | memory/postgres/mongo |
+| Quota | `QUOTA_ENABLED=true` | postgres/mongo |
 | LLM + tracing + RAG | `uv sync --extra ai`, then `CHAT_MODEL=...`, `LANGFUSE_ENABLED`, `RAG_ENABLED` | provider keys / langfuse |
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +

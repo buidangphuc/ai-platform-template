@@ -119,16 +119,8 @@ async def test_stream_completion_calls_injected_handler(test_settings: Settings)
     assert handler.stream_requests[0].messages[-1].content == "hello"
 
 
-async def test_task_completion_submit_and_poll(test_settings: Settings):
-    settings = test_settings.model_copy(
-        update={
-            # Async tasks are opt-in on the template — enable the stack here.
-            "QUEUE_ENABLED": True,
-            "TASKS_ENABLED": True,
-            "QUEUE_BACKEND": "memory",
-            "TASK_STORE_BACKEND": "memory",
-        }
-    )
+async def test_task_completion_submit_and_poll(worker_settings: Settings):
+    settings = worker_settings
     app = create_app(
         features=(
             completions_feature(
@@ -163,9 +155,9 @@ async def test_task_completion_submit_and_poll(test_settings: Settings):
 
 
 async def test_task_poll_is_scoped_to_the_submitting_principal(
-    test_settings: Settings,
+    worker_settings: Settings,
 ):
-    settings = test_settings.model_copy(
+    settings = worker_settings.model_copy(
         update={
             "AUTH_API_KEYS": ",".join(
                 (
@@ -174,10 +166,6 @@ async def test_task_poll_is_scoped_to_the_submitting_principal(
                     api_key_entry("mallory", "mallory-token", "tasks"),
                 )
             ),
-            "QUEUE_ENABLED": True,
-            "TASKS_ENABLED": True,
-            "QUEUE_BACKEND": "memory",
-            "TASK_STORE_BACKEND": "memory",
         }
     )
     app = create_app(
@@ -216,15 +204,8 @@ async def test_task_poll_is_scoped_to_the_submitting_principal(
     assert missing.json()["error"]["code"] == "task_not_found"
 
 
-async def test_task_poll_hides_tasks_of_another_type(test_settings: Settings):
-    settings = test_settings.model_copy(
-        update={
-            "QUEUE_ENABLED": True,
-            "TASKS_ENABLED": True,
-            "QUEUE_BACKEND": "memory",
-            "TASK_STORE_BACKEND": "memory",
-        }
-    )
+async def test_task_poll_hides_tasks_of_another_type(worker_settings: Settings):
+    settings = worker_settings
     app = create_app(
         features=(
             completions_feature(

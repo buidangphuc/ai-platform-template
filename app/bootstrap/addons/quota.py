@@ -7,7 +7,6 @@ from contextlib import AsyncExitStack
 from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
 from app.modules.platform.quota.factory import (
-    build_memory_quota_store,
     build_mongo_quota_store,
     build_postgres_quota_store,
     build_quota_service,
@@ -29,8 +28,6 @@ class QuotaAddon:
     ) -> None:
         store: QuotaStore
         match settings.QUOTA_BACKEND:
-            case "memory":
-                store = build_memory_quota_store()
             case "postgres":
                 store = build_postgres_quota_store(
                     opened(resources.sessionmaker, "sessionmaker")

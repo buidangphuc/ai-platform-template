@@ -1,25 +1,37 @@
+from collections.abc import Callable
+
+import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 
 from app.bootstrap.application import create_app
 from app.core.config import Settings
-from tests.factories import build_test_settings
 
 
-def _settings(**overrides: object) -> Settings:
-    base: dict[str, object] = {
-        "RATE_LIMIT_ENABLED": True,
-        "RATE_LIMIT_BACKEND": "memory",
-        "RATE_LIMIT_IP_ENABLED": True,
-        "RATE_LIMIT_IP_PER_MINUTE": 2,
-        "RATE_LIMIT_PRINCIPAL_ENABLED": False,
-        "RATE_LIMIT_EXCLUDE_PATHS": "/healthz,/readyz",
-    }
-    base.update(overrides)
-    return build_test_settings(**base)
+@pytest.fixture()
+def make_settings(
+    infra_settings: Callable[..., Settings], redis_client: Redis, redis_prefix: str
+) -> Callable[..., Settings]:
+    def build(**overrides: object) -> Settings:
+        base: dict[str, object] = {
+            "REDIS_ENABLED": True,
+            "RATE_LIMIT_ENABLED": True,
+            "RATE_LIMIT_REDIS_PREFIX": redis_prefix,
+            "RATE_LIMIT_IP_ENABLED": True,
+            "RATE_LIMIT_IP_PER_MINUTE": 2,
+            "RATE_LIMIT_PRINCIPAL_ENABLED": False,
+            "RATE_LIMIT_EXCLUDE_PATHS": "/healthz,/readyz",
+        }
+        base.update(overrides)
+        return infra_settings(**base)
+
+    return build
 
 
-async def test_ip_rate_limit_blocks_requests_past_limit_and_emits_retry_after():
-    app = create_app(settings=_settings(), init_resources=True)
+async def test_ip_rate_limit_blocks_requests_past_limit_and_emits_retry_after(
+    make_settings: Callable[..., Settings],
+):
+    app = create_app(settings=make_settings(), init_resources=True)
 
     async with app.router.lifespan_context(app):
         async with AsyncClient(
@@ -37,8 +49,10 @@ async def test_ip_rate_limit_blocks_requests_past_limit_and_emits_retry_after():
     assert third.json()["error"]["code"] == "rate_limit_exceeded"
 
 
-async def test_ip_rate_limit_excludes_health_paths():
-    app = create_app(settings=_settings(), init_resources=True)
+async def test_ip_rate_limit_excludes_health_paths(
+    make_settings: Callable[..., Settings],
+):
+    app = create_app(settings=make_settings(), init_resources=True)
 
     async with app.router.lifespan_context(app):
         async with AsyncClient(
@@ -50,8 +64,10 @@ async def test_ip_rate_limit_excludes_health_paths():
     assert all(status == 200 for status in statuses)
 
 
-async def test_ip_rate_limit_passes_through_when_disabled():
-    settings = _settings(RATE_LIMIT_IP_ENABLED=False, RATE_LIMIT_IP_PER_MINUTE=1)
+async def test_ip_rate_limit_passes_through_when_disabled(
+    make_settings: Callable[..., Settings],
+):
+    settings = make_settings(RATE_LIMIT_IP_ENABLED=False, RATE_LIMIT_IP_PER_MINUTE=1)
     app = create_app(settings=settings, init_resources=True)
 
     async with app.router.lifespan_context(app):

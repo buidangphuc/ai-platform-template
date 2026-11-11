@@ -1,6 +1,6 @@
 """Backend-agnostic Task persistence contract.
 
-Each adapter (memory / postgres / redis) implements the same surface so the
+Each adapter (postgres / redis) implements the same surface so the
 service layer and worker can swap durability without touching call sites.
 """
 
