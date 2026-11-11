@@ -71,6 +71,15 @@ handler comes from `completions_feature(handler_factory=...)`.
 > A product that needs guaranteed JSON applies `with_structured_output` on
 > its own sync endpoint only.
 
+Stores take an `async_sessionmaker` (or `MongoGateway`) through their constructor,
+built in `Feature.build` from `resources.sessionmaker` / `resources.mongo`; there is
+no per-request session dependency. `conversations` (Postgres + LLM, behind
+`CONVERSATIONS_ENABLED`) is the worked example. A fork without a chatbot deletes
+`app/modules/business/conversations`, `app/api/v1/conversations`,
+`app/bootstrap/features/conversations.py` and its entry in `registry.py`,
+`app/core/config/conversations.py` (plus its entry in the `Settings` bases and the
+`.env.example` line) and migration `0010_create_conversations`.
+
 Rules that keep the template clean (enforced by review, spelled out in
 [agents/architecture.md](agents/architecture.md)): endpoints never build clients/stores; business services never
 read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.

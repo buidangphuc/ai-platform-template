@@ -5,24 +5,28 @@ See module docstring in ``__init__.py`` for the conflict rationale and the
 recommended async pattern.
 """
 
-from collections.abc import Mapping
+import functools
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from app.bootstrap.state import get_app_resources, get_app_settings, require
 from app.core.errors import AppError
 from app.modules.platform.idempotency.service import (
     build_request_hash,
+    compute_idempotency_expires_at,
 )
 from app.modules.platform.idempotency.store import (
     IdempotencyCachedResponse,
     IdempotencyClaim,
     IdempotencyStore,
 )
+from app.modules.platform.identity.auth import require_principal
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
 
@@ -119,6 +123,48 @@ async def store_idempotent_response(
         status_code=status_code,
         response_body=response_body,
     )
+
+
+def idempotent(handler: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+    """Optional route guard: replay a repeated ``Idempotency-Key`` request.
+
+    Opt-in example: no route in this template enables it. Place it under the route
+    decorator on a handler that declares ``request: Request`` and returns
+    a dict or Pydantic model (stored and replayed with status 200)::
+
+        @router.post("/reports")
+        @idempotent
+        async def create_report(payload: Payload, request: Request) -> dict: ...
+
+    Without the header the handler runs untouched. With it, a completed key
+    replays the stored response without running the handler, and the first
+    successful result is stored. Requires ``IDEMPOTENCY_ENABLED=true``.
+    """
+
+    @functools.wraps(handler)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        request = next(
+            value for value in (*args, *kwargs.values()) if isinstance(value, Request)
+        )
+        principal = getattr(
+            request.state, "principal", None
+        ) or await require_principal(request)
+        outcome = await replay_or_start_idempotent_request(
+            request,
+            principal_id=principal.id,
+            body=await request.body(),
+            expires_at=compute_idempotency_expires_at(get_app_settings(request.app)),
+        )
+        if isinstance(outcome, JSONResponse):
+            return outcome
+        result = await handler(*args, **kwargs)
+        if outcome is not None:
+            await store_idempotent_response(
+                outcome, status_code=200, response_body=jsonable_encoder(result)
+            )
+        return result
+
+    return wrapper
 
 
 def _require_enabled_store(request: Request) -> IdempotencyStore:

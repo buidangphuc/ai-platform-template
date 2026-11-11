@@ -75,8 +75,8 @@ def _paths(app) -> set[str]:
     return {getattr(route, "path", "") for route in app.routes}
 
 
-def test_default_registry_holds_completions():
-    assert [feature.name for feature in FEATURES] == ["completions"]
+def test_default_registry_holds_completions_and_conversations():
+    assert [feature.name for feature in FEATURES] == ["completions", "conversations"]
     assert FEATURES[0].service is CompletionService
 
 

@@ -161,8 +161,7 @@ method, path, status, duration, request id, and authenticated principal when
 available.
 
 Endpoints reach the request boundary through small per-concern dependencies,
-not a single context object: `DbSession`
-(`app.core.database.engine`) for the SQLAlchemy session,
+not a single context object:
 `Depends(require_principal)` (`app.modules.platform.identity.auth`) for the
 authenticated principal (which also sets `request.state.principal`),
 `get_request_id()` (`app.core.request_context`) for the request id, and
@@ -200,18 +199,25 @@ business service method, then call it from the API router. Update bootstrap only
 when the endpoint introduces a new runtime dependency or a new application
 service that must be created once per app lifecycle.
 
-Database access uses a session-per-request dependency. The dependency rolls
-back on unhandled exceptions and always closes the session, but it does not
-auto-commit. Business services own explicit `commit()` calls.
+Database access has one pattern: a store takes an
+`async_sessionmaker[AsyncSession]` through its constructor, built in
+`Feature.build` from `resources.sessionmaker`. A service that needs an explicit
+transaction opens it itself with
+`async with sessionmaker() as session, session.begin():`. There is no
+per-request session dependency. `app/modules/business/conversations` is the
+worked example (set `CONVERSATIONS_ENABLED=true` with `DATABASE_ENABLED` and
+`LLM_ENABLED`, then apply migration 0010).
 
 Mongo access is an opt-in platform resource. Install the `mongo` extra, set
-`MONGO_ENABLED=true`, and use `app.modules.platform.mongo.dependency.MongoDep` or
-`get_mongo(...)` to access the lifespan-managed `MongoGateway`. Product modules
-should build their own stores on top of the gateway instead of opening clients
-or reading app state directly.
+`MONGO_ENABLED=true`, and build your store in `Feature.build` from
+`resources.mongo` (the lifespan-managed `MongoGateway`). Product modules build
+their own stores on top of the gateway instead of opening clients or reading
+app state directly.
 
-List endpoints can reuse `app.core.pagination.PaginationParams` and
-`build_list_response(...)` for offset-based responses:
+List endpoints take `params: PaginationParams = Depends()` from
+`app.core.pagination`, pass `params.limit` and `params.offset` to the store, and
+return `build_list_response(items=..., total=..., params=params)` for
+offset-based responses:
 `{"items": [...], "pagination": {"limit": 50, "offset": 0, "total": 123}}`.
 The template intentionally does not ship a generic query builder.
 
@@ -231,11 +237,33 @@ principal id. Reusing the same key with a different request returns
 `409 idempotency_key_in_progress`. Streaming responses are intentionally outside
 this contract.
 
+Two route guards are provided as opt-in examples; no route in the template
+enables them. `require_quota(resource, cost=1)`
+(`app.modules.platform.quota.http`) is a dependency that reserves quota for the
+principal before the handler runs and answers `429` with `Retry-After` when
+exceeded; it needs `QUOTA_ENABLED=true` and a policy for the resource:
+
+```python
+@router.post("/reports", dependencies=[Depends(require_quota("reports"))])
+async def create_report(...): ...
+```
+
+`@idempotent` (`app.modules.platform.idempotency.http`) wraps a synchronous
+route that declares `request: Request` and returns a dict or Pydantic model. A
+repeated `Idempotency-Key` replays the stored response (status 200) without
+running the handler; without the header the handler runs untouched. It needs
+`IDEMPOTENCY_ENABLED=true`:
+
+```python
+@router.post("/reports")
+@idempotent
+async def create_report(payload: Payload, request: Request) -> dict: ...
+```
+
 App observability, experiment tracking, LLM response caching, object storage,
 and job queues are intentionally not wrapped by template adapters in this phase.
 Use the tools required by the target project directly at the module boundary.
-Database access goes through `app.core.database.engine.DbSession`, a normal SQLAlchemy
-session dependency.
+Database access goes through stores that take a `sessionmaker` (see above).
 
 Langfuse is only wired at the AI execution boundary. Use
 `build_llm_instance(..., instance_id="...", service_name="...")` from

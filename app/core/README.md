@@ -91,7 +91,7 @@ if settings.ENVIRONMENT.is_production:
 ```
 database/
 ├── __init__.py       # Empty — import from the defining file
-├── engine.py         # build_engine, build_sessionmaker, DbSession, get_db, check_postgres_connection
+├── engine.py         # build_engine, build_sessionmaker, check_postgres_connection
 └── model.py          # Base, TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, utcnow
 ```
 
@@ -99,13 +99,13 @@ Import each symbol from the file that defines it (ORM models only need `model.py
 so they don't load the engine or FastAPI):
 
 ```python
-from app.core.database.engine import DbSession
 from app.core.database.model import Base, TimestampMixin, utcnow
 ```
 
-`DbSession = Annotated[AsyncSession, Depends(get_db)]` — drop into FastAPI endpoints.
-
-`get_db` reads `app.state.resources.sessionmaker`; raises 503 `database_not_configured` if missing.
+There is no per-request session dependency. Stores take an
+`async_sessionmaker[AsyncSession]` through their constructor, built in
+`Feature.build` from `resources.sessionmaker`; a service opens
+`async with sessionmaker() as session, session.begin():` for an explicit transaction.
 
 ---
 
