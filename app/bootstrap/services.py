@@ -19,6 +19,7 @@ def enabled_features(
     enabled = tuple(feature for feature in features if feature.enabled(settings))
     services: dict[type, str] = {}
     task_types: dict[str, str] = {}
+    upstreams: dict[str, str] = {}
     for feature in enabled:
         if feature.service in services:
             raise ValueError(
@@ -33,6 +34,13 @@ def enabled_features(
                     f"{task_types[task_type]!r} and {feature.name!r}"
                 )
             task_types[task_type] = feature.name
+        for upstream in feature.upstreams:
+            if upstream.name in upstreams:
+                raise ValueError(
+                    f"upstream {upstream.name!r} registered by features "
+                    f"{upstreams[upstream.name]!r} and {feature.name!r}"
+                )
+            upstreams[upstream.name] = feature.name
     return enabled
 
 
@@ -67,6 +75,9 @@ async def open_runtime(
         settings,
         init_resources=init_resources,
         addons=addons,
+        upstreams=tuple(
+            upstream for feature in enabled for upstream in feature.upstreams
+        ),
     ) as resources:
         compose_business_services(resources, settings, enabled)
         yield resources

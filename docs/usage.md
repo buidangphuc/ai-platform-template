@@ -191,6 +191,10 @@ platform resources are open, and the instance lives on
 `get_app_resources(request.app).service(<Domain>Service)`; no per-surface getter
 helpers.
 
+To call an external HTTP API, declare an `Upstream` in the feature's `upstreams`
+and use `resources.http(name)` (timeout, retry, circuit breaker and request-id
+included); do not build your own `httpx.AsyncClient`.
+
 Adding a new endpoint usually should not touch bootstrap. Add or extend the
 business service method, then call it from the API router. Update bootstrap only
 when the endpoint introduces a new runtime dependency or a new application

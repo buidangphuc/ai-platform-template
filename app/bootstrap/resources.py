@@ -33,6 +33,7 @@ from app.modules.messaging.tasks.service import (
     TaskService,
 )
 from app.modules.messaging.tasks.store import TaskStore
+from app.modules.platform.http.upstream import Upstream, UpstreamClient
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -101,6 +102,7 @@ class ApplicationResources:
     webhook_dispatcher: HttpWebhookDispatcher | None = None
     telemetry: Telemetry | None = None
     llm: LLMInstance | None = None
+    upstreams: dict[str, UpstreamClient] = field(default_factory=dict)
     # Addons opened for this runtime (closed in reverse by the exit stack)
     addons: list[BootstrapAddon] = field(default_factory=list)
     # Readiness checks, registered by each opener as its resource comes up
@@ -115,6 +117,15 @@ class ApplicationResources:
                 code="service_not_configured",
             ) from None
 
+    def http(self, name: str) -> UpstreamClient:
+        try:
+            return self.upstreams[name]
+        except KeyError:
+            raise ServiceUnavailableError(
+                f"Upstream {name!r} is not configured",
+                code="upstream_not_configured",
+            ) from None
+
 
 @asynccontextmanager
 async def open_application_resources(
@@ -122,6 +133,7 @@ async def open_application_resources(
     *,
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...] = (),
+    upstreams: tuple[Upstream, ...] = (),
 ) -> AsyncIterator[ApplicationResources]:
     """Open every lifecycle resource once; close them in reverse on exit.
 
@@ -144,10 +156,24 @@ async def open_application_resources(
                 await addon.open(resources, settings, stack)
                 resources.addons.append(addon)
 
+        _open_upstreams(resources, settings, upstreams, stack)
+
         if init_resources:
             _open_tasks(resources, settings, stack)
 
         yield resources
+
+
+def _open_upstreams(
+    resources: ApplicationResources,
+    settings: Settings,
+    upstreams: tuple[Upstream, ...],
+    stack: AsyncExitStack,
+) -> None:
+    for upstream in upstreams:
+        client = UpstreamClient.from_upstream(upstream, settings)
+        stack.push_async_callback(client.aclose)
+        resources.upstreams[upstream.name] = client
 
 
 def _open_database(

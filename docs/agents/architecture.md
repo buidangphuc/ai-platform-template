@@ -78,6 +78,10 @@ service consumes interface/capability
 8. Endpoint functions read the service from `get_app_resources(request.app).service(<Domain>Service)`, parse HTTP input, call one service method, and return the existing response contract. No per-surface getter helpers.
 9. Tests: unit test for orchestration and failure modes; bootstrap test that lifespan composes the service (`tests/unit/core/test_features.py` shows a second feature); integration test for the API contract (tests run the app lifespan, see `tests/factories.py:api_client_for`; build the app with `create_app(features=(<domain>_feature(...),))`).
 
+## Calling external HTTP APIs
+
+Declare an `Upstream(name, base_url, timeout, retries, headers, follow_redirects)` in the feature's `upstreams` (`app/modules/platform/http/upstream.py`) and call it with `resources.http(name)`, an `UpstreamClient` (`get`, `post`, `request`). Bootstrap opens one `httpx.AsyncClient` per upstream of every enabled feature and closes it on shutdown; each call applies the timeout, retries transient failures up to `retries`, trips a per-upstream circuit breaker (`ServiceUnavailableError`, code `upstream_unavailable`), sends `X-Request-ID` and logs one line without bodies or headers. Two enabled features declaring the same upstream name fail at startup; an unknown name raises `upstream_not_configured`. Do not build an `httpx.AsyncClient` in a feature or service.
+
 ## Adding an endpoint
 
 ```text

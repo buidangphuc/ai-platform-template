@@ -114,8 +114,28 @@ POST /predict {"text": "..."}  -> {"label": "...", "score": 0.97}   (or texts:[.
 GET  /health · GET /metrics
 ```
 
-Build the httpx client in your domain runtime
-(`build_httpx_model_server_client(settings.MY_MODEL_URL)`), own its close().
+Declare the server as an `Upstream` on your `Feature` and hand the resolved
+client to `ModelServerClient` (timeout, retry on transient failures, circuit
+breaker and `X-Request-ID` come with it; bootstrap opens and closes it):
+
+```python
+Feature(
+    name="classify",
+    service=ClassifyService,
+    upstreams=(
+        Upstream(
+            "model_server",
+            base_url=lambda settings: settings.MY_MODEL_URL,
+            timeout=10.0,
+            retries=1,
+        ),
+    ),
+    build=lambda res, settings: ClassifyService(
+        ModelServerClient(res.http("model_server"))
+    ),
+)
+```
+
 Any HTTP model server fits: the ML template's `Dockerfile.serve` container,
 vLLM/TGI/llama.cpp for LLMs (OpenAI-compatible servers plug into the `[ai]`
 LangChain client via `base_url`), or a managed endpoint. Add it as a compose

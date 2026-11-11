@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from app.bootstrap.resources import ApplicationResources
     from app.core.config import Settings
     from app.modules.messaging.tasks.store import TaskRecord
+    from app.modules.platform.http.upstream import Upstream
 
 TaskHandler = Callable[
     ["ApplicationResources", "TaskRecord"], Awaitable[dict[str, Any]]
@@ -30,7 +31,7 @@ class Feature:
     task_routers: tuple[APIRouter, ...] = ()
     tasks: Mapping[str, TaskHandler] = field(default_factory=dict)
     models: tuple[str, ...] = ()
-    upstreams: tuple[Any, ...] = ()
+    upstreams: tuple[Upstream, ...] = ()
     enabled: Callable[[Settings], bool] = _always
 
 
