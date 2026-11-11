@@ -11,7 +11,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.bootstrap import worker as worker_module
+from app.bootstrap.features.completions import completions_feature
+from app.bootstrap.resources import ApplicationResources
 from app.bootstrap.worker import (
     WorkerContext,
     build_worker_message_handler,
@@ -21,6 +22,7 @@ from app.bootstrap.worker import (
 )
 from app.core.config import Settings
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
+from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.queue.gateway import QueueMessage
 from app.modules.messaging.queue.worker import (
     AsyncPollingWorker,
@@ -91,7 +93,7 @@ async def test_worker_context_does_not_open_disabled_database_or_redis(monkeypat
 async def test_worker_context_uses_default_echo_handler():
     async with worker_context(_settings()) as ctx:
         assert isinstance(
-            ctx.resources.completion_service.handler, EchoCompletionHandler
+            ctx.resources.service(CompletionService).handler, EchoCompletionHandler
         )
 
 
@@ -108,9 +110,11 @@ async def test_worker_context_uses_the_same_handler_factory_as_the_api():
         seen.append(resources)
         return custom
 
-    async with worker_context(_settings(), completion_handler_factory=factory) as ctx:
+    async with worker_context(
+        _settings(), features=(completions_feature(handler_factory=factory),)
+    ) as ctx:
         assert seen == [ctx.resources]
-        assert ctx.resources.completion_service.handler is custom
+        assert ctx.resources.service(CompletionService).handler is custom
 
 
 async def test_worker_message_handler_marks_task_completed():
@@ -139,9 +143,10 @@ async def test_worker_message_handler_marks_task_completed():
             pytest.fail("success path should not mark failed")
 
     service = _Service()
-    completion_service = worker_module.CompletionService(EchoCompletionHandler())
     process_message = build_worker_message_handler(
-        service=service, completion_service=completion_service
+        service=service,
+        resources=_resources(EchoCompletionHandler()),
+        handlers=completions_feature().tasks,
     )
 
     await process_message(
@@ -330,12 +335,17 @@ class _ScriptedService:
         self.failed.append((task_id, error))
 
 
+def _resources(completion_handler) -> ApplicationResources:
+    resources = ApplicationResources()
+    resources.services[CompletionService] = CompletionService(completion_handler)
+    return resources
+
+
 def _handler(service: _ScriptedService, completion_handler=None):
     return build_worker_message_handler(
         service=service,  # type: ignore[arg-type]
-        completion_service=worker_module.CompletionService(
-            completion_handler or EchoCompletionHandler()
-        ),
+        resources=_resources(completion_handler or EchoCompletionHandler()),
+        handlers=completions_feature().tasks,
     )
 
 

@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.core.config import Settings
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -97,7 +98,11 @@ async def test_request_body_limit_returns_standard_envelope():
 
 async def test_access_log_records_request_context(caplog):
     app = create_app(
-        completion_handler_factory=lambda resources, settings: _CompletionHandler(),
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, settings: _CompletionHandler()
+            ),
+        ),
         settings=_settings(),
         init_resources=False,
     )

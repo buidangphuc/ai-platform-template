@@ -1,7 +1,8 @@
 """Eval gate for the completions surface.
 
-Runs the JSONL dataset against the real CompletionService (echo handler by
-default — swap in your product handler when you fork) and FAILS (exit != 0)
+Runs the JSONL dataset against the CompletionService built by the completions
+feature (echo handler by default — pass your product handler factory to
+completions_feature when you fork) and FAILS (exit != 0)
 when the pass rate drops below --min-score.
 
 Per-case evaluator selection via metadata.evaluator: exact | contains |
@@ -17,7 +18,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 
+from app.bootstrap.features.completions import completions_feature
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import get_settings
 from app.modules.ai.evals.evaluators import (
     ContainsEvaluator,
@@ -31,19 +35,19 @@ from app.modules.ai.evals.runner import (
     evaluate_one,
     load_jsonl_cases,
 )
-from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.business.completions.schemas import CompletionRequest
-from app.modules.business.completions.service import CompletionService
 
 DEFAULT_CASES = "evals/completions_smoke.jsonl"
 
-# The eval target — swap the handler for your product's when you fork.
-_completion_service = CompletionService(EchoCompletionHandler())
 
+def _build_target(settings) -> Callable[[EvalCase], Awaitable[EvalTargetResult]]:
+    service = completions_feature().build(ApplicationResources(), settings)
 
-async def _target(case: EvalCase) -> EvalTargetResult:
-    result = await _completion_service.complete(CompletionRequest(**case.input))
-    return EvalTargetResult(output=result.content)
+    async def target(case: EvalCase) -> EvalTargetResult:
+        result = await service.complete(CompletionRequest(**case.input))
+        return EvalTargetResult(output=result.content)
+
+    return target
 
 
 def _build_evaluators(settings=None) -> dict[str, Evaluator | None]:
@@ -61,6 +65,7 @@ def _build_evaluators(settings=None) -> dict[str, Evaluator | None]:
 async def _run(args: argparse.Namespace, settings=None) -> int:
     cases = load_jsonl_cases(args.cases)
     evaluators = _build_evaluators(settings)
+    target = _build_target(settings or get_settings())
 
     scored = passed = skipped = 0
     failures: list[str] = []
@@ -70,7 +75,7 @@ async def _run(args: argparse.Namespace, settings=None) -> int:
         if evaluator is None:
             skipped += 1
             continue
-        target_result = await _target(case)
+        target_result = await target(case)
         scores = await evaluate_one(
             output=target_result.output,
             expected=case.expected,

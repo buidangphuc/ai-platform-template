@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from loguru import logger
 
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.modules.business.completions.guards import GuardrailViolation
 from app.modules.business.completions.schemas import (
     CompletionRequest,
@@ -62,8 +63,12 @@ async def _post(
 ):
     app = create_app(
         settings=build_test_settings(**settings),
-        completion_handler_factory=lambda resources, s: handler,
-        completion_guards_factory=lambda resources, s: guards,
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, s: handler,
+                guards_factory=lambda resources, s: guards,
+            ),
+        ),
         init_resources=False,
     )
     # After create_app: configure_logging() resets every loguru sink.
@@ -198,33 +203,43 @@ async def test_default_echo_stream_reports_usage(client: AsyncClient):
     assert done["usage"] == {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
 
 
-async def test_stream_logs_one_completion_line_without_content():
+async def _llm_logs(path: str) -> tuple[list[str], str]:
     lines: list[str] = []
-    usage = CompletionUsage(input_tokens=2, output_tokens=3, total_tokens=5)
-    await _post(
-        _Handler(
-            _chunk("secret-output"),
-            _chunk("", usage=usage, finish_reason="stop", model="scripted"),
-        ),
-        logs=lines,
+    app = create_app(
+        settings=build_test_settings(LLM_ENABLED=True), init_resources=False
     )
+    sink = logger.add(lines.append, format="{message}")
+    try:
+        async with app.router.lifespan_context(app):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(path, headers=HEADERS, json=BODY)
+    finally:
+        logger.remove(sink)
+    assert response.status_code == 200
+    return lines, response.text
+
+
+async def test_stream_logs_one_llm_line_without_content():
+    lines, _ = await _llm_logs(URL)
 
     [line] = [ln for ln in lines if "completion " in ln and "mode=stream" in ln]
-    for expected in (
-        "outcome=ok",
-        "model=scripted",
-        "finish_reason=stop",
-        "input_tokens=2",
-        "output_tokens=3",
-        "total_tokens=5",
-        "duration_ms=",
-        "ttft_ms=",
-    ):
+    for expected in ("outcome=ok", "duration_ms=", "ttft_ms="):
         assert expected in line
-    assert "secret-output" not in line and "hello" not in line
+    assert "fake response" not in line and "hello" not in line
 
 
-async def test_sync_completion_logs_one_line_with_usage(client: AsyncClient):
+async def test_sync_completion_logs_one_llm_line_without_content():
+    lines, _ = await _llm_logs("/api/v1/completions")
+
+    [line] = [ln for ln in lines if "completion " in ln and "mode=sync" in ln]
+    assert "outcome=ok" in line
+    assert "ttft_ms=None" in line
+    assert "fake response" not in line and "hello" not in line
+
+
+async def test_echo_handler_logs_no_completion_line(client: AsyncClient):
     lines: list[str] = []
     sink = logger.add(lines.append, format="{message}")
     try:
@@ -233,10 +248,4 @@ async def test_sync_completion_logs_one_line_with_usage(client: AsyncClient):
         logger.remove(sink)
 
     assert response.status_code == 200
-    [line] = [ln for ln in lines if "completion " in ln and "mode=sync" in ln]
-    assert "outcome=ok" in line
-    assert "model=echo" in line
-    assert "finish_reason=stop" in line
-    assert "total_tokens=3" in line
-    assert "ttft_ms=None" in line
-    assert "echo:" not in line
+    assert not [ln for ln in lines if ln.startswith("completion ")]

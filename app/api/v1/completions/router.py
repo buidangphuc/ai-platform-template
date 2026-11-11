@@ -12,6 +12,7 @@ from app.modules.business.completions.schemas import (
     CompletionStreamChunk,
     StreamSummary,
 )
+from app.modules.business.completions.service import CompletionService
 from app.modules.platform.identity.auth import require_principal
 
 router = APIRouter(
@@ -23,14 +24,14 @@ router = APIRouter(
 
 @router.post("", response_model=CompletionResponse)
 async def complete(payload: CompletionRequest, request: Request) -> CompletionResponse:
-    service = get_app_resources(request.app).completion_service
+    service = get_app_resources(request.app).service(CompletionService)
     result = await service.complete(payload)
     return CompletionResponse.model_validate(result, from_attributes=True)
 
 
 @router.post("/stream")
 async def stream(payload: CompletionRequest, request: Request) -> StreamingResponse:
-    service = get_app_resources(request.app).completion_service
+    service = get_app_resources(request.app).service(CompletionService)
     return await event_stream_response(request, _events(service.stream(payload)))
 
 

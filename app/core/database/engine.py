@@ -1,7 +1,3 @@
-from collections.abc import AsyncIterator
-from typing import Annotated
-
-from fastapi import Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -10,7 +6,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.bootstrap.state import get_app_resources, require
 from app.core.config import Settings
 
 
@@ -36,20 +31,3 @@ async def check_postgres_connection(
 ) -> None:
     async with sessionmaker() as session:
         await session.execute(text("SELECT 1"))
-
-
-async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
-    sessionmaker = require(
-        get_app_resources(request.app).sessionmaker,
-        code="database_not_configured",
-        message="Database session is disabled or lifespan has not opened it",
-    )
-    async with sessionmaker() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-
-
-DbSession = Annotated[AsyncSession, Depends(get_db)]

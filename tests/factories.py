@@ -1,11 +1,15 @@
 import hashlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
+from app.modules.platform.http.upstream import UpstreamClient
+
+Handler = Callable[[httpx.Request], httpx.Response]
 
 
 def sha256_hex(token: str) -> str:
@@ -51,3 +55,21 @@ async def open_addon(addon, resources, settings: Settings) -> AsyncExitStack:
     stack = AsyncExitStack()
     await addon.open(resources, settings, stack)
     return stack
+
+
+def mock_upstreams(monkeypatch, handlers: Mapping[str, Handler | httpx.MockTransport]):
+    """Serve the named upstreams from ``httpx.MockTransport``; others stay real."""
+    transports = {
+        name: handler
+        if isinstance(handler, httpx.MockTransport)
+        else httpx.MockTransport(handler)
+        for name, handler in handlers.items()
+    }
+    original = UpstreamClient.from_upstream.__func__
+
+    def from_upstream(cls, upstream, settings, *, transport=None):
+        return original(
+            cls, upstream, settings, transport=transports.get(upstream.name, transport)
+        )
+
+    monkeypatch.setattr(UpstreamClient, "from_upstream", classmethod(from_upstream))

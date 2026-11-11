@@ -7,7 +7,8 @@ from langchain_core.language_models.fake_chat_models import (
     FakeListChatModel,
     GenericFakeChatModel,
 )
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.outputs import ChatGenerationChunk
 
 from app.core.errors import ServiceUnavailableError
 from app.core.resilience import BreakerState, is_transient_error
@@ -344,3 +345,130 @@ async def test_a_call_inside_the_deadline_is_unaffected(test_settings):
     response = await instance.ainvoke([HumanMessage(content="hi")])
 
     assert response.content == "a"
+
+
+class _StreamModel(FakeListChatModel):
+    script: list[object]
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        for step in self.script:
+            if isinstance(step, Exception):
+                raise step
+            yield ChatGenerationChunk(message=AIMessageChunk(content=str(step)))
+
+
+def _stream_instance(test_settings, scripts: dict[str, list[object]]):
+    settings = test_settings.model_copy(
+        update={
+            "CHAT_MODEL": "primary",
+            "CHAT_FALLBACK_MODELS": "secondary",
+            "LLM_BREAKER_FAILURE_THRESHOLD": 2,
+        }
+    )
+    return build_llm_instance(
+        settings,
+        instance_id="t",
+        service_name="test",
+        model_builder=lambda target: _StreamModel(
+            responses=[target], script=scripts[target]
+        ),
+    )
+
+
+async def _collect(instance, **kwargs) -> list[str]:
+    return [
+        str(chunk.content)
+        async for chunk in instance.astream([HumanMessage(content="hi")], **kwargs)
+        if chunk.content
+    ]
+
+
+async def test_astream_fails_over_before_first_chunk(test_settings):
+    instance = _stream_instance(
+        test_settings,
+        {"primary": [_StatusError(503)], "secondary": ["s1", "s2"]},
+    )
+
+    assert await _collect(instance) == ["s1", "s2"]
+
+    breakers = instance.router._breakers
+    assert breakers[("default", "primary")].failure_count == 1
+    assert breakers[("default", "secondary")].failure_count == 0
+
+
+async def test_astream_no_failover_after_first_chunk(test_settings):
+    instance = _stream_instance(
+        test_settings,
+        {"primary": ["p1", _StatusError(503)], "secondary": ["s1"]},
+    )
+    seen: list[str] = []
+
+    with pytest.raises(_StatusError):
+        async for chunk in instance.astream([HumanMessage(content="hi")]):
+            seen.append(str(chunk.content))
+
+    assert seen == ["p1"]
+    breakers = instance.router._breakers
+    assert breakers[("default", "primary")].failure_count == 1
+    assert ("default", "secondary") not in breakers or (
+        breakers[("default", "secondary")].failure_count == 0
+    )
+
+
+async def test_astream_does_not_fail_over_on_deterministic_error(test_settings):
+    instance = _stream_instance(
+        test_settings,
+        {"primary": [_StatusError(400)], "secondary": ["s1"]},
+    )
+
+    with pytest.raises(_StatusError):
+        await _collect(instance)
+
+    assert instance.router._breakers[("default", "primary")].failure_count == 0
+
+
+async def test_astream_reports_success_and_skips_open_breakers(test_settings):
+    instance = _stream_instance(
+        test_settings,
+        {"primary": [TimeoutError()], "secondary": ["s1"]},
+    )
+    for _ in range(2):
+        await _collect(instance)
+
+    assert instance.router._breakers[("default", "primary")].state is BreakerState.OPEN
+    assert await _collect(instance) == ["s1"]
+
+
+async def test_astream_raises_unavailable_when_every_breaker_is_open(test_settings):
+    instance = _stream_instance(
+        test_settings,
+        {"primary": [_StatusError(503)], "secondary": [_StatusError(503)]},
+    )
+    for _ in range(2):
+        with pytest.raises(_StatusError):
+            await _collect(instance)
+
+    with pytest.raises(ServiceUnavailableError):
+        await _collect(instance)
+
+
+class _SlowStartModel(_StreamModel):
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        await asyncio.sleep(5)
+        async for chunk in super()._astream(messages, stop, run_manager, **kwargs):
+            yield chunk
+
+
+async def test_astream_honours_the_chain_deadline(test_settings):
+    settings = test_settings.model_copy(
+        update={"CHAT_MODEL": "a", "LLM_CHAIN_DEADLINE_SECONDS": 0.2}
+    )
+    instance = build_llm_instance(
+        settings,
+        instance_id="t",
+        service_name="test",
+        model_builder=lambda target: _SlowStartModel(responses=[target], script=["x"]),
+    )
+
+    with pytest.raises(LLMDeadlineExceeded):
+        await _collect(instance)

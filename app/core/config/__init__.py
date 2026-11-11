@@ -24,6 +24,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.config.ai import AISettingsMixin
+from app.core.config.conversations import ConversationsSettingsMixin
 from app.core.config.http import HttpSettingsMixin
 from app.core.config.infra import InfraSettingsMixin
 from app.core.config.messaging import MessagingSettingsMixin
@@ -46,6 +47,7 @@ class Settings(
     MongoSettingsMixin,
     AISettingsMixin,
     MessagingSettingsMixin,
+    ConversationsSettingsMixin,
     PlatformSettingsMixin,
     TelemetrySettingsMixin,
 ):

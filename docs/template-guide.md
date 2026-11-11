@@ -11,8 +11,10 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 1. Clone/fork, then `cp .env.example .env` and set `AUTH_API_KEYS` (hash tokens with `python -m scripts.hash_api_key --generate`).
 2. `make dev` → `curl localhost:8000/healthz` — you have a running core.
 3. Rename the project in `pyproject.toml` + `PROJECT_NAME` default.
-4. Delete what you won't use: `app/modules/ai/` (and the `[ai]` extra) if the
-   product has no LLM features; `alembic/` if no Postgres.
+4. Delete what you won't use: `app/modules/ai/` (and the `[ai]` extra) only if
+   the product has no LLM features, which also means removing the
+   `conversations` sample and any domain using `LLMInstance`; `alembic/` if no
+   Postgres.
 
 ## 1. Turn on capabilities as you need them
 
@@ -45,28 +47,50 @@ app/modules/business/<domain>/
   types.py          # enums/constants
   service.py        # <Domain>Service — constructor deps only, no Request/app.state
   stores/           # own the table/collection details
-  integrations/     # external HTTP APIs — __init__(self, client, settings)
+  integrations/     # external HTTP APIs — __init__(self, client: UpstreamClient, ...plain options)
 app/api/v1/<domain>/
   router.py         # mounts leaf routers, attaches Depends(require_principal)
-  <leaf>.py         # thin endpoints: get_app_resources(request.app).<domain>_service -> one call
-app/bootstrap/services.py
-  build the single <Domain>Service instance in compose_business_services() and
-  store it on a typed ApplicationResources.<domain>_service field
+  <leaf>.py         # thin endpoints: get_app_resources(request.app).service(<Domain>Service) -> one call
+app/bootstrap/features/<domain>.py
+  <domain>_feature(...) -> Feature: service type, build(resources, settings),
+  routers, task_routers, tasks (type -> handler), models, enabled(settings)
+app/bootstrap/features/registry.py
+  one entry in FEATURES; create_app, the worker and alembic/env.py read it
 app/core/config/<domain>.py
   <Domain>SettingsMixin(BaseModel) — *_ENABLED defaults False; add to Settings
 ```
 
-If the domain needs a new lifecycle resource, add an addon in
-`app/bootstrap/addons.py:default_resource_addons()`. Include your router in
-`app/api/router.py` gated on your flag. The `completions` surface is the living
-reference for the thin-transport shape; its handler comes from
-`create_app(completion_handler_factory=...)`.
+A new domain is one file under `app/bootstrap/features/` plus one entry in
+`registry.py`; no edit to `resources.py`, `services.py`, `api/router.py`,
+`worker.py` or `alembic/env.py`. If the domain needs a new lifecycle resource,
+add an addon in `app/bootstrap/addons/base.py:default_resource_addons()`. The
+`completions` surface is the living reference for the thin-transport shape; its
+handler comes from `completions_feature(handler_factory=...)`.
 
 > **Deliberate: no structured-output enforcement at the transport.** The
 > completions contract serves both sync and streaming, and schema validation
 > needs the complete output — enforcing it would break the stream path.
 > A product that needs guaranteed JSON applies `with_structured_output` on
 > its own sync endpoint only.
+
+### Add a domain: checklist
+
+1. Create `app/modules/business/<domain>/` (`schemas.py`, `service.py`, plus stores/integrations as needed) and `app/api/v1/<domain>/router.py`.
+2. Write `<domain>_feature()` in `app/bootstrap/features/<domain>.py` returning a `Feature`. A task handler lives in this file: `async def handler(resources, task) -> dict`, parsing `task.payload` with the request schema and raising on failure so the worker marks the task failed. Register it in `tasks={TYPE: handler}`.
+3. Settings: new file `app/core/config/<domain>.py` with `<Domain>SettingsMixin(BaseModel)`; import it and add it to the `Settings` bases in `app/core/config/__init__.py` (two edits).
+4. Add the new keys to `.env.example` (`scripts/check_env_example.py` fails on drift).
+5. Add one entry to `FEATURES` in `app/bootstrap/features/registry.py`.
+6. Auth: declare `dependencies=[Depends(require_principal)]` once on the router; add `principal: Principal = Depends(require_principal)` to a route only when it needs the id. A missing token answers 401.
+7. Tests: see "Testing a feature" in [agents/architecture.md](agents/architecture.md).
+
+Stores take an `async_sessionmaker` (or `MongoGateway`) through their constructor,
+built in `Feature.build` from `resources.sessionmaker` / `resources.mongo`; there is
+no per-request session dependency. `conversations` (Postgres + LLM, behind
+`CONVERSATIONS_ENABLED`) is the worked example. A fork without a chatbot deletes
+`app/modules/business/conversations`, `app/api/v1/conversations`,
+`app/bootstrap/features/conversations.py` and its entry in `registry.py`,
+`app/core/config/conversations.py` (plus its entry in the `Settings` bases and the
+`.env.example` line) and migration `0010_create_conversations`.
 
 Rules that keep the template clean (enforced by review, spelled out in
 [agents/architecture.md](agents/architecture.md)): endpoints never build clients/stores; business services never
@@ -76,7 +100,7 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
 | Extra | Brings | Needed for |
 |---|---|---|
-| `ai` | langchain, langchain-openai, langgraph, langfuse, llama-index-core, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
+| `ai` | langchain, langchain-openai, langfuse, llama-index-core, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
 | `aws` | aioboto3 | S3 object storage, SQS queue |
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |
@@ -111,8 +135,28 @@ POST /predict {"text": "..."}  -> {"label": "...", "score": 0.97}   (or texts:[.
 GET  /health · GET /metrics
 ```
 
-Build the httpx client in your domain runtime
-(`build_httpx_model_server_client(settings.MY_MODEL_URL)`), own its close().
+Declare the server as an `Upstream` on your `Feature` and hand the resolved
+client to `ModelServerClient` (timeout, retry on transient failures, circuit
+breaker and `X-Request-ID` come with it; bootstrap opens and closes it):
+
+```python
+Feature(
+    name="classify",
+    service=ClassifyService,
+    upstreams=(
+        Upstream(
+            "model_server",
+            base_url=lambda settings: settings.MY_MODEL_URL,
+            timeout=10.0,
+            retries=1,
+        ),
+    ),
+    build=lambda res, settings: ClassifyService(
+        ModelServerClient(res.http("model_server"))
+    ),
+)
+```
+
 Any HTTP model server fits: the ML template's `Dockerfile.serve` container,
 vLLM/TGI/llama.cpp for LLMs (OpenAI-compatible servers plug into the `[ai]`
 LangChain client via `base_url`), or a managed endpoint. Add it as a compose

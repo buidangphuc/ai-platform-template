@@ -155,17 +155,6 @@ class NotFoundError(AppError):
         super().__init__(code=code, message=message, status_code=404, data=data)
 
 
-class MethodNotAllowedError(AppError):
-    def __init__(
-        self,
-        message: str = "Method not allowed",
-        *,
-        code: str = "method_not_allowed",
-        data: Any = None,
-    ) -> None:
-        super().__init__(code=code, message=message, status_code=405, data=data)
-
-
 class ConflictError(AppError):
     def __init__(
         self,

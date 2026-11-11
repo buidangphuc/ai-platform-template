@@ -1,12 +1,6 @@
-import pytest
-from fastapi import FastAPI
-from starlette.requests import Request
-
 from app.bootstrap.addons.mongo import MongoAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
-from app.core.errors import ServiceUnavailableError
-from app.modules.platform.mongo.dependency import get_mongo
 from app.modules.platform.mongo.factory import (
     build_mongo_gateway,
     check_mongo_connection,
@@ -42,21 +36,6 @@ class _FakeClient:
 
     def close(self) -> None:
         self.closed = True
-
-
-def _request_for(app: FastAPI) -> Request:
-    return Request(
-        {
-            "type": "http",
-            "app": app,
-            "method": "GET",
-            "path": "/",
-            "headers": [],
-            "query_string": b"",
-            "server": ("testserver", 80),
-            "client": ("testclient", 123),
-        }
-    )
 
 
 def test_mongo_gateway_scopes_client_to_database():
@@ -130,22 +109,3 @@ async def test_mongo_addon_opens_and_closes_gateway(
     await stack.aclose()
 
     assert client.closed is True
-
-
-def test_get_mongo_dependency_returns_lifespan_resource():
-    app = FastAPI()
-    gateway = MongoGateway(_FakeClient(), database="app")
-    app.state.resources = ApplicationResources(mongo=gateway)
-
-    assert get_mongo(_request_for(app)) is gateway
-
-
-def test_get_mongo_dependency_requires_configured_resource():
-    app = FastAPI()
-    app.state.resources = ApplicationResources()
-
-    with pytest.raises(ServiceUnavailableError) as exc_info:
-        get_mongo(_request_for(app))
-
-    assert exc_info.value.code == "mongo_not_configured"
-    assert exc_info.value.message == "MongoDB is not configured"

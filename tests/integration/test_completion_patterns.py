@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from httpx import ASGITransport, AsyncClient
 
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.state import get_task_services
 from app.core.config import Settings
 from app.modules.business.completions.schemas import (
@@ -64,7 +65,9 @@ async def test_create_completion_uses_default_scaffold_handler(client: AsyncClie
 async def test_create_completion_calls_injected_handler(test_settings: Settings):
     handler = RecordingCompletionHandler()
     app = create_app(
-        completion_handler_factory=lambda resources, settings: handler,
+        features=(
+            completions_feature(handler_factory=lambda resources, settings: handler),
+        ),
         settings=test_settings,
         init_resources=False,
     )
@@ -91,7 +94,9 @@ async def test_create_completion_calls_injected_handler(test_settings: Settings)
 async def test_stream_completion_calls_injected_handler(test_settings: Settings):
     handler = RecordingCompletionHandler()
     app = create_app(
-        completion_handler_factory=lambda resources, settings: handler,
+        features=(
+            completions_feature(handler_factory=lambda resources, settings: handler),
+        ),
         settings=test_settings,
         init_resources=False,
     )
@@ -125,8 +130,10 @@ async def test_task_completion_submit_and_poll(test_settings: Settings):
         }
     )
     app = create_app(
-        completion_handler_factory=lambda resources, settings: (
-            RecordingCompletionHandler()
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, settings: RecordingCompletionHandler()
+            ),
         ),
         settings=settings,
         init_resources=True,
@@ -174,8 +181,10 @@ async def test_task_poll_is_scoped_to_the_submitting_principal(
         }
     )
     app = create_app(
-        completion_handler_factory=lambda resources, settings: (
-            RecordingCompletionHandler()
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, settings: RecordingCompletionHandler()
+            ),
         ),
         settings=settings,
         init_resources=True,
@@ -217,8 +226,10 @@ async def test_task_poll_hides_tasks_of_another_type(test_settings: Settings):
         }
     )
     app = create_app(
-        completion_handler_factory=lambda resources, settings: (
-            RecordingCompletionHandler()
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, settings: RecordingCompletionHandler()
+            ),
         ),
         settings=settings,
         init_resources=True,
@@ -242,8 +253,10 @@ async def test_task_routes_are_not_mounted_when_tasks_disabled(
 ):
     settings = test_settings.model_copy(update={"TASKS_ENABLED": False})
     app = create_app(
-        completion_handler_factory=lambda resources, settings: (
-            RecordingCompletionHandler()
+        features=(
+            completions_feature(
+                handler_factory=lambda resources, settings: RecordingCompletionHandler()
+            ),
         ),
         settings=settings,
         init_resources=True,
@@ -276,7 +289,11 @@ async def test_create_app_applies_guards_from_factory(test_settings: Settings):
             return None
 
     app = create_app(
-        completion_guards_factory=lambda resources, settings: (_BlockEverything(),),
+        features=(
+            completions_feature(
+                guards_factory=lambda resources, settings: (_BlockEverything(),)
+            ),
+        ),
         settings=test_settings,
         init_resources=False,
     )

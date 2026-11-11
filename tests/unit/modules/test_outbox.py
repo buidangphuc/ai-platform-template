@@ -79,16 +79,6 @@ class _FakeOutboxStore:
         self.failed: list[tuple[str, str, datetime | None]] = []
         self.claim_calls: list[tuple[int, datetime | None, float]] = []
         self.claim_prefixes: list[str | None] = []
-        self.list_calls = 0
-
-    async def list_pending(
-        self,
-        *,
-        limit: int = 100,
-        now: datetime | None = None,
-    ) -> list[OutboxRecord]:
-        self.list_calls += 1
-        return self.records[:limit]
 
     async def claim_pending(
         self,
@@ -159,7 +149,6 @@ async def test_outbox_publisher_sends_generic_queue_payload_and_marks_published(
     assert report.failed == 0
     assert report.retried == 0
     assert store.claim_calls == [(100, now, 60.0)]
-    assert store.list_calls == 0
 
 
 async def test_outbox_publisher_accepts_custom_claim_lock_seconds():

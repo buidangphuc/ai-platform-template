@@ -6,6 +6,8 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from app.bootstrap.features.base import import_models
+from app.bootstrap.features.registry import FEATURES
 from app.core.config import get_settings
 from app.core.database.model import Base
 from app.modules.messaging.outbox import models as outbox_models  # noqa: F401
@@ -13,6 +15,8 @@ from app.modules.messaging.tasks import models as tasks_models  # noqa: F401
 from app.modules.platform.audit import models as audit_models  # noqa: F401
 from app.modules.platform.idempotency import models as idempotency_models  # noqa: F401
 from app.modules.platform.quota import records as quota_records  # noqa: F401
+
+import_models(FEATURES)
 
 config = context.config
 

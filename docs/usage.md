@@ -58,8 +58,9 @@ within `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS`) return the normal JSON error envelo
 Handlers yield `CompletionStreamChunk`; the last chunk may set `usage` and
 `finish_reason`.
 
-Each sync and stream completion (API and worker) logs one `completion mode=... outcome=... model=...
-duration_ms=... ttft_ms=... finish_reason=... input_tokens=...` line (no content).
+With `LLM_ENABLED=true` each LLM call (API and worker, sync or stream) logs one
+`completion mode=... outcome=... model=... duration_ms=... ttft_ms=... finish_reason=... input_tokens=...`
+line (no content). The default echo handler makes no LLM call and logs no such line.
 
 ## Docker
 
@@ -160,8 +161,7 @@ method, path, status, duration, request id, and authenticated principal when
 available.
 
 Endpoints reach the request boundary through small per-concern dependencies,
-not a single context object: `DbSession`
-(`app.core.database.engine`) for the SQLAlchemy session,
+not a single context object:
 `Depends(require_principal)` (`app.modules.platform.identity.auth`) for the
 authenticated principal (which also sets `request.state.principal`),
 `get_request_id()` (`app.core.request_context`) for the request id, and
@@ -182,29 +182,43 @@ capabilities such as Mongo, quota, cache, objects, LLM, queues, and task stores;
 
 Business services should receive explicit constructor dependencies and must not
 read FastAPI `Request`, `app.state`, or a global service locator. When a product
-service needs lifespan-owned runtime dependencies, build it in the bootstrap
-composition root (`app/bootstrap/services.py`) from already-open platform
-resources, as exactly one instance per app stored on a typed
-`ApplicationResources` field (e.g. `completion_service`). Views read it with
-`get_app_resources(request.app)`; no per-surface getter helpers.
+service needs lifespan-owned runtime dependencies, declare a `Feature` in
+`app/bootstrap/features/<domain>.py` and add one entry to `FEATURES` in
+`registry.py` (step-by-step: "Add a domain: checklist" in
+[template-guide.md](template-guide.md)). Its `build(resources, settings)` runs once per app, after the
+platform resources are open, and the instance lives on
+`ApplicationResources.services`. Views read it with
+`get_app_resources(request.app).service(<Domain>Service)`; no per-surface getter
+helpers.
+
+To call an external HTTP API, declare an `Upstream` in the feature's `upstreams`
+and use `resources.http(name)` (timeout, retry, circuit breaker and request-id
+included); do not build your own `httpx.AsyncClient`.
 
 Adding a new endpoint usually should not touch bootstrap. Add or extend the
 business service method, then call it from the API router. Update bootstrap only
 when the endpoint introduces a new runtime dependency or a new application
 service that must be created once per app lifecycle.
 
-Database access uses a session-per-request dependency. The dependency rolls
-back on unhandled exceptions and always closes the session, but it does not
-auto-commit. Business services own explicit `commit()` calls.
+Database access has one pattern: a store takes an
+`async_sessionmaker[AsyncSession]` through its constructor, built in
+`Feature.build` from `resources.sessionmaker`. A service that needs an explicit
+transaction opens it itself with
+`async with sessionmaker() as session, session.begin():`. There is no
+per-request session dependency. `app/modules/business/conversations` is the
+worked example (set `CONVERSATIONS_ENABLED=true` with `DATABASE_ENABLED` and
+`LLM_ENABLED`, then apply migration 0010).
 
 Mongo access is an opt-in platform resource. Install the `mongo` extra, set
-`MONGO_ENABLED=true`, and use `app.modules.platform.mongo.MongoDep` or
-`get_mongo(...)` to access the lifespan-managed `MongoGateway`. Product modules
-should build their own stores on top of the gateway instead of opening clients
-or reading app state directly.
+`MONGO_ENABLED=true`, and build your store in `Feature.build` from
+`resources.mongo` (the lifespan-managed `MongoGateway`). Product modules build
+their own stores on top of the gateway instead of opening clients or reading
+app state directly.
 
-List endpoints can reuse `app.core.pagination.PaginationParams` and
-`build_list_response(...)` for offset-based responses:
+List endpoints take `params: PaginationParams = Depends()` from
+`app.core.pagination`, pass `params.limit` and `params.offset` to the store, and
+return `build_list_response(items=..., total=..., params=params)` for
+offset-based responses:
 `{"items": [...], "pagination": {"limit": 50, "offset": 0, "total": 123}}`.
 The template intentionally does not ship a generic query builder.
 
@@ -224,11 +238,33 @@ principal id. Reusing the same key with a different request returns
 `409 idempotency_key_in_progress`. Streaming responses are intentionally outside
 this contract.
 
+Two route guards are provided as opt-in examples; no route in the template
+enables them. `require_quota(resource, cost=1)`
+(`app.modules.platform.quota.http`) is a dependency that reserves quota for the
+principal before the handler runs and answers `429` with `Retry-After` when
+exceeded; it needs `QUOTA_ENABLED=true` and a policy for the resource:
+
+```python
+@router.post("/reports", dependencies=[Depends(require_quota("reports"))])
+async def create_report(...): ...
+```
+
+`@idempotent` (`app.modules.platform.idempotency.http`) wraps a synchronous
+route that declares `request: Request` and returns a dict or Pydantic model. A
+repeated `Idempotency-Key` replays the stored response (status 200) without
+running the handler; without the header the handler runs untouched. It needs
+`IDEMPOTENCY_ENABLED=true`:
+
+```python
+@router.post("/reports")
+@idempotent
+async def create_report(payload: Payload, request: Request) -> dict: ...
+```
+
 App observability, experiment tracking, LLM response caching, object storage,
 and job queues are intentionally not wrapped by template adapters in this phase.
 Use the tools required by the target project directly at the module boundary.
-Database access goes through `app.core.database.DbSession`, a normal SQLAlchemy
-session dependency.
+Database access goes through stores that take a `sessionmaker` (see above).
 
 Langfuse is only wired at the AI execution boundary. Use
 `build_llm_instance(..., instance_id="...", service_name="...")` from
@@ -237,7 +273,7 @@ per-instance Langfuse tracker. Pass `instance.trace_config(...)` into LangChain
 calls to keep parallel LLM services separated by instance, service, session,
 user, and request metadata.
 
-To use the completions transport, pass a handler factory. It runs in lifespan
+To use the completions transport, pass a handler factory to `completions_feature`. It runs in lifespan
 with the opened resources, so the handler can take an LLM instance, RAG service
 or stores from them:
 
@@ -250,6 +286,7 @@ from app.modules.business.completions.schemas import (
     CompletionStreamChunk,
 )
 from app.bootstrap.application import create_app
+from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 
@@ -269,11 +306,13 @@ def build_handler(resources: ApplicationResources, settings: Settings) -> MyComp
     return MyCompletionHandler()
 
 
-app = create_app(completion_handler_factory=build_handler)
+app = create_app(features=(completions_feature(handler_factory=build_handler),))
 ```
 
-Without a factory, the scaffold `EchoCompletionHandler` answers (the worker uses
-the same default). The async task routes (`/api/v1/completions/tasks`) are mounted
+Without a factory, the scaffold `EchoCompletionHandler` answers. Both processes
+read the registry in `app/bootstrap/features/registry.py` (`FEATURES`), so register
+your handler factory there (`completions_feature(handler_factory=build_handler)`)
+to make the worker run it too. The async task routes (`/api/v1/completions/tasks`) are mounted
 only when `TASKS_ENABLED=true`.
 
 The app factory registers a FastAPI lifespan that calls

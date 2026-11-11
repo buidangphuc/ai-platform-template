@@ -10,7 +10,7 @@ from app.modules.messaging.tasks.schemas import TaskResponse, TaskSubmitResponse
 from app.modules.platform.identity.auth import require_principal
 from app.modules.platform.identity.schemas import Principal
 
-# Mounted only when TASKS_ENABLED (see app/api/router.py).
+# Mounted only when TASKS_ENABLED (Feature.task_routers).
 router = APIRouter(prefix="/completions", tags=["completions"])
 
 

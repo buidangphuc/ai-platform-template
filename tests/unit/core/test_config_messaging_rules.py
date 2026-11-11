@@ -74,3 +74,32 @@ def test_rules_apply_only_when_feature_is_enabled(
     overrides: dict[str, object],
 ) -> None:
     build_test_settings(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {"CONVERSATIONS_ENABLED": True, "LLM_ENABLED": True},
+            "CONVERSATIONS_ENABLED requires DATABASE_ENABLED",
+        ),
+        (
+            {"CONVERSATIONS_ENABLED": True, "DATABASE_ENABLED": True},
+            "CONVERSATIONS_ENABLED requires LLM_ENABLED",
+        ),
+    ],
+)
+def test_settings_reject_conversations_without_database_or_llm(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        build_test_settings(**overrides)
+
+
+def test_settings_accept_conversations_with_database_and_llm() -> None:
+    settings = build_test_settings(
+        CONVERSATIONS_ENABLED=True, DATABASE_ENABLED=True, LLM_ENABLED=True
+    )
+
+    assert settings.CONVERSATIONS_ENABLED is True
+    assert build_test_settings().CONVERSATIONS_ENABLED is False

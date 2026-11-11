@@ -1,67 +1,64 @@
 """Business-service composition: the one place business services are built.
 
-Runs inside lifespan after platform resources are open, so a handler factory
+Runs inside lifespan after platform resources are open, so a feature's ``build``
 can take whatever it needs (LLM instance, RAG, stores) from ``resources``.
 """
 
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.bootstrap.addons.base import BootstrapAddon
+from app.bootstrap.features.base import Feature, TaskHandler
 from app.bootstrap.resources import ApplicationResources, open_application_resources
 from app.core.config import Settings
-from app.core.telemetry import FanOutSink, LogCompletionSink
-from app.modules.business.completions.guards import CompletionGuard
-from app.modules.business.completions.handlers.echo import EchoCompletionHandler
-from app.modules.business.completions.ports import CompletionHandler
-from app.modules.business.completions.service import (
-    CompletionService,
-    StreamPolicy,
-)
-
-CompletionHandlerFactory = Callable[[ApplicationResources, Settings], CompletionHandler]
-CompletionGuardsFactory = Callable[
-    [ApplicationResources, Settings], Sequence[CompletionGuard]
-]
 
 
-def default_completion_guards_factory(
-    resources: ApplicationResources,
-    settings: Settings,
-) -> Sequence[CompletionGuard]:
-    """Scaffold ships no guards; products add theirs (input/output checks)."""
-    return ()
+def enabled_features(
+    settings: Settings, features: tuple[Feature, ...]
+) -> tuple[Feature, ...]:
+    enabled = tuple(feature for feature in features if feature.enabled(settings))
+    services: dict[type, str] = {}
+    task_types: dict[str, str] = {}
+    upstreams: dict[str, str] = {}
+    for feature in enabled:
+        if feature.service in services:
+            raise ValueError(
+                f"service type {feature.service.__name__} registered by features "
+                f"{services[feature.service]!r} and {feature.name!r}"
+            )
+        services[feature.service] = feature.name
+        for task_type in feature.tasks:
+            if task_type in task_types:
+                raise ValueError(
+                    f"task type {task_type!r} registered by features "
+                    f"{task_types[task_type]!r} and {feature.name!r}"
+                )
+            task_types[task_type] = feature.name
+        for upstream in feature.upstreams:
+            if upstream.name in upstreams:
+                raise ValueError(
+                    f"upstream {upstream.name!r} registered by features "
+                    f"{upstreams[upstream.name]!r} and {feature.name!r}"
+                )
+            upstreams[upstream.name] = feature.name
+    return enabled
 
 
-def default_completion_handler_factory(
-    resources: ApplicationResources,
-    settings: Settings,
-) -> CompletionHandler:
-    """Scaffold handler; products pass their own factory to ``create_app``."""
-    return EchoCompletionHandler()
+def task_handlers(features: tuple[Feature, ...]) -> dict[str, TaskHandler]:
+    return {
+        task_type: handler
+        for feature in features
+        for task_type, handler in feature.tasks.items()
+    }
 
 
 def compose_business_services(
     resources: ApplicationResources,
     settings: Settings,
-    *,
-    completion_handler_factory: CompletionHandlerFactory,
-    completion_guards_factory: CompletionGuardsFactory,
+    features: tuple[Feature, ...],
 ) -> None:
-    resources.completion_service = CompletionService(
-        completion_handler_factory(resources, settings),
-        guards=completion_guards_factory(resources, settings),
-        sink=FanOutSink(
-            [
-                LogCompletionSink(),
-                *([resources.telemetry] if resources.telemetry else []),
-            ]
-        ),
-        policy=StreamPolicy(
-            first_token_timeout=settings.STREAM_FIRST_TOKEN_TIMEOUT_SECONDS,
-            idle_timeout=settings.STREAM_IDLE_TIMEOUT_SECONDS,
-        ),
-    )
+    for feature in features:
+        resources.services[feature.service] = feature.build(resources, settings)
 
 
 @asynccontextmanager
@@ -70,19 +67,17 @@ async def open_runtime(
     *,
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
-    completion_handler_factory: CompletionHandlerFactory,
-    completion_guards_factory: CompletionGuardsFactory,
+    features: tuple[Feature, ...],
 ) -> AsyncIterator[ApplicationResources]:
     """Open resources and compose business services; used by API and worker."""
+    enabled = enabled_features(settings, features)
     async with open_application_resources(
         settings,
         init_resources=init_resources,
         addons=addons,
+        upstreams=tuple(
+            upstream for feature in enabled for upstream in feature.upstreams
+        ),
     ) as resources:
-        compose_business_services(
-            resources,
-            settings,
-            completion_handler_factory=completion_handler_factory,
-            completion_guards_factory=completion_guards_factory,
-        )
+        compose_business_services(resources, settings, enabled)
         yield resources

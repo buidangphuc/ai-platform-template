@@ -7,15 +7,11 @@ from fastapi.responses import ORJSONResponse
 
 from app.api.router import build_api_router
 from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
+from app.bootstrap.features.base import Feature
+from app.bootstrap.features.registry import FEATURES
 from app.bootstrap.middleware import install_core_middlewares
 from app.bootstrap.resources import ApplicationResources, build_health_service
-from app.bootstrap.services import (
-    CompletionGuardsFactory,
-    CompletionHandlerFactory,
-    default_completion_guards_factory,
-    default_completion_handler_factory,
-    open_runtime,
-)
+from app.bootstrap.services import open_runtime
 from app.bootstrap.state import get_in_flight_tracker
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
@@ -28,12 +24,7 @@ from app.core.telemetry import require_otel
 def create_app(
     *,
     settings: Settings | None = None,
-    completion_handler_factory: CompletionHandlerFactory = (
-        default_completion_handler_factory
-    ),
-    completion_guards_factory: CompletionGuardsFactory = (
-        default_completion_guards_factory
-    ),
+    features: tuple[Feature, ...] = FEATURES,
     init_resources: bool = True,
     resource_addons: tuple[BootstrapAddon, ...] = (),
 ) -> FastAPI:
@@ -55,8 +46,7 @@ def create_app(
             resolved_settings,
             init_resources=init_resources,
             addons=addons,
-            completion_handler_factory=completion_handler_factory,
-            completion_guards_factory=completion_guards_factory,
+            features=features,
         ),
         docs_url=docs_url,
         redoc_url=redoc_url,
@@ -71,7 +61,7 @@ def create_app(
     app.state.resources = ApplicationResources()
     install_core_middlewares(app, resolved_settings)
     register_exception_handlers(app)
-    app.include_router(build_api_router(resolved_settings))
+    app.include_router(build_api_router(resolved_settings, features))
     if resolved_settings.OTEL_ENABLED:
         _instrument_fastapi(app)
     return app
@@ -82,8 +72,7 @@ def _build_lifespan(
     *,
     init_resources: bool,
     addons: tuple[BootstrapAddon, ...],
-    completion_handler_factory: CompletionHandlerFactory,
-    completion_guards_factory: CompletionGuardsFactory,
+    features: tuple[Feature, ...],
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -91,8 +80,7 @@ def _build_lifespan(
             settings,
             init_resources=init_resources,
             addons=addons,
-            completion_handler_factory=completion_handler_factory,
-            completion_guards_factory=completion_guards_factory,
+            features=features,
         ) as resources:
             app.state.resources = resources
             health_service = build_health_service(

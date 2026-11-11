@@ -10,11 +10,8 @@ from app.bootstrap import (
     resources as resources_module,
 )
 from app.bootstrap.application import _build_lifespan, create_app
+from app.bootstrap.features.registry import FEATURES
 from app.bootstrap.resources import ApplicationResources
-from app.bootstrap.services import (
-    default_completion_guards_factory,
-    default_completion_handler_factory,
-)
 from app.core.config import Settings
 from app.core.health import HealthService
 
@@ -70,8 +67,7 @@ async def test_lifespan_flushes_langfuse_client_when_enabled(
         settings,
         init_resources=True,
         addons=(),
-        completion_handler_factory=default_completion_handler_factory,
-        completion_guards_factory=default_completion_guards_factory,
+        features=FEATURES,
     )
 
     async with lifespan(_bare_app()):
@@ -101,8 +97,7 @@ async def test_lifespan_skips_flush_when_init_resources_is_false(
         settings,
         init_resources=False,
         addons=(),
-        completion_handler_factory=default_completion_handler_factory,
-        completion_guards_factory=default_completion_guards_factory,
+        features=FEATURES,
     )
 
     async with lifespan(_bare_app()):
@@ -128,8 +123,7 @@ async def test_lifespan_skips_flush_when_langfuse_disabled(
         test_settings,
         init_resources=True,
         addons=(),
-        completion_handler_factory=default_completion_handler_factory,
-        completion_guards_factory=default_completion_guards_factory,
+        features=FEATURES,
     )
 
     async with lifespan(_bare_app()):
@@ -150,8 +144,7 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
         settings,
         init_resources=True,
         addons=(),
-        completion_handler_factory=default_completion_handler_factory,
-        completion_guards_factory=default_completion_guards_factory,
+        features=FEATURES,
     )
 
     async with lifespan(_bare_app()):

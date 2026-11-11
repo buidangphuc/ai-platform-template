@@ -31,7 +31,6 @@
 <!-- read by: domain-modeling, research -->
 - Architecture: `docs/agents/architecture.md` (read before touching bootstrap/platform/business/API boundaries or adding a feature)
 - AI: `docs/agents/ai-engineering.md` (LLM/prompt/RAG/eval/completions)
-- ADRs: `docs/adr/`
 - Usage: `docs/usage.md`
 - Template guide: `docs/template-guide.md`
 

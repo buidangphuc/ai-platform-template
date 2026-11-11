@@ -27,6 +27,7 @@ class BootstrapAddon(Protocol):
 def default_resource_addons() -> tuple[BootstrapAddon, ...]:
     from app.bootstrap.addons.cache import CacheAddon
     from app.bootstrap.addons.idempotency import IdempotencyAddon
+    from app.bootstrap.addons.llm import LlmAddon
     from app.bootstrap.addons.mongo import MongoAddon
     from app.bootstrap.addons.objects import ObjectAddon
     from app.bootstrap.addons.outbox import OutboxAddon
@@ -38,6 +39,7 @@ def default_resource_addons() -> tuple[BootstrapAddon, ...]:
 
     return (
         TelemetryAddon(),
+        LlmAddon(),
         RateLimitAddon(),
         IdempotencyAddon(),
         CacheAddon(),

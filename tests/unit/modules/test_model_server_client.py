@@ -2,78 +2,80 @@
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 
 from app.core.errors import ServiceUnavailableError
+from app.modules.platform.http.upstream import UpstreamClient
 from app.modules.platform.model_server.client import ModelServerClient
 
 
-class _FakeResponse:
-    def __init__(self, status_code: int, body=None):
-        self.status_code = status_code
-        self._body = body
+def _model(handler) -> ModelServerClient:
+    return ModelServerClient(
+        UpstreamClient(
+            "model_server",
+            httpx.AsyncClient(
+                base_url="http://model.test",
+                transport=httpx.MockTransport(handler),
+            ),
+        )
+    )
 
-    def json(self):
-        return self._body
+
+def _reply(status_code: int, body=None):
+    return lambda request: httpx.Response(status_code, json=body)
 
 
-class _FakeClient:
-    def __init__(self, response):
-        self._response = response
-        self.last = None
-
-    async def post(self, path, json):
-        self.last = (path, json)
-        if isinstance(self._response, Exception):
-            raise self._response
-        return self._response
-
-    async def get(self, path):
-        if isinstance(self._response, Exception):
-            raise self._response
-        return self._response
+def _down(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("down")
 
 
 async def test_predict_single_text_contract():
-    fake = _FakeClient(_FakeResponse(200, {"label": "Sports", "score": 0.97}))
-    client = ModelServerClient(fake)
+    seen: list[httpx.Request] = []
 
-    out = await client.predict({"text": "goal!"})
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"label": "Sports", "score": 0.97})
+
+    out = await _model(handler).predict({"text": "goal!"})
 
     assert out == {"label": "Sports", "score": 0.97}
-    assert fake.last == ("/predict", {"text": "goal!"})
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/predict"
+    assert json.loads(seen[0].content) == {"text": "goal!"}
 
 
 async def test_predict_batch_contract():
-    fake = _FakeClient(_FakeResponse(200, [{"label": "A", "score": 0.9}]))
-    out = await ModelServerClient(fake).predict({"texts": ["x"]})
+    out = await _model(_reply(200, [{"label": "A", "score": 0.9}])).predict(
+        {"texts": ["x"]}
+    )
     assert out == [{"label": "A", "score": 0.9}]
 
 
 async def test_unreachable_server_is_service_unavailable():
-    client = ModelServerClient(_FakeClient(ConnectionError("down")))
     with pytest.raises(ServiceUnavailableError) as exc:
-        await client.predict({"text": "x"})
+        await _model(_down).predict({"text": "x"})
     assert exc.value.code == "model_server_unavailable"
 
 
 async def test_non_200_is_backend_error_not_fabrication():
-    client = ModelServerClient(_FakeClient(_FakeResponse(500)))
     with pytest.raises(ServiceUnavailableError) as exc:
-        await client.predict({"text": "x"})
+        await _model(_reply(500)).predict({"text": "x"})
     assert exc.value.code == "model_server_error"
 
 
 async def test_ping_reflects_reachability():
-    up = ModelServerClient(_FakeClient(_FakeResponse(200, {"status": "ok"})))
-    down = ModelServerClient(_FakeClient(ConnectionError("down")))
+    up = _model(_reply(200, {"status": "ok"}))
+    down = _model(_down)
     assert await up.ping() is True
     assert await down.ping() is False
 
 
 async def test_check_passes_when_healthy_and_raises_when_down():
-    up = ModelServerClient(_FakeClient(_FakeResponse(200, {"status": "ok"})))
-    down = ModelServerClient(_FakeClient(ConnectionError("down")))
+    up = _model(_reply(200, {"status": "ok"}))
+    down = _model(_down)
 
     await up.check()
     with pytest.raises(ServiceUnavailableError):

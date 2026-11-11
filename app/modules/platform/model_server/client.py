@@ -8,13 +8,12 @@ The ML template (`datasience`) serves:
     GET  /health                              -> {"status": "ok"}
     GET  /metrics                             -> Prometheus text
 
-Any server speaking an HTTP predict contract fits — the client is duck-typed
-(httpx-like, bound to a base_url) and injected, so tests use a fake. Products
-build one in their domain runtime (own the URL setting + lifecycle), e.g.::
+Any server speaking an HTTP predict contract fits. The client takes an
+``UpstreamClient`` (timeout, retry, breaker and request-id tracing come from
+it); a feature declares the ``Upstream`` and builds the client in ``build``::
 
-    client = build_httpx_model_server_client(settings.MY_MODEL_URL, timeout=10)
-    model = ModelServerClient(client)
-    runtime = MyRuntime(model=model, http_client=client)  # close() -> aclose()
+    upstreams = (Upstream("model_server", lambda s: s.MY_MODEL_URL, retries=1),)
+    build = lambda res, s: MyService(ModelServerClient(res.http("model_server")))
 
 Unreachable/erroring servers surface as ServiceUnavailableError — the caller
 degrades cleanly instead of fabricating a result.
@@ -25,11 +24,14 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.errors import ServiceUnavailableError
+from app.modules.platform.http.upstream import UpstreamClient
 
 
 class ModelServerClient:
-    def __init__(self, client: Any, *, predict_path: str = "/predict") -> None:
-        self._client = client  # httpx-like AsyncClient bound to the server URL
+    def __init__(
+        self, client: UpstreamClient, *, predict_path: str = "/predict"
+    ) -> None:
+        self._client = client
         self._predict_path = predict_path
 
     async def predict(self, payload: dict[str, Any]) -> Any:
@@ -67,11 +69,3 @@ class ModelServerClient:
                 message="Model server is not healthy",
                 code="model_server_unavailable",
             )
-
-
-def build_httpx_model_server_client(base_url: str, *, timeout: float = 10.0) -> Any:
-    """Shared httpx.AsyncClient bound to the server — own it in your domain
-    runtime and close it in the runtime's close()."""
-    import httpx
-
-    return httpx.AsyncClient(base_url=base_url, timeout=timeout)

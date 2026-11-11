@@ -91,21 +91,21 @@ if settings.ENVIRONMENT.is_production:
 ```
 database/
 ├── __init__.py       # Empty — import from the defining file
-├── engine.py         # build_engine, build_sessionmaker, DbSession, get_db, check_postgres_connection
-└── model.py          # Base, TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, id_key, utcnow
+├── engine.py         # build_engine, build_sessionmaker, check_postgres_connection
+└── model.py          # Base, TimestampMixin, CreatedAtMixin, UpdatedAtMixin, ActorAuditMixin, utcnow
 ```
 
 Import each symbol from the file that defines it (ORM models only need `model.py`,
 so they don't load the engine or FastAPI):
 
 ```python
-from app.core.database.engine import DbSession
 from app.core.database.model import Base, TimestampMixin, utcnow
 ```
 
-`DbSession = Annotated[AsyncSession, Depends(get_db)]` — drop into FastAPI endpoints.
-
-`get_db` reads `app.state.resources.sessionmaker`; raises 503 `database_not_configured` if missing.
+There is no per-request session dependency. Stores take an
+`async_sessionmaker[AsyncSession]` through their constructor, built in
+`Feature.build` from `resources.sessionmaker`; a service opens
+`async with sessionmaker() as session, session.begin():` for an explicit transaction.
 
 ---
 
@@ -114,7 +114,7 @@ from app.core.database.model import Base, TimestampMixin, utcnow
 | Symbol | Purpose |
 |---|---|
 | `AppError` | Base — carries `code`, `message`, `status_code`, `data`, optional `headers` |
-| `BadRequestError` (400), `UnauthorizedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `MethodNotAllowedError` (405), `ConflictError` (409), `UnprocessableEntityError` (422), `RateLimitError` (429), `ServerError` (500), `ServiceUnavailableError` (503), `TokenError` | Concrete subclasses |
+| `BadRequestError` (400), `UnauthorizedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `UnprocessableEntityError` (422), `RateLimitError` (429), `ServerError` (500), `ServiceUnavailableError` (503), `TokenError` | Concrete subclasses |
 | `_envelope(...)` | `{"error": {"code", "message", "request_id", "data?"}}` |
 | `register_exception_handlers(app)` | Wires `AppError`, `RequestValidationError`, `HTTPException` to JSONResponse |
 | `format_validation_errors(errors)` | Maps Pydantic error codes (`missing`, `too_long`...) to user-friendly messages |
@@ -242,8 +242,7 @@ policy.redact_mapping(metadata) # redacts dict values, keeps keys
 
 Modes: `"full"` passes text through unchanged, `"redacted"` (default) strips
 email/bearer/secret patterns, `"off"` replaces content with `"[redacted]"`
-entirely. `RedactionPolicy.from_trace_content(value)` maps an unknown string to
-the safe `"redacted"` default.
+entirely.
 
 Used by `app/modules/ai/rag/service.py` before indexing documents (so vector store never contains raw PII).
 

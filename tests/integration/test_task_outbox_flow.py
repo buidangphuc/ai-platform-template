@@ -18,6 +18,8 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.bootstrap.features.completions import completions_feature
+from app.bootstrap.resources import ApplicationResources
 from app.bootstrap.worker import build_worker_message_handler
 from app.core.database.model import Base
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
@@ -76,11 +78,16 @@ class _Stack:
             sink=TaskQueueOutboxSink(self.queue),
             event_type_prefix=TASK_EVENT_PREFIX,
         )
+        resources = ApplicationResources()
+        resources.services[CompletionService] = CompletionService(
+            EchoCompletionHandler()
+        )
         self.worker = AsyncPollingWorker(
             gateway=self.queue,
             handler=build_worker_message_handler(
                 service=self.service,
-                completion_service=CompletionService(EchoCompletionHandler()),
+                resources=resources,
+                handlers=completions_feature().tasks,
             ),
             poll_interval_seconds=0.01,
             receive_wait_seconds=0.05,
