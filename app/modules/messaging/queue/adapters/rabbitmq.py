@@ -30,6 +30,7 @@ def _require_aio_pika() -> None:
 _ATTEMPT_HEADER = "x-attempt"
 # Set by RabbitMQ itself on quorum queues: number of prior failed deliveries.
 _DELIVERY_COUNT_HEADER = "x-delivery-count"
+_POLL_INTERVAL_SECONDS = 0.1
 
 
 class RabbitMQQueueGateway:
@@ -101,26 +102,21 @@ class RabbitMQQueueGateway:
         max_messages: int = 10,
         wait_seconds: float = 0.0,
     ) -> list[QueueMessage]:
-        messages: list[QueueMessage] = []
-        deadline = wait_seconds if wait_seconds > 0 else None
-
-        async def _pull_one() -> AbstractIncomingMessage | None:
-            return await self._queue.get(timeout=deadline, fail=False)
-
-        first = await _pull_one()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(wait_seconds, 0.0)
+        first = await self._queue.get(fail=False)
+        while first is None and loop.time() < deadline:
+            await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - loop.time()))
+            first = await self._queue.get(fail=False)
         if first is None:
             return []
-        messages.append(self._wrap(first))
 
+        messages = [self._wrap(first)]
         while len(messages) < max_messages:
-            try:
-                more = await asyncio.wait_for(_pull_one(), timeout=0.05)
-            except TimeoutError:
-                break
+            more = await self._queue.get(fail=False)
             if more is None:
                 break
             messages.append(self._wrap(more))
-
         return messages
 
     async def ack(self, message: QueueMessage) -> None:

@@ -11,11 +11,9 @@ import boto3
 import pytest
 from botocore.exceptions import ClientError
 
-import app.modules.messaging.queue.adapters.sqs as sqs_mod
 from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
+from app.modules.messaging.queue.gateway import QueueMessage
 from tests.infra import SqsQueue
-
-pytestmark = pytest.mark.skipif(sqs_mod.aioboto3 is None, reason="aioboto3 missing")
 
 UNREACHABLE_ENDPOINT = "http://127.0.0.1:1"
 
@@ -230,3 +228,15 @@ async def test_visibility_timeout_redelivers_an_unacked_message(sqs_queue: SqsQu
         assert second.receive_count == 2
     finally:
         await gateway.close()
+
+
+async def test_ack_and_dead_letter_reject_a_message_without_a_receipt_handle(
+    gateway: SQSQueueGateway, extra_queue: Callable[..., str]
+):
+    gateway.dead_letter_queue_url = extra_queue("dlq")
+    message = QueueMessage(id="m", body={})
+
+    with pytest.raises(ValueError, match="ReceiptHandle"):
+        await gateway.ack(message)
+    with pytest.raises(ValueError, match="ReceiptHandle"):
+        await gateway.nack(message, requeue=False)

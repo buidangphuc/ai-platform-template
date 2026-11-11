@@ -30,14 +30,10 @@ def test_rabbitmq_gateway_raises_friendly_error_when_aio_pika_missing(monkeypatc
 
 
 def test_sqs_gateway_requires_queue_url():
-    if sqs_mod.aioboto3 is None:
-        pytest.skip("aioboto3 not installed")
     with pytest.raises(ValueError, match="queue_url"):
         SQSQueueGateway(queue_url="")
 
 
 def test_rabbitmq_gateway_requires_url():
-    if rabbitmq_mod.aio_pika is None:
-        pytest.skip("aio_pika not installed")
     with pytest.raises(ValueError, match="url"):
         RabbitMQQueueGateway(url="", queue_name="q")

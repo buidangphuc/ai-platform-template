@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from typing import Any, Self
 
-from loguru import logger
-
-from app.core.aws_errors import is_permission_denied
 from app.modules.messaging.queue.gateway import QueueMessage
 
 try:
@@ -48,9 +45,8 @@ class SQSQueueGateway:
         """Create the SQS client and probe the queue once.
 
         Call once, before any operation, then ``close``. A missing queue, bad
-        credentials or an unreachable endpoint fails here (the client is closed
-        first). A policy without ``sqs:GetQueueAttributes`` (``AccessDenied``)
-        is only logged — no extra IAM permission is required.
+        credentials, an unreachable endpoint or a policy without
+        ``sqs:GetQueueAttributes`` fails here (the client is closed first).
         """
         kwargs: dict[str, Any] = {"region_name": self.region_name}
         if self.endpoint_url:
@@ -62,13 +58,6 @@ class SQSQueueGateway:
                 QueueUrl=self.queue_url, AttributeNames=["QueueArn"]
             )
         except Exception as exc:
-            if is_permission_denied(exc):
-                logger.warning(
-                    "sqs.open probe_denied queue={} (no sqs:GetQueueAttributes); "
-                    "queue existence is checked on first use",
-                    self.queue_url,
-                )
-                return self
             await self._client_cm.__aexit__(None, None, None)
             raise RuntimeError(
                 f"SQS queue {self.queue_url!r} is not reachable"

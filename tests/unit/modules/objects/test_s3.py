@@ -174,3 +174,29 @@ async def test_open_tolerates_a_bucket_the_credentials_cannot_list(
         await gateway.close()
 
     assert excinfo.value.response["Error"]["Code"] == "AccessDenied"
+
+
+async def test_get_and_exists_raise_when_access_is_denied(s3_target: S3Target):
+    gateway = await _gateway(s3_target, bucket="aipt-test-foreign-bucket").open()
+
+    try:
+        with pytest.raises(ClientError, match="AccessDenied"):
+            await gateway.get("k")
+        with pytest.raises(ClientError):
+            await gateway.exists("k")
+    finally:
+        await gateway.close()
+
+
+def test_gateway_requires_the_aws_extra(monkeypatch: pytest.MonkeyPatch):
+    import app.modules.platform.objects.adapters.s3 as s3_mod
+
+    monkeypatch.setattr(s3_mod, "aioboto3", None)
+
+    with pytest.raises(RuntimeError, match=r"\[aws\] extra"):
+        S3ObjectGateway(bucket="b", region_name="us-east-1")
+
+
+def test_gateway_requires_a_bucket():
+    with pytest.raises(ValueError, match="bucket"):
+        S3ObjectGateway(bucket="", region_name="us-east-1")

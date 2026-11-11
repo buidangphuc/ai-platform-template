@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -333,3 +334,48 @@ async def test_close_before_open_is_a_no_op(build_settings):
     gateway = RabbitMQQueueGateway(url="amqp://unused", queue_name="unused")
 
     await gateway.close()
+
+
+async def test_receive_waits_up_to_wait_seconds_on_an_empty_queue(build_settings):
+    gateway = await _open(build_settings())
+    try:
+        started = time.monotonic()
+        assert await gateway.receive(wait_seconds=0.5) == []
+        assert time.monotonic() - started >= 0.45
+    finally:
+        await gateway.close()
+
+
+async def test_receive_returns_a_message_published_during_the_wait(build_settings):
+    gateway = await _open(build_settings())
+    try:
+
+        async def publish_later() -> None:
+            await asyncio.sleep(0.3)
+            await gateway.send({"late": True})
+
+        publisher = asyncio.create_task(publish_later())
+        started = time.monotonic()
+        received = await gateway.receive(wait_seconds=3.0)
+        elapsed = time.monotonic() - started
+        await publisher
+
+        assert [m.body for m in received] == [{"late": True}]
+        assert elapsed < 2.0
+        await gateway.ack(received[0])
+    finally:
+        await gateway.close()
+
+
+async def test_nack_of_an_unknown_message_is_a_no_op(build_settings):
+    gateway = await _open(build_settings())
+    try:
+        await gateway.send({"n": 1})
+        [message] = await gateway.receive(wait_seconds=2.0)
+        await gateway.ack(message)
+
+        await gateway.nack(message)
+
+        assert await gateway.receive(wait_seconds=0.2) == []
+    finally:
+        await gateway.close()
