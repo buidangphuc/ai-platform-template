@@ -1,10 +1,12 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pytest
-from sqlalchemy.dialects import postgresql
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.addons.idempotency import IdempotencyAddon
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
@@ -21,47 +23,64 @@ from app.modules.platform.idempotency.store import (
     IdempotencyCachedResponse,
     IdempotencyClaim,
 )
-from tests.factories import build_test_settings
+from tests.factories import build_test_settings, open_addon
+
+Sessions = async_sessionmaker[AsyncSession]
 
 
 def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
 
 
-class _InsertResult:
-    def __init__(self, inserted_id: str | None) -> None:
-        self._id = inserted_id
-        self.rowcount = 1 if inserted_id else 0
-
-    def scalar_one_or_none(self) -> str | None:
-        return self._id
+def _hash(body: bytes = b"{}") -> str:
+    return build_request_hash(
+        method="POST", path="/jobs", body=body, principal_id="svc-local"
+    )
 
 
-class _FakeSession:
-    """Mocks the slice of AsyncSession used by the service layer."""
+async def _claim(
+    sessions: Sessions,
+    *,
+    key: str = "job-1",
+    request_hash: str | None = None,
+    expires_at: datetime | None = None,
+    timeout: int = 60,
+    now: datetime | None = None,
+) -> IdempotencyCachedResponse | IdempotencyClaim:
+    kwargs = {} if now is None else {"now": lambda: now}
+    async with sessions() as session, session.begin():
+        return await check_or_store_idempotency_key(
+            session,
+            key=key,
+            principal_id="svc-local",
+            request_hash=request_hash or _hash(),
+            expires_at=expires_at or datetime.now(UTC) + timedelta(hours=1),
+            in_progress_timeout_seconds=timeout,
+            **kwargs,
+        )
 
-    def __init__(
-        self,
-        *,
-        insert_inserted_id: str | None = "fake-id",
-        existing: IdempotencyKey | None = None,
-    ) -> None:
-        self.insert_inserted_id = insert_inserted_id
-        self.existing = existing
-        self.flushed = False
-        self.execute_calls: list[Any] = []
-        self.scalar_statements: list[Any] = []
 
-    async def execute(self, statement):
-        self.execute_calls.append(statement)
-        return _InsertResult(self.insert_inserted_id)
+async def _complete(
+    sessions: Sessions, claim: IdempotencyClaim, *, key: str = "job-1"
+) -> bool:
+    async with sessions() as session, session.begin():
+        return await store_idempotency_response(
+            session,
+            key=key,
+            principal_id="svc-local",
+            claim_token=claim.token,
+            status_code=202,
+            response_body={"job_id": "j1"},
+        )
 
-    async def scalar(self, statement):
-        self.scalar_statements.append(statement)
-        return self.existing
 
-    async def flush(self):
-        self.flushed = True
+async def _row(sessions: Sessions, key: str = "job-1") -> IdempotencyKey:
+    async with sessions() as session:
+        return (
+            await session.scalars(
+                select(IdempotencyKey).where(IdempotencyKey.key == key)
+            )
+        ).one()
 
 
 def test_request_hash_scopes_key_to_method_path_body_and_principal():
@@ -88,53 +107,31 @@ def test_compute_idempotency_expires_at_uses_settings_ttl():
     assert expires_at == fixed_now + timedelta(hours=1)
 
 
-async def test_check_or_store_creates_in_progress_record_for_new_key():
-    """When pg_insert succeeds (no conflict), service returns None."""
-    session = _FakeSession(insert_inserted_id="new-id")
-    request_hash = build_request_hash(
-        method="POST", path="/jobs", body=b"{}", principal_id="svc-local"
-    )
-    expires_at = datetime(2026, 5, 22, tzinfo=UTC)
+async def test_check_or_store_creates_in_progress_record_for_new_key(
+    pg_sessionmaker: Sessions,
+):
+    expires_at = datetime.now(UTC) + timedelta(hours=1)
 
-    cached = await check_or_store_idempotency_key(
-        session,
-        key="job-1",
-        principal_id="svc-local",
-        request_hash=request_hash,
-        expires_at=expires_at,
-        in_progress_timeout_seconds=60,
-    )
+    claim = await _claim(pg_sessionmaker, expires_at=expires_at)
 
-    assert isinstance(cached, IdempotencyClaim)
-    assert cached.token
-    assert session.flushed is True
-    assert session.execute_calls[0].compile().params["claim_token"] == cached.token
+    assert isinstance(claim, IdempotencyClaim)
+    assert claim.token
+    row = await _row(pg_sessionmaker)
+    assert row.status == "in_progress"
+    assert row.claim_token == claim.token
+    assert row.request_hash == _hash()
+    assert row.expires_at == expires_at
+    assert row.response_body is None
 
 
-async def test_check_or_store_returns_cached_response_for_completed_record():
-    """When pg_insert hits conflict and existing record is completed."""
-    request_hash = build_request_hash(
-        method="POST", path="/jobs", body=b"{}", principal_id="svc-local"
-    )
-    record = IdempotencyKey(
-        key="job-1",
-        principal_id="svc-local",
-        request_hash=request_hash,
-        status="completed",
-        response_status_code=202,
-        response_body={"job_id": "j1"},
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-    session = _FakeSession(insert_inserted_id=None, existing=record)
+async def test_check_or_store_returns_cached_response_for_completed_record(
+    pg_sessionmaker: Sessions,
+):
+    claim = await _claim(pg_sessionmaker)
+    assert isinstance(claim, IdempotencyClaim)
+    await _complete(pg_sessionmaker, claim)
 
-    cached = await check_or_store_idempotency_key(
-        session,
-        key="job-1",
-        principal_id="svc-local",
-        request_hash=request_hash,
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-        in_progress_timeout_seconds=60,
-    )
+    cached = await _claim(pg_sessionmaker)
 
     assert cached == IdempotencyCachedResponse(
         status_code=202,
@@ -142,188 +139,203 @@ async def test_check_or_store_returns_cached_response_for_completed_record():
     )
 
 
-async def test_check_or_store_rejects_same_key_with_different_request_hash():
-    record = IdempotencyKey(
-        key="job-1",
-        principal_id="svc-local",
-        request_hash="old-hash",
-        status="completed",
-        response_status_code=200,
-        response_body={"ok": True},
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-    session = _FakeSession(insert_inserted_id=None, existing=record)
+async def test_check_or_store_rejects_same_key_with_different_request_hash(
+    pg_sessionmaker: Sessions,
+):
+    claim = await _claim(pg_sessionmaker, request_hash="old-hash")
+    assert isinstance(claim, IdempotencyClaim)
+    await _complete(pg_sessionmaker, claim)
 
     with pytest.raises(AppError) as exc_info:
-        await check_or_store_idempotency_key(
-            session,
-            key="job-1",
-            principal_id="svc-local",
-            request_hash="new-hash",
-            expires_at=datetime.now(UTC) + timedelta(hours=1),
-            in_progress_timeout_seconds=60,
-        )
+        await _claim(pg_sessionmaker, request_hash="new-hash")
 
     assert exc_info.value.code == "idempotency_key_conflict"
     assert exc_info.value.status_code == 409
 
 
-async def test_check_or_store_raises_in_progress_when_still_within_timeout():
-    """A live in-progress record must block concurrent retries."""
-    now = datetime(2026, 5, 23, 10, 0, tzinfo=UTC)
-    record = IdempotencyKey(
-        key="job-1",
-        principal_id="svc-local",
-        request_hash="hash",
-        status="in_progress",
-        expires_at=now + timedelta(hours=1),
-    )
-    record.updated_at = now  # just updated → not stuck
-    session = _FakeSession(insert_inserted_id=None, existing=record)
+async def test_check_or_store_raises_in_progress_when_still_within_timeout(
+    pg_sessionmaker: Sessions,
+):
+    await _claim(pg_sessionmaker)
 
     with pytest.raises(AppError) as exc_info:
-        await check_or_store_idempotency_key(
-            session,
-            key="job-1",
-            principal_id="svc-local",
-            request_hash="hash",
-            expires_at=now + timedelta(hours=1),
-            in_progress_timeout_seconds=60,
-            now=lambda: now,
-        )
+        await _claim(pg_sessionmaker, timeout=60)
 
     assert exc_info.value.code == "idempotency_key_in_progress"
 
 
-async def test_check_or_store_reclaims_stuck_in_progress_record():
-    """In-progress record older than timeout is treated as expired and re-claimed."""
-    now = datetime(2026, 5, 23, 10, 0, tzinfo=UTC)
-    stuck = IdempotencyKey(
-        key="job-1",
-        principal_id="svc-local",
-        request_hash="old-hash",
-        status="in_progress",
-        expires_at=now + timedelta(hours=1),
-    )
-    stuck.updated_at = now - timedelta(minutes=5)  # 300s ago, past 60s timeout
-    session = _FakeSession(insert_inserted_id=None, existing=stuck)
+async def test_check_or_store_reclaims_stuck_in_progress_record(
+    pg_sessionmaker: Sessions,
+):
+    stuck = await _claim(pg_sessionmaker, request_hash="old-hash")
+    assert isinstance(stuck, IdempotencyClaim)
+    later = datetime.now(UTC) + timedelta(minutes=5)
+    new_expires = later + timedelta(hours=2)
 
-    new_expires = now + timedelta(hours=2)
-    cached = await check_or_store_idempotency_key(
-        session,
-        key="job-1",
-        principal_id="svc-local",
+    reclaimed = await _claim(
+        pg_sessionmaker,
         request_hash="new-hash",
         expires_at=new_expires,
-        in_progress_timeout_seconds=60,
-        now=lambda: now,
+        timeout=60,
+        now=later,
     )
 
-    assert isinstance(cached, IdempotencyClaim)
-    assert stuck.claim_token == cached.token
-    assert stuck.status == "in_progress"
-    assert stuck.request_hash == "new-hash"
-    assert stuck.expires_at == new_expires
-    assert stuck.response_status_code is None
-    assert stuck.response_body is None
+    assert isinstance(reclaimed, IdempotencyClaim)
+    assert reclaimed.token != stuck.token
+    row = await _row(pg_sessionmaker)
+    assert row.claim_token == reclaimed.token
+    assert row.status == "in_progress"
+    assert row.request_hash == "new-hash"
+    assert row.expires_at == new_expires
+    assert row.response_status_code is None
+    assert row.response_body is None
+    assert await _complete(pg_sessionmaker, stuck) is False
+    assert await _complete(pg_sessionmaker, reclaimed) is True
 
 
-async def test_store_idempotency_response_is_a_fenced_update():
-    session = _FakeSession(insert_inserted_id="id-1")
-
-    stored = await store_idempotency_response(
-        session,
-        key="job-1",
-        principal_id="svc-local",
-        claim_token="token-1",
-        status_code=201,
-        response_body={"id": "created"},
+async def test_check_or_store_reclaims_an_expired_completed_record(
+    pg_sessionmaker: Sessions,
+):
+    first = await _claim(
+        pg_sessionmaker, expires_at=datetime.now(UTC) + timedelta(seconds=30)
     )
+    assert isinstance(first, IdempotencyClaim)
+    await _complete(pg_sessionmaker, first)
 
-    sql = str(session.execute_calls[0].compile(dialect=postgresql.dialect()))
+    second = await _claim(pg_sessionmaker, now=datetime.now(UTC) + timedelta(hours=1))
+
+    assert isinstance(second, IdempotencyClaim)
+    assert second.token != first.token
+    assert (await _row(pg_sessionmaker)).status == "in_progress"
+
+
+async def test_store_idempotency_response_is_a_fenced_update(
+    pg_sessionmaker: Sessions,
+):
+    claim = await _claim(pg_sessionmaker)
+    assert isinstance(claim, IdempotencyClaim)
+
+    async with pg_sessionmaker() as session, session.begin():
+        stale = await store_idempotency_response(
+            session,
+            key="job-1",
+            principal_id="svc-local",
+            claim_token="stale-token",
+            status_code=201,
+            response_body={"id": "stale"},
+        )
+    assert stale is False
+    assert (await _row(pg_sessionmaker)).status == "in_progress"
+
+    async with pg_sessionmaker() as session, session.begin():
+        stored = await store_idempotency_response(
+            session,
+            key="job-1",
+            principal_id="svc-local",
+            claim_token=claim.token,
+            status_code=201,
+            response_body={"id": "created"},
+        )
+
+    row = await _row(pg_sessionmaker)
     assert stored is True
-    assert session.flushed is True
-    assert "claim_token = %(claim_token_1)s" in sql
-    assert "status = %(status_1)s" in sql
-    assert "RETURNING" in sql
+    assert row.status == "completed"
+    assert row.response_status_code == 201
+    assert row.response_body == {"id": "created"}
 
 
-async def test_store_idempotency_response_reports_fenced_off_write():
-    session = _FakeSession(insert_inserted_id=None)
+async def test_conflict_path_reads_the_record_under_a_row_lock(
+    pg_sessionmaker: Sessions,
+):
+    claim = await _claim(pg_sessionmaker)
+    assert isinstance(claim, IdempotencyClaim)
+    await _complete(pg_sessionmaker, claim)
 
-    stored = await store_idempotency_response(
-        session,
-        key="job-1",
-        principal_id="svc-local",
-        claim_token="stale-token",
-        status_code=201,
-        response_body={"id": "created"},
-    )
+    async with pg_sessionmaker() as holder, holder.begin():
+        await holder.scalar(
+            select(IdempotencyKey)
+            .where(IdempotencyKey.key == "job-1")
+            .with_for_update()
+        )
+        waiter = asyncio.create_task(_claim(pg_sessionmaker))
+        done, _ = await asyncio.wait({waiter}, timeout=0.5)
+        assert not done
 
-    assert stored is False
-
-
-async def test_conflict_path_reads_the_record_under_a_row_lock():
-    now = datetime(2026, 5, 23, 10, 0, tzinfo=UTC)
-    stuck = IdempotencyKey(
-        key="job-1",
-        principal_id="svc-local",
-        request_hash="old",
-        status="in_progress",
-        expires_at=now + timedelta(hours=1),
-    )
-    stuck.updated_at = now - timedelta(hours=1)
-    session = _FakeSession(insert_inserted_id=None, existing=stuck)
-
-    await check_or_store_idempotency_key(
-        session,
-        key="job-1",
-        principal_id="svc-local",
-        request_hash="new",
-        expires_at=now + timedelta(hours=2),
-        in_progress_timeout_seconds=60,
-        now=lambda: now,
-    )
-
-    assert session.scalar_statements[-1]._for_update_arg is not None
-    assert stuck.updated_at == now
+    cached = await asyncio.wait_for(waiter, timeout=5)
+    assert isinstance(cached, IdempotencyCachedResponse)
 
 
-async def test_delete_expired_returns_row_count():
-    class _DeleteResult:
-        rowcount = 3
+async def test_delete_expired_removes_only_expired_rows_up_to_the_limit(
+    pg_sessionmaker: Sessions,
+):
+    now = datetime.now(UTC)
+    for index in range(3):
+        await _claim(
+            pg_sessionmaker,
+            key=f"old-{index}",
+            expires_at=now - timedelta(hours=1),
+        )
+    await _claim(pg_sessionmaker, key="live", expires_at=now + timedelta(hours=1))
 
-    class _Session(_FakeSession):
-        async def execute(self, statement):
-            self.execute_calls.append(statement)
-            return _DeleteResult()
+    async with pg_sessionmaker() as session, session.begin():
+        first = await delete_expired_idempotency_keys(session, before=now, limit=2)
+    async with pg_sessionmaker() as session, session.begin():
+        second = await delete_expired_idempotency_keys(session, before=now, limit=500)
 
-    session = _Session()
+    assert (first, second) == (2, 1)
+    async with pg_sessionmaker() as session:
+        keys = list(await session.scalars(select(IdempotencyKey.key)))
+    assert keys == ["live"]
 
-    deleted = await delete_expired_idempotency_keys(
-        session,
-        before=datetime(2026, 5, 23, tzinfo=UTC),
-        limit=500,
-    )
 
-    sql = str(session.execute_calls[0].compile(dialect=postgresql.dialect()))
-    assert deleted == 3
-    assert session.flushed is True
-    assert "id IN (SELECT" in sql
-    assert "LIMIT" in sql
+async def test_delete_expired_rejects_a_non_positive_limit(
+    pg_sessionmaker: Sessions,
+):
+    async with pg_sessionmaker() as session, session.begin():
+        with pytest.raises(ValueError, match="limit must be positive"):
+            await delete_expired_idempotency_keys(
+                session, before=datetime.now(UTC), limit=0
+            )
 
 
 # ---------------------------------------------------------------- factory
 
 
-def test_build_idempotency_store_uses_postgres_adapter():
+def test_build_idempotency_store_uses_postgres_adapter(pg_sessionmaker: Sessions):
     store = build_idempotency_store(
         _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True),
-        sessionmaker=object(),
+        sessionmaker=pg_sessionmaker,
     )
 
     assert isinstance(store, PostgresIdempotencyStore)
     assert store.in_progress_timeout_seconds == 600
+
+
+async def test_postgres_store_round_trips_a_claim_through_the_adapter(
+    pg_sessionmaker: Sessions,
+):
+    store = build_idempotency_store(
+        _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True),
+        sessionmaker=pg_sessionmaker,
+    )
+    expired = datetime.now(UTC) - timedelta(hours=1)
+
+    claim = await store.check_or_store(
+        key="job-1", principal_id="svc-local", request_hash=_hash(), expires_at=expired
+    )
+    assert isinstance(claim, IdempotencyClaim)
+    stored = await store.store_response(
+        key="job-1",
+        principal_id="svc-local",
+        claim_token=claim.token,
+        status_code=200,
+        response_body={"ok": True},
+    )
+    deleted = await store.delete_expired(before=datetime.now(UTC), limit=10)
+    await store.close()
+
+    assert stored is True
+    assert deleted == 1
 
 
 def test_idempotency_addon_respects_enabled_flag():
@@ -334,3 +346,23 @@ def test_idempotency_addon_respects_enabled_flag():
         is True
     )
     assert addon.is_enabled(_settings(IDEMPOTENCY_ENABLED=False)) is False
+
+
+async def test_idempotency_addon_attaches_a_working_store(pg_sessionmaker: Sessions):
+    resources = ApplicationResources(sessionmaker=pg_sessionmaker)
+
+    stack = await open_addon(
+        IdempotencyAddon(),
+        resources,
+        _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True),
+    )
+
+    assert isinstance(resources.idempotency_store, PostgresIdempotencyStore)
+    claim = await resources.idempotency_store.check_or_store(
+        key="job-1",
+        principal_id="svc-local",
+        request_hash=_hash(),
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    assert isinstance(claim, IdempotencyClaim)
+    await stack.aclose()

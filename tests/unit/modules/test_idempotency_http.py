@@ -1,23 +1,22 @@
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
 from app.modules.platform.idempotency.http import (
     IdempotentCall,
     get_idempotency_key,
     replay_or_start_idempotent_request,
     store_idempotent_response,
 )
-from app.modules.platform.idempotency.store import (
-    IdempotencyCachedResponse,
-    IdempotencyClaim,
-)
+from app.modules.platform.idempotency.models import IdempotencyKey
 from tests.factories import build_test_settings
 
 
@@ -25,16 +24,23 @@ def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
 
 
-def _request(headers: dict[str, str], *, app: FastAPI | None = None):
+def _request(headers: dict[str, str], *, app: FastAPI | None = None) -> Request:
     if app is None:
         app = FastAPI()
         app.state.settings = _settings()
-    return SimpleNamespace(
-        app=app,
-        headers=headers,
-        method="POST",
-        url=SimpleNamespace(path="/jobs"),
-        state=SimpleNamespace(),
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/jobs",
+            "query_string": b"",
+            "headers": [
+                (name.lower().encode(), value.encode())
+                for name, value in headers.items()
+            ],
+            "app": app,
+            "state": {},
+        }
     )
 
 
@@ -79,96 +85,66 @@ def test_idempotency_key_max_length_comes_from_settings():
     assert "max 10 characters" in exc_info.value.message
 
 
-class _FakeIdempotencyStore:
-    def __init__(
-        self,
-        outcome: IdempotencyCachedResponse | IdempotencyClaim | None = None,
-    ) -> None:
-        self.outcome = outcome or IdempotencyClaim(token="claim-1")
-        self.check_calls: list[dict[str, object]] = []
-        self.store_calls: list[dict[str, object]] = []
-
-    async def check_or_store(
-        self,
-        *,
-        key: str,
-        principal_id: str,
-        request_hash: str,
-        expires_at: datetime,
-    ) -> IdempotencyCachedResponse | IdempotencyClaim:
-        self.check_calls.append(
-            {
-                "key": key,
-                "principal_id": principal_id,
-                "request_hash": request_hash,
-                "expires_at": expires_at,
-            }
-        )
-        return self.outcome
-
-    async def store_response(
-        self,
-        *,
-        key: str,
-        principal_id: str,
-        claim_token: str,
-        status_code: int,
-        response_body: dict,
-    ) -> bool:
-        self.store_calls.append(
-            {
-                "key": key,
-                "principal_id": principal_id,
-                "claim_token": claim_token,
-                "status_code": status_code,
-                "response_body": response_body,
-            }
-        )
-        return True
-
-    async def delete_expired(self, *, before: datetime, limit: int) -> int:
-        return 0
-
-    async def close(self) -> None:
-        return None
-
-
-def _app_with_idempotency(store: _FakeIdempotencyStore) -> FastAPI:
+def _app_with_idempotency(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> FastAPI:
     app = FastAPI()
     app.state.settings = _settings(IDEMPOTENCY_ENABLED=True, DATABASE_ENABLED=True)
-    app.state.resources = ApplicationResources(idempotency_store=store)
+    app.state.resources = ApplicationResources(
+        idempotency_store=PostgresIdempotencyStore(
+            sessionmaker, in_progress_timeout_seconds=600
+        )
+    )
     return app
 
 
-async def test_idempotency_boundary_returns_none_when_no_key_is_present():
-    store = _FakeIdempotencyStore()
-    request = _request({}, app=_app_with_idempotency(store))
+def _expires_at() -> datetime:
+    return datetime.now(UTC) + timedelta(hours=1)
+
+
+async def _rows(sessionmaker: async_sessionmaker[AsyncSession]) -> list[IdempotencyKey]:
+    async with sessionmaker() as session:
+        return list(await session.scalars(select(IdempotencyKey)))
+
+
+async def test_idempotency_boundary_returns_none_when_no_key_is_present(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+):
+    request = _request({}, app=_app_with_idempotency(pg_sessionmaker))
 
     response = await replay_or_start_idempotent_request(
         request,
         principal_id="user-1",
         body=b"{}",
-        expires_at=datetime(2026, 5, 22, tzinfo=UTC),
+        expires_at=_expires_at(),
     )
 
     assert response is None
-    assert store.check_calls == []
+    async with pg_sessionmaker() as session:
+        assert await session.scalar(select(func.count(IdempotencyKey.id))) == 0
 
 
-async def test_idempotency_boundary_replays_cached_response():
-    store = _FakeIdempotencyStore(
-        IdempotencyCachedResponse(status_code=202, body={"task_id": "t1"})
+async def test_idempotency_boundary_replays_cached_response(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+):
+    app = _app_with_idempotency(pg_sessionmaker)
+    first = await replay_or_start_idempotent_request(
+        _request({"Idempotency-Key": "job-1"}, app=app),
+        principal_id="user-1",
+        body=b'{"input":"hello"}',
+        expires_at=_expires_at(),
     )
-    request = _request(
-        {"Idempotency-Key": "job-1"},
-        app=_app_with_idempotency(store),
+    assert isinstance(first, IdempotentCall)
+    await store_idempotent_response(
+        first, status_code=202, response_body={"task_id": "t1"}
     )
+    request = _request({"Idempotency-Key": "job-1"}, app=app)
 
     response = await replay_or_start_idempotent_request(
         request,
         principal_id="user-1",
         body=b'{"input":"hello"}',
-        expires_at=datetime(2026, 5, 22, tzinfo=UTC),
+        expires_at=_expires_at(),
     )
 
     assert isinstance(response, JSONResponse)
@@ -177,12 +153,13 @@ async def test_idempotency_boundary_replays_cached_response():
     assert request.state.idempotency_key == "job-1"
 
 
-async def test_idempotency_boundary_stores_success_response_after_start():
-    store = _FakeIdempotencyStore()
-    expires_at = datetime(2026, 5, 22, tzinfo=UTC) + timedelta(hours=1)
+async def test_idempotency_boundary_stores_success_response_after_start(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+):
+    expires_at = _expires_at()
     request = _request(
         {"Idempotency-Key": "job-1"},
-        app=_app_with_idempotency(store),
+        app=_app_with_idempotency(pg_sessionmaker),
     )
 
     call = await replay_or_start_idempotent_request(
@@ -197,20 +174,44 @@ async def test_idempotency_boundary_stores_success_response_after_start():
         status_code=201,
         response_body={"id": "created"},
     )
+    stored_again = await store_idempotent_response(
+        call,
+        status_code=500,
+        response_body={"id": "overwritten"},
+    )
 
     assert stored is True
-    assert store.check_calls[0]["key"] == "job-1"
-    assert store.check_calls[0]["principal_id"] == "user-1"
-    assert store.check_calls[0]["expires_at"] == expires_at
-    assert store.store_calls == [
-        {
-            "key": "job-1",
-            "principal_id": "user-1",
-            "claim_token": "claim-1",
-            "status_code": 201,
-            "response_body": {"id": "created"},
-        }
-    ]
+    assert stored_again is False
+    [row] = await _rows(pg_sessionmaker)
+    assert row.key == "job-1"
+    assert row.principal_id == "user-1"
+    assert row.claim_token == call.claim_token
+    assert row.expires_at == expires_at
+    assert row.status == "completed"
+    assert row.response_status_code == 201
+    assert row.response_body == {"id": "created"}
+
+
+async def test_idempotency_boundary_reports_a_still_running_request(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+):
+    app = _app_with_idempotency(pg_sessionmaker)
+    await replay_or_start_idempotent_request(
+        _request({"Idempotency-Key": "job-1"}, app=app),
+        principal_id="user-1",
+        body=b"{}",
+        expires_at=_expires_at(),
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        await replay_or_start_idempotent_request(
+            _request({"Idempotency-Key": "job-1"}, app=app),
+            principal_id="user-1",
+            body=b"{}",
+            expires_at=_expires_at(),
+        )
+
+    assert exc_info.value.code == "idempotency_key_in_progress"
 
 
 async def test_idempotency_boundary_fails_clearly_when_disabled():

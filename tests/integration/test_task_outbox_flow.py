@@ -1,27 +1,15 @@
-"""submit -> outbox -> relay -> queue -> worker -> COMPLETED, end to end.
-
-Runs on SQLite always (same SQLAlchemy code path, RETURNING/IN-subquery work) and
-additionally on a real Postgres when ``TASKS_TEST_POSTGRES_URL``
-(``postgresql+asyncpg://...``) is set, where ``FOR UPDATE SKIP LOCKED`` is real.
-"""
-
 from __future__ import annotations
 
 import asyncio
-import os
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.resources import ApplicationResources
 from app.bootstrap.worker import build_worker_message_handler
-from app.core.database.model import Base
 from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.outbox.adapters import PostgresOutboxStore, new_outbox_row
@@ -39,27 +27,7 @@ from app.modules.messaging.tasks.outbox import (
 from app.modules.messaging.tasks.relay import run_outbox_relay
 from app.modules.messaging.tasks.service import TaskService
 
-POSTGRES_URL = os.environ.get("TASKS_TEST_POSTGRES_URL")
 PAYLOAD = {"messages": [{"role": "user", "content": "hello"}]}
-
-
-@pytest_asyncio.fixture(params=["sqlite", "postgres"])
-async def sessionmaker(
-    request: pytest.FixtureRequest, tmp_path: Path
-) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    if request.param == "postgres":
-        if POSTGRES_URL is None:
-            pytest.skip("TASKS_TEST_POSTGRES_URL not set")
-        url = POSTGRES_URL
-    else:
-        url = f"sqlite+aiosqlite:///{tmp_path / 'tasks.db'}"
-    engine = create_async_engine(url)
-    tables = [Task.__table__, OutboxEvent.__table__]
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all, tables=tables)
-        await conn.run_sync(Base.metadata.create_all, tables=tables)
-    yield async_sessionmaker(engine, expire_on_commit=False)
-    await engine.dispose()
 
 
 class _Stack:
@@ -102,8 +70,8 @@ class _Stack:
         pytest.fail(f"task {task_id} never reached {status}")
 
 
-async def test_submitted_task_is_relayed_processed_and_completed(sessionmaker):
-    stack = _Stack(sessionmaker)
+async def test_submitted_task_is_relayed_processed_and_completed(pg_sessionmaker):
+    stack = _Stack(pg_sessionmaker)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -137,8 +105,10 @@ async def test_submitted_task_is_relayed_processed_and_completed(sessionmaker):
     assert stack.queue.pending_count() == 0 and stack.queue.inflight_count() == 0
 
 
-async def test_task_row_and_outbox_event_commit_atomically(sessionmaker, monkeypatch):
-    stack = _Stack(sessionmaker)
+async def test_task_row_and_outbox_event_commit_atomically(
+    pg_sessionmaker, monkeypatch
+):
+    stack = _Stack(pg_sessionmaker)
 
     def _boom(*args, **kwargs):
         raise RuntimeError("outbox insert failed")
@@ -150,13 +120,15 @@ async def test_task_row_and_outbox_event_commit_atomically(sessionmaker, monkeyp
             type="completion", payload=PAYLOAD, principal_id="alice"
         )
 
-    async with sessionmaker() as session:
+    async with pg_sessionmaker() as session:
         assert (await session.scalars(select(Task))).all() == []
         assert (await session.scalars(select(OutboxEvent))).all() == []
 
 
-async def test_reclaimed_task_is_announced_again_in_the_same_transaction(sessionmaker):
-    stack = _Stack(sessionmaker)
+async def test_reclaimed_task_is_announced_again_in_the_same_transaction(
+    pg_sessionmaker,
+):
+    stack = _Stack(pg_sessionmaker)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -179,9 +151,9 @@ async def test_reclaimed_task_is_announced_again_in_the_same_transaction(session
 
 
 async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
-    sessionmaker,
+    pg_sessionmaker,
 ):
-    stack = _Stack(sessionmaker)
+    stack = _Stack(pg_sessionmaker)
     task = await stack.service.submit(
         type="completion",
         payload=PAYLOAD,
@@ -208,9 +180,9 @@ async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
 
 
 async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
-    sessionmaker,
+    pg_sessionmaker,
 ):
-    stack = _Stack(sessionmaker)
+    stack = _Stack(pg_sessionmaker)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -234,8 +206,8 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
     assert stack.queue.dead_letter_count() == 0
 
 
-async def test_poison_task_is_failed_without_a_new_outbox_event(sessionmaker):
-    stack = _Stack(sessionmaker)
+async def test_poison_task_is_failed_without_a_new_outbox_event(pg_sessionmaker):
+    stack = _Stack(pg_sessionmaker)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
@@ -251,18 +223,18 @@ async def test_poison_task_is_failed_without_a_new_outbox_event(sessionmaker):
     assert refreshed is not None
     assert refreshed.status == TaskStatus.FAILED
     assert refreshed.error == "max_attempts_exceeded"
-    async with sessionmaker() as session:
+    async with pg_sessionmaker() as session:
         events = (await session.scalars(select(OutboxEvent))).all()
     assert len(events) == 1  # only the original submit event
 
 
 async def test_delete_published_before_purges_only_old_published_rows_in_batches(
-    sessionmaker,
+    pg_sessionmaker,
 ):
-    store = PostgresOutboxStore(sessionmaker)
+    store = PostgresOutboxStore(pg_sessionmaker)
     now = datetime.now(UTC)
     old = now - timedelta(days=30)
-    async with sessionmaker() as session, session.begin():
+    async with pg_sessionmaker() as session, session.begin():
         for n in range(3):
             row = new_outbox_row(event_type="task.completion", payload={"n": n})
             row.status = "published"
@@ -279,7 +251,7 @@ async def test_delete_published_before_purges_only_old_published_rows_in_batches
     assert await store.delete_published_before(cutoff, limit=2) == 1
     assert await store.delete_published_before(cutoff, limit=2) == 0
 
-    async with sessionmaker() as session:
+    async with pg_sessionmaker() as session:
         statuses = sorted(
             row.status for row in (await session.scalars(select(OutboxEvent))).all()
         )

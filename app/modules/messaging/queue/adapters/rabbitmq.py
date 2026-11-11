@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any, Self
 
 from app.modules.messaging.queue.gateway import QueueMessage
@@ -50,6 +51,8 @@ class RabbitMQQueueGateway:
         self.dead_letter_exchange = dead_letter_exchange or f"{queue_name}.dlx"
         self.dead_letter_queue = dead_letter_queue or f"{queue_name}.dead"
         self._inflight: dict[str, AbstractIncomingMessage] = {}
+        self._connection: Any = None
+        self._channel: Any = None
 
     async def open(self) -> Self:
         """Connect and declare the topology; call once, before any operation,
@@ -85,11 +88,12 @@ class RabbitMQQueueGateway:
         message = aio_pika.Message(
             body=json.dumps(payload).encode("utf-8"),
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            message_id=uuid.uuid4().hex,
         )
         await self._channel.default_exchange.publish(
             message, routing_key=self.queue_name
         )
-        return message.message_id or ""
+        return message.message_id
 
     async def receive(
         self,
@@ -148,6 +152,8 @@ class RabbitMQQueueGateway:
         await incoming.ack()
 
     async def close(self) -> None:
+        if self._connection is None:
+            return
         await self._connection.close()
 
     def _wrap(self, incoming: AbstractIncomingMessage) -> QueueMessage:

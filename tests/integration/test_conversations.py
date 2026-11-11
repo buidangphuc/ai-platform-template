@@ -1,34 +1,23 @@
-from collections.abc import AsyncIterator
-from pathlib import Path
+from collections.abc import AsyncIterator, Callable
 
 import pytest
-import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.bootstrap import resources as resources_module
 from app.bootstrap.application import create_app
-from app.core.database.model import Base
-from app.modules.business.conversations.models import (
-    Conversation,
-    ConversationMessage,
-)
-from tests.factories import api_client_for, api_key_entry, build_test_settings
+from app.core.config import Settings
+from tests.factories import api_client_for, api_key_entry
 
-TABLES = [Conversation.__table__, ConversationMessage.__table__]
 ALICE = {"Authorization": "Bearer alice-token"}
 BOB = {"Authorization": "Bearer bob-token"}
 
 
-@pytest_asyncio.fixture
+@pytest.fixture()
 async def client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    infra_settings: Callable[..., Settings],
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[AsyncClient]:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chat.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=TABLES)
-    monkeypatch.setattr(resources_module, "build_engine", lambda settings: engine)
-    settings = build_test_settings(
+    settings = infra_settings(
         CONVERSATIONS_ENABLED=True,
         DATABASE_ENABLED=True,
         LLM_ENABLED=True,

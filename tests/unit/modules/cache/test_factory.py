@@ -1,6 +1,6 @@
 import pytest
-from fakeredis import aioredis
 from pydantic import ValidationError
+from redis.asyncio import Redis
 
 from app.bootstrap.addons.cache import CacheAddon
 from app.bootstrap.resources import ApplicationResources
@@ -24,15 +24,21 @@ def test_build_memory_cache_gateway_uses_settings():
     assert isinstance(cache, MemoryCacheGateway)
 
 
-def test_build_redis_cache_gateway_uses_settings():
-    redis = aioredis.FakeRedis(decode_responses=False)
-    cache = build_redis_cache_gateway(_settings(CACHE_BACKEND="redis"), redis)
+def test_build_redis_cache_gateway_uses_settings(
+    redis_client: Redis, redis_prefix: str
+):
+    cache = build_redis_cache_gateway(
+        _settings(CACHE_BACKEND="redis", CACHE_PREFIX=redis_prefix), redis_client
+    )
 
     assert isinstance(cache, RedisCacheGateway)
+    assert cache.prefix == redis_prefix
 
 
-async def test_cache_addon_selects_backend_and_closes_gateway():
-    resources = ApplicationResources(redis=aioredis.FakeRedis(decode_responses=False))
+async def test_cache_addon_selects_backend_and_closes_gateway(
+    redis_client: Redis, redis_prefix: str
+):
+    resources = ApplicationResources(redis=redis_client)
     addon = CacheAddon()
 
     stack = await open_addon(addon, resources, _settings(CACHE_ENABLED=True))
@@ -42,9 +48,16 @@ async def test_cache_addon_selects_backend_and_closes_gateway():
     stack = await open_addon(
         addon,
         resources,
-        _settings(CACHE_ENABLED=True, CACHE_BACKEND="redis", REDIS_ENABLED=True),
+        _settings(
+            CACHE_ENABLED=True,
+            CACHE_BACKEND="redis",
+            CACHE_PREFIX=redis_prefix,
+            REDIS_ENABLED=True,
+        ),
     )
     assert isinstance(resources.cache, RedisCacheGateway)
+    await resources.cache.set("k", b"v")
+    assert await redis_client.get(f"{redis_prefix}:k") == b"v"
 
 
 def test_settings_reject_unknown_cache_backend():

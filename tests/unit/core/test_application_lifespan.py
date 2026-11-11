@@ -1,9 +1,12 @@
 import sys
 import types
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
+from pymongo.errors import InvalidOperation
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.bootstrap import (
     application as application_module,
@@ -14,13 +17,8 @@ from app.bootstrap.features.registry import FEATURES
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.health import HealthService
-
-
-def _async_returning(value):
-    async def opener(settings, backend):
-        return value
-
-    return opener
+from app.modules.platform.mongo.gateway import MongoGateway
+from tests.infra import SqsQueue, require
 
 
 class _FakeLangfuseClient:
@@ -47,20 +45,11 @@ def _bare_app() -> FastAPI:
     return app
 
 
-def _patch_resource_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
-    @asynccontextmanager
-    async def _noop_runtime(settings, **_kwargs):
-        yield ApplicationResources()
-
-    monkeypatch.setattr(application_module, "open_runtime", _noop_runtime)
-
-
 async def test_lifespan_flushes_langfuse_client_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     test_settings: Settings,
 ):
     fake_client = _install_fake_langfuse(monkeypatch)
-    _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
     lifespan = _build_lifespan(
@@ -90,7 +79,6 @@ async def test_lifespan_skips_flush_when_init_resources_is_false(
         "_flush_langfuse_client",
         _should_not_be_called,
     )
-    _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
     lifespan = _build_lifespan(
@@ -117,7 +105,6 @@ async def test_lifespan_skips_flush_when_langfuse_disabled(
         "_flush_langfuse_client",
         lambda: flush_calls.append("called"),
     )
-    _patch_resource_lifecycle(monkeypatch)
 
     lifespan = _build_lifespan(
         test_settings,
@@ -137,7 +124,6 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
     test_settings: Settings,
 ):
     monkeypatch.setitem(sys.modules, "langfuse", None)
-    _patch_resource_lifecycle(monkeypatch)
     settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
 
     lifespan = _build_lifespan(
@@ -151,104 +137,38 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
         pass
 
 
-class _FakeEngine:
-    def __init__(self) -> None:
-        self.disposed = False
-
-    async def dispose(self) -> None:
-        self.disposed = True
+@pytest.fixture()
+def aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
 
 
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.closed = False
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-class _FakeQueue:
-    def __init__(self) -> None:
-        self.closed = False
-
-    async def close(self) -> None:
-        self.closed = True
+async def _backend_pids(engine: AsyncEngine, pids: set[int]) -> set[int]:
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text("SELECT pid FROM pg_stat_activity WHERE pid = ANY(:pids)"),
+            {"pids": list(pids)},
+        )
+        return {row[0] for row in rows}
 
 
-class _FakeTaskStore:
-    def __init__(self) -> None:
-        self.closed = False
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _FakeMongoClient:
-    def __init__(self) -> None:
-        self.closed = False
-        self.admin = self
-
-    def __getitem__(self, database: str) -> dict:
-        return {}
-
-    async def command(self, command: str) -> dict:
-        return {"ok": 1}
-
-    def close(self) -> None:
-        self.closed = True
-
-
+@pytest.mark.usefixtures("redis_client")
 async def test_app_lifespan_owns_database_and_redis_resources(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
+    infra_settings: Callable[..., Settings],
+    pg_url: str,
+    pg_engine: AsyncEngine,
+    redis_prefix: str,
 ):
-    engine = _FakeEngine()
-    redis = _FakeRedis()
-    queue = _FakeQueue()
-    task_store = _FakeTaskStore()
-    sessionmaker = object()
-
-    monkeypatch.setattr(
-        resources_module,
-        "build_engine",
-        lambda settings: engine,
-        raising=False,
+    settings = infra_settings(
+        DATABASE_ENABLED=True,
+        REDIS_ENABLED=True,
+        QUEUE_ENABLED=True,
+        QUEUE_BACKEND="redis",
+        QUEUE_NAME=f"{redis_prefix}:queue",
+        TASKS_ENABLED=True,
+        TASK_STORE_BACKEND="postgres",
     )
-    monkeypatch.setattr(
-        resources_module,
-        "build_sessionmaker",
-        lambda received_engine: sessionmaker,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        resources_module,
-        "build_redis_client",
-        lambda settings: redis,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        resources_module,
-        "open_queue_gateway",
-        _async_returning(queue),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        resources_module,
-        "build_memory_task_store",
-        lambda: task_store,
-        raising=False,
-    )
-
-    stack_settings = test_settings.model_copy(
-        update={
-            # This test exercises the opt-in infra stack — enable it.
-            "DATABASE_ENABLED": True,
-            "REDIS_ENABLED": True,
-            "QUEUE_ENABLED": True,
-            "TASKS_ENABLED": True,
-        }
-    )
-    app = create_app(settings=stack_settings, init_resources=True)
+    app = create_app(settings=settings, init_resources=True)
     resources_before = app.state.resources
 
     assert resources_before.engine is None
@@ -259,22 +179,27 @@ async def test_app_lifespan_owns_database_and_redis_resources(
 
     async with app.router.lifespan_context(app):
         resources_open = app.state.resources
-        assert resources_open.engine is engine
-        assert resources_open.sessionmaker is sessionmaker
-        assert resources_open.redis is redis
-        assert resources_open.queue_gateway is queue
+        assert resources_open.engine is not None
+        assert resources_open.sessionmaker is not None
+        assert resources_open.redis is not None
+        assert resources_open.queue_gateway is not None
         assert resources_open.tasks is not None
-        assert resources_open.tasks.store is task_store
-        assert engine.disposed is False
-        assert redis.closed is False
-        assert queue.closed is False
-        assert task_store.closed is False
+        assert resources_open.tasks.queue is resources_open.queue_gateway
 
+        readiness = await app.state.health_service.readiness()
+        assert readiness.dependencies == {"api": "ok", "postgres": "ok", "redis": "ok"}
+
+        async with resources_open.sessionmaker() as session:
+            pid = (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+        redis = resources_open.redis
+        redis_client_id = await redis.client_id()
+        assert await redis.client_id() == redis_client_id
+        assert await _backend_pids(pg_engine, {pid}) == {pid}
+
+    assert await _backend_pids(pg_engine, {pid}) == set()
+    assert await redis.client_id() != redis_client_id
+    await redis.aclose()
     resources_closed = app.state.resources
-    assert engine.disposed is True
-    assert redis.closed is True
-    assert queue.closed is True
-    assert task_store.closed is True
     assert resources_closed.engine is None
     assert resources_closed.redis is None
     assert resources_closed.queue_gateway is None
@@ -282,72 +207,129 @@ async def test_app_lifespan_owns_database_and_redis_resources(
     assert app.state.health_service is not None
 
 
-async def test_app_lifespan_owns_mongo_addon_resource(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
+@pytest.mark.usefixtures("aws_credentials")
+async def test_app_lifespan_opens_and_closes_the_sqs_queue(
+    infra_settings: Callable[..., Settings],
+    sqs_queue: SqsQueue,
 ):
-    mongo_client = _FakeMongoClient()
-    settings = test_settings.model_copy(
-        update={
-            "DATABASE_ENABLED": False,
-            "REDIS_ENABLED": False,
-            "QUEUE_ENABLED": False,
-            "TASKS_ENABLED": False,
-            "MONGO_ENABLED": True,
-        }
+    settings = infra_settings(
+        QUEUE_ENABLED=True,
+        QUEUE_BACKEND="sqs",
+        SQS_QUEUE_URL=sqs_queue.url,
+        SQS_ENDPOINT_URL=sqs_queue.endpoint_url,
+        SQS_REGION=sqs_queue.region,
     )
-    monkeypatch.setattr(
-        "app.modules.platform.mongo.factory.build_mongo_client",
-        lambda received_settings: mongo_client,
-    )
-
     app = create_app(settings=settings, init_resources=True)
 
     async with app.router.lifespan_context(app):
-        resources_open = app.state.resources
-        assert resources_open.mongo is not None
+        queue = app.state.resources.queue_gateway
+        assert queue is not None
+        await queue.send({"ping": 1})
+        (message,) = await queue.receive(max_messages=1, wait_seconds=1)
+        assert message.body == {"ping": 1}
+
+    assert app.state.resources.queue_gateway is None
+
+
+@pytest.mark.usefixtures("aws_credentials")
+async def test_app_lifespan_fails_startup_when_the_sqs_queue_is_missing(
+    infra_settings: Callable[..., Settings],
+    sqs_queue: SqsQueue,
+):
+    settings = infra_settings(
+        QUEUE_ENABLED=True,
+        QUEUE_BACKEND="sqs",
+        SQS_QUEUE_URL=f"{sqs_queue.url}-missing",
+        SQS_ENDPOINT_URL=sqs_queue.endpoint_url,
+        SQS_REGION=sqs_queue.region,
+    )
+    app = create_app(settings=settings, init_resources=True)
+
+    with pytest.raises(RuntimeError, match="not reachable"):
+        async with app.router.lifespan_context(app):
+            pytest.fail("lifespan must not start")
+
+
+async def test_app_lifespan_owns_mongo_addon_resource(
+    infra_settings: Callable[..., Settings],
+    mongo_gateway: MongoGateway,
+):
+    settings = infra_settings(
+        MONGO_ENABLED=True,
+        MONGODB_URI=require("mongo"),
+        MONGODB_DATABASE=mongo_gateway.database.name,
+    )
+    app = create_app(settings=settings, init_resources=True)
+
+    async with app.router.lifespan_context(app):
+        gateway = app.state.resources.mongo
+        assert gateway is not None
         readiness = await app.state.health_service.readiness()
         assert readiness.dependencies["mongo"] == "ok"
-        assert mongo_client.closed is False
+        assert (await gateway.ping())["ok"] == 1
 
     assert app.state.resources.mongo is None
-    assert mongo_client.closed is True
+    with pytest.raises(InvalidOperation):
+        await gateway.ping()
 
 
-async def test_app_lifespan_honors_resource_flags(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
+@pytest.mark.usefixtures("redis_client")
+async def test_readiness_reports_unreachable_and_misconfigured_dependencies(
+    infra_settings: Callable[..., Settings],
+    pg_url: str,
+    mongo_gateway: MongoGateway,
 ):
-    build_calls: list[str] = []
+    cases = {
+        "postgres": {"POSTGRES_PORT": 1},
+        "redis": {"REDIS_PORT": 1},
+        "mongo": {"MONGODB_URI": "mongodb://127.0.0.1:1"},
+    }
+    for name, override in cases.items():
+        settings = infra_settings(
+            DATABASE_ENABLED=name == "postgres",
+            REDIS_ENABLED=name == "redis",
+            MONGO_ENABLED=name == "mongo",
+            MONGODB_DATABASE=mongo_gateway.database.name,
+            MONGODB_SERVER_SELECTION_TIMEOUT_MS=300,
+            HEALTH_CHECK_TIMEOUT_SECONDS=3,
+            **override,
+        )
+        app = create_app(settings=settings, init_resources=True)
 
-    monkeypatch.setattr(
-        resources_module,
-        "build_engine",
-        lambda settings: build_calls.append("engine"),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        resources_module,
-        "build_redis_client",
-        lambda settings: build_calls.append("redis"),
-        raising=False,
-    )
+        async with app.router.lifespan_context(app):
+            readiness = await app.state.health_service.readiness()
 
-    async def spy_open_queue(settings, backend):
-        build_calls.append("queue")
+        assert readiness.status == "error", name
+        assert readiness.dependencies[name] == "error", name
 
-    monkeypatch.setattr(
-        resources_module,
-        "open_queue_gateway",
-        spy_open_queue,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        resources_module,
-        "build_memory_task_store",
-        lambda: build_calls.append("store"),
-        raising=False,
-    )
+
+async def test_readiness_reports_a_postgres_password_rejected_by_the_server(
+    infra_settings: Callable[..., Settings],
+    pg_url: str,
+):
+    settings = infra_settings(DATABASE_ENABLED=True, POSTGRES_PASSWORD="wrong")
+    app = create_app(settings=settings, init_resources=True)
+
+    async with app.router.lifespan_context(app):
+        readiness = await app.state.health_service.readiness()
+
+    assert readiness.dependencies["postgres"] == "error"
+
+
+@pytest.mark.usefixtures("redis_client")
+async def test_readiness_reports_a_redis_password_rejected_by_the_server(
+    infra_settings: Callable[..., Settings],
+):
+    settings = infra_settings(REDIS_ENABLED=True, REDIS_PASSWORD="wrong")
+    app = create_app(settings=settings, init_resources=True)
+
+    async with app.router.lifespan_context(app):
+        readiness = await app.state.health_service.readiness()
+
+    assert readiness.dependencies["redis"] == "error"
+
+
+async def test_app_lifespan_honors_resource_flags(test_settings: Settings):
     settings = test_settings.model_copy(
         update={
             "DATABASE_ENABLED": False,
@@ -365,37 +347,22 @@ async def test_app_lifespan_honors_resource_flags(
         assert resources_open.redis is None
         assert resources_open.queue_gateway is None
         assert resources_open.tasks is None
+        assert resources_open.health_checks.checks == ()
         assert app.state.health_service is not None
-
-    assert build_calls == []
 
 
 async def test_app_lifespan_init_resources_false_opens_no_runtime_resources(
-    monkeypatch: pytest.MonkeyPatch,
     test_settings: Settings,
 ):
-    build_calls: list[str] = []
-
-    monkeypatch.setattr(
-        resources_module,
-        "build_engine",
-        lambda settings: build_calls.append("engine"),
-        raising=False,
+    settings = test_settings.model_copy(
+        update={"DATABASE_ENABLED": True, "REDIS_ENABLED": True}
     )
-    monkeypatch.setattr(
-        resources_module,
-        "build_redis_client",
-        lambda settings: build_calls.append("redis"),
-        raising=False,
-    )
-    app = create_app(settings=test_settings, init_resources=False)
+    app = create_app(settings=settings, init_resources=False)
 
     async with app.router.lifespan_context(app):
         resources_open = app.state.resources
         assert resources_open.engine is None
         assert resources_open.redis is None
-
-    assert build_calls == []
 
 
 def test_resource_lifecycle_uses_named_open_steps():
@@ -409,21 +376,17 @@ def test_resource_lifecycle_uses_named_open_steps():
         assert callable(getattr(resources_module, name))
 
 
+@pytest.mark.usefixtures("redis_client")
 async def test_openers_register_readiness_checks_with_the_configured_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
+    infra_settings: Callable[..., Settings],
+    pg_url: str,
 ):
-    monkeypatch.setattr(resources_module, "build_engine", lambda s: _FakeEngine())
-    monkeypatch.setattr(resources_module, "build_sessionmaker", lambda e: object())
-    monkeypatch.setattr(resources_module, "build_redis_client", lambda s: _FakeRedis())
-    settings = test_settings.model_copy(
-        update={
-            "DATABASE_ENABLED": True,
-            "REDIS_ENABLED": True,
-            "QUEUE_ENABLED": False,
-            "TASKS_ENABLED": False,
-            "HEALTH_CHECK_TIMEOUT_SECONDS": 0.75,
-        }
+    settings = infra_settings(
+        DATABASE_ENABLED=True,
+        REDIS_ENABLED=True,
+        QUEUE_ENABLED=False,
+        TASKS_ENABLED=False,
+        HEALTH_CHECK_TIMEOUT_SECONDS=0.75,
     )
 
     async with resources_module.open_application_resources(

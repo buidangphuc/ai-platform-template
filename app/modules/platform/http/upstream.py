@@ -55,19 +55,12 @@ class UpstreamClient:
         self._sleep = sleep
 
     @classmethod
-    def from_upstream(
-        cls,
-        upstream: Upstream,
-        settings: Settings,
-        *,
-        transport: httpx.AsyncBaseTransport | None = None,
-    ) -> UpstreamClient:
+    def from_upstream(cls, upstream: Upstream, settings: Settings) -> UpstreamClient:
         client = httpx.AsyncClient(
             base_url=upstream.base_url(settings),
             headers=dict(upstream.headers(settings)),
             timeout=TimeoutPolicy(upstream.timeout).timeout_seconds,
             follow_redirects=upstream.follow_redirects,
-            transport=transport,
         )
         return cls(upstream.name, client, retries=upstream.retries)
 

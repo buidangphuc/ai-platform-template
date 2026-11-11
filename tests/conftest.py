@@ -4,6 +4,7 @@ from httpx import AsyncClient
 from app.bootstrap.application import create_app
 from app.core.config import Settings
 from tests.factories import api_client_for, build_test_settings
+from tests.http_server import local_http_server as local_http_server
 from tests.infra import (
     infra_settings as infra_settings,
     mongo_gateway as mongo_gateway,

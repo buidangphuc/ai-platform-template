@@ -1,5 +1,5 @@
 import pytest
-from fakeredis import aioredis
+from redis.asyncio import Redis
 
 from app.modules.messaging.tasks.adapters.redis import RedisTaskStore
 from app.modules.messaging.tasks.store import TaskStore
@@ -7,12 +7,12 @@ from app.modules.messaging.tasks.store import TaskStore
 from .conformance import TaskStoreConformance
 
 
+@pytest.mark.parametrize("redis_client", [True], indirect=True)
 class TestRedisTaskStore(TaskStoreConformance):
     @pytest.fixture
-    def store_factory(self):
+    def store_factory(self, redis_client: Redis, redis_prefix: str):
         async def _build() -> TaskStore:
-            redis = aioredis.FakeRedis(decode_responses=True)
-            return RedisTaskStore(redis=redis, prefix=f"test-tasks-{id(redis)}")
+            return RedisTaskStore(redis=redis_client, prefix=f"{redis_prefix}:tasks")
 
         return _build
 

@@ -1,15 +1,13 @@
 import hashlib
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
 
-import httpx
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import Settings
 from app.modules.platform.http.upstream import UpstreamClient
-
-Handler = Callable[[httpx.Request], httpx.Response]
 
 
 def sha256_hex(token: str) -> str:
@@ -57,19 +55,13 @@ async def open_addon(addon, resources, settings: Settings) -> AsyncExitStack:
     return stack
 
 
-def mock_upstreams(monkeypatch, handlers: Mapping[str, Handler | httpx.MockTransport]):
-    """Serve the named upstreams from ``httpx.MockTransport``; others stay real."""
-    transports = {
-        name: handler
-        if isinstance(handler, httpx.MockTransport)
-        else httpx.MockTransport(handler)
-        for name, handler in handlers.items()
-    }
+def local_upstreams(monkeypatch, urls: Mapping[str, str]):
+    """Point the named upstreams at local base URLs; others keep their own."""
     original = UpstreamClient.from_upstream.__func__
 
-    def from_upstream(cls, upstream, settings, *, transport=None):
-        return original(
-            cls, upstream, settings, transport=transports.get(upstream.name, transport)
-        )
+    def from_upstream(cls, upstream, settings):
+        if upstream.name in urls:
+            upstream = replace(upstream, base_url=lambda _settings: urls[upstream.name])
+        return original(cls, upstream, settings)
 
     monkeypatch.setattr(UpstreamClient, "from_upstream", classmethod(from_upstream))

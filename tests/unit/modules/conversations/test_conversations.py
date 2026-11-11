@@ -1,22 +1,13 @@
-from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.database.model import Base
 from app.core.errors import NotFoundError
-from app.modules.business.conversations.models import (
-    Conversation,
-    ConversationMessage,
-)
+from app.modules.business.conversations.models import ConversationMessage
 from app.modules.business.conversations.service import ConversationService
 from app.modules.business.conversations.stores import ConversationStore
-
-TABLES = [Conversation.__table__, ConversationMessage.__table__]
 
 
 class FakeMessage:
@@ -37,20 +28,9 @@ class FakeLlm:
         return FakeMessage(self.reply)
 
 
-@pytest_asyncio.fixture
-async def sessionmaker(
-    tmp_path: Path,
-) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'chat.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=TABLES)
-    yield async_sessionmaker(engine, expire_on_commit=False)
-    await engine.dispose()
-
-
 @pytest.fixture
-def store(sessionmaker: async_sessionmaker[AsyncSession]) -> ConversationStore:
-    return ConversationStore(sessionmaker)
+def store(pg_sessionmaker: async_sessionmaker[AsyncSession]) -> ConversationStore:
+    return ConversationStore(pg_sessionmaker)
 
 
 async def _message_count(sessionmaker: async_sessionmaker[AsyncSession]) -> int:
@@ -96,7 +76,7 @@ async def test_history_is_sent_to_the_model_in_order(store: ConversationStore) -
 
 
 async def test_llm_failure_stores_nothing(
-    store: ConversationStore, sessionmaker: async_sessionmaker[AsyncSession]
+    store: ConversationStore, pg_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     service = ConversationService(store, FakeLlm(error=RuntimeError("boom")))  # type: ignore[arg-type]
     conversation = await service.create("alice", "Chat")
@@ -104,18 +84,18 @@ async def test_llm_failure_stores_nothing(
     with pytest.raises(RuntimeError, match="boom"):
         await service.send("alice", conversation.id, "hello")
 
-    assert await _message_count(sessionmaker) == 0
+    assert await _message_count(pg_sessionmaker) == 0
 
 
 async def test_store_failure_rolls_back_both_messages(
-    store: ConversationStore, sessionmaker: async_sessionmaker[AsyncSession]
+    store: ConversationStore, pg_sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     conversation = await store.create("alice", "Chat")
 
     with pytest.raises(Exception):
         await store.append_exchange(conversation.id, "hello", None)  # type: ignore[arg-type]
 
-    assert await _message_count(sessionmaker) == 0
+    assert await _message_count(pg_sessionmaker) == 0
 
 
 async def test_other_principal_gets_not_found(store: ConversationStore) -> None:
