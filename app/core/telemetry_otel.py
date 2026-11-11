@@ -1,7 +1,7 @@
 """OpenTelemetry-backed telemetry (optional ``otel`` extra).
 
 Imported lazily, only after ``require_otel()`` passed. Emits the GenAI client
-metrics and one span per completion; never prompt or output content.
+metrics and one span per LLM call; never prompt or output content.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import SpanKind, Status, StatusCode, set_tracer_provider
 
 from app.core.config import Settings
-from app.core.telemetry import CompletionObservation
+from app.core.telemetry import LlmObservation
 
 _DURATION_BUCKETS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12)
 _TOKEN_BUCKETS = (1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144)
@@ -28,7 +28,7 @@ _HEALTH_PATHS = "healthz,readyz"
 
 
 class Telemetry:
-    """Typed handle over the providers; also the completions ``CompletionSink``."""
+    """Typed handle over the providers; also the ``LlmSink`` of ``LLMInstance``."""
 
     def __init__(
         self,
@@ -61,7 +61,7 @@ class Telemetry:
             explicit_bucket_boundaries_advisory=_DURATION_BUCKETS,
         )
 
-    def record_completion(self, observation: CompletionObservation) -> None:
+    def record_llm(self, observation: LlmObservation) -> None:
         attributes: dict[str, str] = {
             "gen_ai.operation.name": "chat",
             "app.completion.mode": observation.mode,

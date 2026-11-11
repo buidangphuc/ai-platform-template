@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator
 
 import pytest
 
@@ -11,7 +12,11 @@ from app.modules.business.completions.schemas import (
     CompletionResult,
     CompletionStreamChunk,
 )
-from app.modules.business.completions.service import CompletionService
+from app.modules.business.completions.service import (
+    CompletionService,
+    StreamPolicy,
+    StreamTimeoutError,
+)
 
 
 class _RecordingCompletionHandler:
@@ -152,3 +157,74 @@ async def test_echo_stream_yields_one_chunk_carrying_usage_and_finish_reason():
     assert chunks[0].model == "echo"
     assert chunks[0].finish_reason == "stop"
     assert chunks[0].usage is not None and chunks[0].usage.total_tokens == 3
+
+
+class _Scripted:
+    def __init__(self, *steps: CompletionStreamChunk | float | Exception) -> None:
+        self.steps = steps
+        self.closed = False
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        return CompletionResult(content="done")
+
+    async def stream(
+        self, request: CompletionRequest
+    ) -> AsyncGenerator[CompletionStreamChunk, None]:
+        try:
+            for step in self.steps:
+                if isinstance(step, CompletionStreamChunk):
+                    yield step
+                elif isinstance(step, Exception):
+                    raise step
+                else:
+                    await asyncio.sleep(step)
+        finally:
+            self.closed = True
+
+
+def _timed(handler: _Scripted, first: float = 1, idle: float = 1) -> CompletionService:
+    return CompletionService(
+        handler, policy=StreamPolicy(first_token_timeout=first, idle_timeout=idle)
+    )
+
+
+async def test_first_token_timeout():
+    handler = _Scripted(5)
+
+    with pytest.raises(StreamTimeoutError) as caught:
+        [c async for c in _timed(handler, first=0.05).stream(_request())]
+
+    assert (caught.value.code, caught.value.status_code) == ("stream_timeout", 504)
+    assert handler.closed
+
+
+async def test_handler_raised_timeout_is_not_a_stream_timeout():
+    with pytest.raises(TimeoutError) as caught:
+        [
+            c
+            async for c in _timed(_Scripted(TimeoutError("upstream"))).stream(
+                _request()
+            )
+        ]
+
+    assert not isinstance(caught.value, StreamTimeoutError)
+
+
+async def test_idle_timeout_after_first_chunk():
+    handler = _Scripted(CompletionStreamChunk(delta="a"), 5)
+    seen = []
+
+    with pytest.raises(StreamTimeoutError):
+        async for chunk in _timed(handler, idle=0.05).stream(_request()):
+            seen.append(chunk.delta)
+
+    assert seen == ["a"]
+
+
+async def test_handler_that_enforces_its_own_policy_is_not_cut_by_the_service():
+    handler = _Scripted(0.1, CompletionStreamChunk(delta="late"))
+    handler.enforces_stream_policy = True  # type: ignore[attr-defined]
+
+    chunks = [c async for c in _timed(handler, first=0.01).stream(_request())]
+
+    assert [c.delta for c in chunks] == ["late"]

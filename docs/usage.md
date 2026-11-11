@@ -58,8 +58,9 @@ within `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS`) return the normal JSON error envelo
 Handlers yield `CompletionStreamChunk`; the last chunk may set `usage` and
 `finish_reason`.
 
-Each sync and stream completion (API and worker) logs one `completion mode=... outcome=... model=...
-duration_ms=... ttft_ms=... finish_reason=... input_tokens=...` line (no content).
+With `LLM_ENABLED=true` each LLM call (API and worker, sync or stream) logs one
+`completion mode=... outcome=... model=... duration_ms=... ttft_ms=... finish_reason=... input_tokens=...`
+line (no content). The default echo handler makes no LLM call and logs no such line.
 
 ## Docker
 

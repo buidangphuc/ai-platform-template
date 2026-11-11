@@ -40,7 +40,7 @@ build_llm_instance(settings, instance_id=, service_name=, tags=)
 ```
 
 - Business code takes an `LLMInstance` (or a handler built from one) as a **constructor dependency**.
-- App-lifetime LLM instances are composed in `app/bootstrap` and registered in `ApplicationResources`, like other platform resources.
+- App-lifetime LLM instances are composed in `app/bootstrap` and registered in `ApplicationResources`, like other platform resources. `LlmAddon` (`app/bootstrap/addons/llm.py`) builds `resources.llm` with `build_llm_instance` when `LLM_ENABLED=true` (default false: `resources.llm` is `None`). With no `CHAT_MODEL` the router's fake model answers, so no provider key is needed.
 - `LLMInstance.trace_config(context)` returns the config passed into the LangChain call so Langfuse captures the trace.
 
 ### Model selection and fallback: `ModelRouter` (`llm/router.py`)
@@ -50,11 +50,10 @@ build_llm_instance(settings, instance_id=, service_name=, tags=)
 - Failover is an **ordered chain**: the `default` role's chain is `CHAT_MODEL` followed by *every* `CHAT_FALLBACK_MODELS` entry, in order (duplicates dropped); `judge` has the judge model alone and no fallbacks. With more than one target, each target has its **own circuit breaker** (`CircuitBreaker`, `app/core/resilience.py`), keyed by (role, target). A breaker counts only *transient* failures: 408/429/5xx, timeouts and connection errors (`is_transient_error`). Deterministic errors (bad prompt, context length, content policy, other 4xx) never count and never fail over, since the next model would only repeat them. After `LLM_BREAKER_FAILURE_THRESHOLD` consecutive transient failures a target's breaker opens and the chain skips it; after `LLM_BREAKER_COOLDOWN_SECONDS` exactly one call is let through as a probe (half-open): success closes the breaker, a transient failure reopens it for another cooldown. A single-target chain is never gated.
 - `LLMInstance` carries the router (`instance.router`) next to the tracker, and the model is resolved **per call**, because which target is healthy changes at runtime. Handlers call `await instance.ainvoke(messages, role=..., context=LLMTraceContext(...))`, which walks the chain: skip a target whose breaker is open, call it with the Langfuse trace config, report the outcome to *that target's* breaker, and move on only after a transient failure. A deterministic error propagates at once; if every target fails the **last** error is raised; if every breaker is open, `ServiceUnavailableError` (`llm_unavailable`). Chosen over LangChain `with_fallbacks` because that wrapper cannot report outcomes to a breaker or skip an open target.
 - The walk has an **overall deadline**, `LLM_CHAIN_DEADLINE_SECONDS` (default 90, must be >= `LLM_TIMEOUT_SECONDS`): each attempt runs under what is left of it, and when it runs out the walk stops with `LLMDeadlineExceeded` (`AppError`, 504, `llm_deadline_exceeded`; transient-classified). An attempt cut short by the deadline is *our* budget, not the provider's fault, so it is **not** reported to that target's breaker. Per-request `LLM_TIMEOUT_SECONDS` stays the SDK's job. Keep chains short (2-3).
-- Streaming / tool-binding callers use `instance.chat_model(role)` (raw model for the first admitted target, `ServiceUnavailableError` if none) and own failover and outcome reporting via `router.chain(role)`, `router.try_acquire(target)`, `router.record_success(target)` / `router.record_error(target, error=exc)`.
+- `instance.astream(messages, role=..., context=...)` walks the same chain for streaming: it fails over to the next target only on a transient error raised **before the first chunk**; after the first chunk an error propagates (the client already received output), and a deterministic error propagates at once. The chain deadline bounds the wait for the first chunk of each attempt. Outcomes go to the breakers as in `ainvoke`.
+- **Observation.** `LLMInstance(sink=...)` records exactly one `LlmObservation` per `ainvoke` (mode `sync`) and per `astream` (mode `stream`) to its `LlmSink`: outcome `ok|error|timeout|disconnected`, duration, ttft (streams, first chunk with text), model, finish reason, token usage; never content. `disconnected` means the generator was closed or cancelled. `astream(..., first_token_timeout=, idle_timeout=)` raises `StreamTimeoutError` on a missed deadline (outcome `timeout`; not counted against the breaker, like the chain deadline). `LlmAddon` builds the sink as `FanOutSink([LogLlmSink(), otel?])` (`TelemetryAddon` opens first), so every LLM call logs one `completion mode=... outcome=...` line, for the API and the worker alike; with `LLM_ENABLED=false` (echo handler) no such line is logged. A new LLM domain gets observation by calling the shared `resources.llm`.
+- Tool-binding callers use `instance.chat_model(role)` (raw model for the first admitted target, `ServiceUnavailableError` if none) and own failover and outcome reporting via `router.chain(role)`, `router.try_acquire(target)`, `router.record_success(target)` / `router.record_error(target, error=exc)`.
 - With no model configured, the router returns `FakeListChatModel`; this is why tests and local runs work without provider keys. Lean on it for tests.
-
-> **Open seam: the scaffold handler does not call a model.**
-> `handlers/echo.py` never touches the `LLMInstance`, and no resource builds one yet, so nothing in the template exercises failover end to end. A real handler factory (in `bootstrap/services.py`) builds the instance with `build_llm_instance(...)` once and injects it; the handler then only calls `instance.ainvoke(...)`. Outcome reporting is not the handler's job. `application.py` still flushes Langfuse through the global `get_client()` rather than the tracker's own client (`tracker.flush()`).
 
 ## Evals: `app/modules/ai/evals/`
 
@@ -86,19 +85,19 @@ Factory + bootstrap-addon pattern (`factory.py`):
 The API/view shape is in `docs/agents/architecture.md` ("Canonical Feature: completions").
 
 - `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`; `stream` yields `CompletionStreamChunk` only (the last chunk may carry `usage`, `finish_reason`, `model`).
-- `service.py`: `CompletionService(handler, *, guards, sink, policy)` wraps one handler and exposes the same two methods. Behavior lives in the handler. One instance per app lives on `ApplicationResources.completion_service`; the API and the worker share it.
-- Observation: each `complete()`/`stream()` call records one `CompletionObservation` (mode, outcome `ok|error|timeout|disconnected`, duration, ttft for streams, model, finish reason, tokens; never content) to the `CompletionSink`. Bootstrap composes `FanOutSink([LogCompletionSink(), otel?])`, so every completion logs one `completion mode=...` line.
-- Stream deadlines: `StreamPolicy(first_token_timeout, idle_timeout)` comes from `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_IDLE_TIMEOUT_SECONDS`; a missed deadline raises `StreamTimeoutError` (504, `stream_timeout`).
-- `handlers/echo.py` is the scaffold handler.
+- `service.py`: `CompletionService(handler, *, guards, sink, policy)` wraps one handler and exposes the same two methods. Behavior lives in the handler. One instance per app is registered on `ApplicationResources.services` and read with `resources.service(CompletionService)`; the API and the worker share it.
+- Observation lives in `LLMInstance`, not the service (see "Observation" above): the service records nothing and the echo handler produces no `completion ...` line.
+- Stream deadlines: `StreamPolicy(first_token_timeout, idle_timeout)` comes from `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_IDLE_TIMEOUT_SECONDS`; a missed deadline raises `StreamTimeoutError` (504, `stream_timeout`, defined in `llm/runtime.py`). `LlmCompletionHandler(llm, policy)` passes them to `astream`, which enforces them and records outcome `timeout`; the service enforces them itself only for handlers that do not set `enforces_stream_policy`.
+- `handlers/echo.py` is the scaffold handler. `handlers/llm.py` `LlmCompletionHandler(llm)` calls `LLMInstance.ainvoke` / `astream` and fills `content`, `model`, `usage` and `finish_reason`. `completions_feature` uses it when `resources.llm` is set (`LLM_ENABLED=true`) and the echo handler otherwise, in the API and the worker alike.
 - Stream contract (`app/api/sse.py` `event_stream_response` + `CompletionService.stream`): the first event is awaited before headers, so guard violations, handler startup errors and the first-token timeout are normal JSON errors (422 / 500 / 504). After the first event a failure is `event: error` with a safe code (no exception text), an idle gap past the policy is `stream_timeout`, and `: ping` comments go out every `SSE_HEARTBEAT_SECONDS`. A handler must not swallow `CancelledError`.
 
 To add a real model-backed completion:
 
-1. Implement `CompletionHandler` (e.g. `handlers/<name>.py`), taking an `LLMInstance` as a constructor dependency.
-2. Pass a handler factory `create_app(completion_handler_factory=...)`; it runs in lifespan with the opened `ApplicationResources`, so it can take an `LLMInstance`, RAG service or stores from there (`app/bootstrap/services.py`).
+1. For a plain model call set `LLM_ENABLED=true` and `CHAT_MODEL`; `LlmCompletionHandler` is used with no code change. For custom behavior implement `CompletionHandler` (e.g. `handlers/<name>.py`), taking an `LLMInstance` as a constructor dependency.
+2. Pass a handler factory: `create_app(features=(completions_feature(handler_factory=...),))`; it runs in lifespan with the opened `ApplicationResources`, so it can take `resources.llm`, the RAG service or stores from there (`app/bootstrap/services.py`).
 3. Keep the API endpoint thin and the response contract unchanged.
 
-Swap the handler, or add checks through `create_app(completion_guards_factory=...)` (input/output guards, fail-closed); leave `CompletionService` unmodified.
+Swap the handler, or add checks through `completions_feature(guards_factory=...)` (input/output guards, fail-closed); leave `CompletionService` unmodified.
 
 ## Cross-cutting requirements for every AI call
 

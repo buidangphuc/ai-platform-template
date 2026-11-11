@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
     from app.core.telemetry_otel import Telemetry
+    from app.modules.ai.llm.runtime import LLMInstance
     from app.modules.ai.rag.service import KnowledgeRetrievalService
     from app.modules.messaging.outbox.store import OutboxStore
     from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
@@ -99,6 +100,7 @@ class ApplicationResources:
     webhook_signer: WebhookSigner | None = None
     webhook_dispatcher: HttpWebhookDispatcher | None = None
     telemetry: Telemetry | None = None
+    llm: LLMInstance | None = None
     # Addons opened for this runtime (closed in reverse by the exit stack)
     addons: list[BootstrapAddon] = field(default_factory=list)
     # Readiness checks, registered by each opener as its resource comes up

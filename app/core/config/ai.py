@@ -11,6 +11,7 @@ RagBackend = Literal["memory"]
 
 class AISettingsMixin(BaseModel):
     # LLM router
+    LLM_ENABLED: bool = False
     CHAT_MODEL: str = ""
     CHAT_FALLBACK_MODELS: str = ""
     JUDGE_CHAT_MODEL: str = ""

@@ -1,6 +1,6 @@
 """Telemetry contract that needs no OpenTelemetry install.
 
-The completions edge reports each finished completion to a ``CompletionSink``.
+``LLMInstance`` reports each finished LLM call to a ``LlmSink``.
 With telemetry off it is ``NOOP_SINK``; with it on, the OTel-backed handle in
 ``app/core/telemetry_otel.py`` (the optional ``otel`` extra) is the sink.
 """
@@ -20,8 +20,8 @@ Outcome = Literal["ok", "error", "timeout", "disconnected"]
 
 
 @dataclass(frozen=True)
-class CompletionObservation:
-    """Metadata of one finished completion. Never prompt or output content."""
+class LlmObservation:
+    """Metadata of one finished LLM call. Never prompt or output content."""
 
     mode: Literal["sync", "stream"]
     outcome: Outcome
@@ -35,22 +35,22 @@ class CompletionObservation:
     total_tokens: int | None = None
 
 
-class CompletionSink(Protocol):
-    def record_completion(self, observation: CompletionObservation) -> None: ...
+class LlmSink(Protocol):
+    def record_llm(self, observation: LlmObservation) -> None: ...
 
 
 class _NoopSink:
-    def record_completion(self, observation: CompletionObservation) -> None:
+    def record_llm(self, observation: LlmObservation) -> None:
         return None
 
 
-NOOP_SINK: CompletionSink = _NoopSink()
+NOOP_SINK: LlmSink = _NoopSink()
 
 
-class LogCompletionSink:
-    """One structured log line per completion: metadata only, never content."""
+class LogLlmSink:
+    """One structured log line per LLM call: metadata only, never content."""
 
-    def record_completion(self, observation: CompletionObservation) -> None:
+    def record_llm(self, observation: LlmObservation) -> None:
         duration_ms = observation.duration_s * 1000
         ttft_ms = (
             None if observation.ttft_s is None else round(observation.ttft_s * 1000, 1)
@@ -82,12 +82,12 @@ class LogCompletionSink:
 
 
 class FanOutSink:
-    def __init__(self, sinks: Sequence[CompletionSink]) -> None:
+    def __init__(self, sinks: Sequence[LlmSink]) -> None:
         self.sinks = tuple(sinks)
 
-    def record_completion(self, observation: CompletionObservation) -> None:
+    def record_llm(self, observation: LlmObservation) -> None:
         for sink in self.sinks:
-            sink.record_completion(observation)
+            sink.record_llm(observation)
 
 
 def require_otel() -> None:
