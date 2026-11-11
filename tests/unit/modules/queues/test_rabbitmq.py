@@ -54,9 +54,14 @@ async def topology(
         await _cleanup(value)
 
 
+@pytest.fixture(params=["classic", "quorum"])
+def queue_type(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 @pytest.fixture()
 def build_settings(
-    infra_settings: Callable[..., Settings], topology: _Topology
+    infra_settings: Callable[..., Settings], topology: _Topology, queue_type: str
 ) -> Callable[..., Settings]:
     def build(**overrides: object) -> Settings:
         values: dict[str, object] = {
@@ -65,6 +70,7 @@ def build_settings(
             "QUEUE_NAME": topology.queue,
             "RABBITMQ_DEAD_LETTER_EXCHANGE": topology.exchange,
             "RABBITMQ_DEAD_LETTER_QUEUE": topology.dead_queue,
+            "RABBITMQ_QUEUE_TYPE": queue_type,
         }
         values.update(overrides)
         return infra_settings(**values)
@@ -379,3 +385,53 @@ async def test_nack_of_an_unknown_message_is_a_no_op(build_settings):
         assert await gateway.receive(wait_seconds=0.2) == []
     finally:
         await gateway.close()
+
+
+async def _declared_type(name: str) -> str:
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "exec",
+        require("rabbitmq_container"),
+        "rabbitmqctl",
+        "list_queues",
+        "-p",
+        "aipt",
+        "--no-table-headers",
+        "--quiet",
+        "name",
+        "type",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    assert process.returncode == 0, stderr.decode()
+    types = dict(line.split() for line in stdout.decode().splitlines() if line)
+    return types[name]
+
+
+async def test_queue_is_declared_with_the_configured_type(
+    build_settings, topology, queue_type
+):
+    gateway = await _open(build_settings())
+    await gateway.close()
+
+    assert await _declared_type(topology.queue) == queue_type
+
+
+async def test_receive_count_tracks_redeliveries_after_consumer_crashes(
+    build_settings, queue_type
+):
+    settings = build_settings()
+    publisher = await _open(settings)
+    await publisher.send({"poison": True})
+    await publisher.close()
+
+    counts = []
+    for _ in range(3):
+        consumer = await _open(settings)
+        [message] = await consumer.receive(wait_seconds=2.0)
+        counts.append(message.receive_count)
+        await consumer.close()
+
+    expected = {"quorum": [1, 2, 3], "classic": [1, 2, 2]}[queue_type]
+    assert counts == expected

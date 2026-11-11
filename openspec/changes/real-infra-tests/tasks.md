@@ -64,8 +64,10 @@ Owns: `tests/infra.py` (new), `tests/conftest.py`, `pyproject.toml` (markers), `
 
 - [x] 7.1 No permanently skipped test: Redis `delete_expired` (a no-op by design) moved out of the shared conformance suite; Redis asserts the native TTL instead, Postgres keeps both `delete_expired` tests with exact counts
 - [x] 7.2 Extra-not-installed `skip` guards deleted (dev and CI always install `--all-extras`)
-- [x] 7.3 Bugs found by covering the remaining lines on real infra: RabbitMQ `receive(wait_seconds=…)` returned at once on an empty queue (workers busy-looped); S3 `get`/`exists` turned every `ClientError`, `AccessDenied` included, into "missing". The dead `wait_for(0.05)` loop in RabbitMQ `receive` is gone
+- [x] 7.3 Bugs found by covering the remaining lines on real infra: RabbitMQ `receive(wait_seconds=…)` returned at once on an empty queue (no long-poll: the worker fell back to polling every `poll_interval_seconds`, adding up to one interval of latency); S3 `get`/`exists` turned every `ClientError`, `AccessDenied` included, into "missing". The dead `wait_for(0.05)` loop in RabbitMQ `receive` is gone
 - [x] 7.4 SQS ack/dead-letter without `ReceiptHandle`, RabbitMQ nack of an unknown message, S3 without `aioboto3`: tested
+
+- [x] 7.5 `RABBITMQ_QUEUE_TYPE` (`""` = vhost default, `classic`, `quorum`) declares the work queue and DLQ with that type; every RabbitMQ test runs on both types, and on quorum `receive_count` follows the broker's `x-delivery-count` across consumer crashes (classic stops at 2)
 
 ## 9. Close
 

@@ -42,6 +42,7 @@ class RabbitMQQueueGateway:
         dead_letter_enabled: bool = True,
         dead_letter_exchange: str = "",
         dead_letter_queue: str = "",
+        queue_type: str = "",
     ) -> None:
         _require_aio_pika()
         if not url:
@@ -51,6 +52,7 @@ class RabbitMQQueueGateway:
         self.dead_letter_enabled = dead_letter_enabled
         self.dead_letter_exchange = dead_letter_exchange or f"{queue_name}.dlx"
         self.dead_letter_queue = dead_letter_queue or f"{queue_name}.dead"
+        self.queue_type = queue_type
         self._inflight: dict[str, AbstractIncomingMessage] = {}
         self._connection: Any = None
         self._channel: Any = None
@@ -62,7 +64,10 @@ class RabbitMQQueueGateway:
         try:
             self._channel = await self._connection.channel()
             await self._channel.set_qos(prefetch_count=10)
-            arguments: dict[str, Any] | None = None
+            type_arguments: dict[str, Any] = (
+                {"x-queue-type": self.queue_type} if self.queue_type else {}
+            )
+            arguments = dict(type_arguments)
             if self.dead_letter_enabled:
                 dlx = await self._channel.declare_exchange(
                     self.dead_letter_exchange,
@@ -70,15 +75,17 @@ class RabbitMQQueueGateway:
                     durable=True,
                 )
                 dlq = await self._channel.declare_queue(
-                    self.dead_letter_queue, durable=True
+                    self.dead_letter_queue,
+                    durable=True,
+                    arguments=type_arguments or None,
                 )
                 await dlq.bind(dlx, routing_key=self.queue_name)
-                arguments = {
+                arguments |= {
                     "x-dead-letter-exchange": self.dead_letter_exchange,
                     "x-dead-letter-routing-key": self.queue_name,
                 }
             self._queue = await self._channel.declare_queue(
-                self.queue_name, durable=True, arguments=arguments
+                self.queue_name, durable=True, arguments=arguments or None
             )
         except BaseException:
             await self._connection.close()

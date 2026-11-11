@@ -10,6 +10,7 @@ QueueBackend = Literal["redis", "sqs", "rabbitmq"]
 TaskStoreBackend = Literal["postgres", "redis"]
 TaskDispatchBackend = Literal["queue", "outbox"]
 OutboxBackend = Literal["postgres"]
+RabbitMQQueueType = Literal["", "classic", "quorum"]
 
 
 class MessagingSettingsMixin(BaseModel):
@@ -38,6 +39,7 @@ class MessagingSettingsMixin(BaseModel):
     RABBITMQ_DEAD_LETTER_ENABLED: bool = True
     RABBITMQ_DEAD_LETTER_EXCHANGE: str = ""
     RABBITMQ_DEAD_LETTER_QUEUE: str = ""
+    RABBITMQ_QUEUE_TYPE: RabbitMQQueueType = ""
     # Redis Streams redelivery. CONSUMER_NAME empty -> $HOSTNAME -> random.
     # MIN_IDLE must exceed the slowest handler, else live work is reclaimed.
     QUEUE_REDIS_CONSUMER_NAME: str = ""

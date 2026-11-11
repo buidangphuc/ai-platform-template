@@ -49,6 +49,7 @@ async def open_queue_gateway(
                 dead_letter_enabled=settings.RABBITMQ_DEAD_LETTER_ENABLED,
                 dead_letter_exchange=settings.RABBITMQ_DEAD_LETTER_EXCHANGE,
                 dead_letter_queue=settings.RABBITMQ_DEAD_LETTER_QUEUE,
+                queue_type=settings.RABBITMQ_QUEUE_TYPE,
             ).open()
 
 

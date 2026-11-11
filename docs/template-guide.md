@@ -105,6 +105,8 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |
 
+RabbitMQ `receive_count` drives dead-lettering after repeated failures. On a classic queue a message that keeps crashing the worker is only flagged "redelivered", so its count stops at 2. Set `RABBITMQ_QUEUE_TYPE=quorum` (or create the queue in a vhost whose default type is quorum) to get an exact count from the broker. Empty keeps the vhost default; changing the type of an existing queue requires deleting it first.
+
 Dev installs everything: `uv sync --dev --all-extras` (what `make test` uses).
 A missing extra fails with an actionable message at the feature's entry point
 (see `app/modules/ai/_deps.py`), never at import/boot time.
