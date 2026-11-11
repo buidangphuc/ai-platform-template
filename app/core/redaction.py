@@ -1,6 +1,6 @@
 import re
 from collections.abc import Mapping
-from typing import Literal, cast
+from typing import Literal
 
 TraceContentMode = Literal["off", "redacted", "full"]
 
@@ -51,12 +51,6 @@ def _mask_card(match: re.Match[str]) -> str:
 class RedactionPolicy:
     def __init__(self, *, mode: TraceContentMode = "redacted") -> None:
         self.mode = mode
-
-    @classmethod
-    def from_trace_content(cls, trace_content: str) -> "RedactionPolicy":
-        if trace_content in {"off", "redacted", "full"}:
-            return cls(mode=cast(TraceContentMode, trace_content))
-        return cls(mode="redacted")
 
     def redact_text(self, value: str) -> str:
         if self.mode == "full":

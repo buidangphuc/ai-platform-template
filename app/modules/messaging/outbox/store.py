@@ -37,13 +37,6 @@ class OutboxStore(Protocol):
         available_at: datetime | None = None,
     ) -> OutboxRecord: ...
 
-    async def list_pending(
-        self,
-        *,
-        limit: int = 100,
-        now: datetime | None = None,
-    ) -> Sequence[OutboxRecord]: ...
-
     async def claim_pending(
         self,
         *,

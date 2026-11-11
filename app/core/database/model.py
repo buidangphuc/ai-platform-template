@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from typing import Annotated
 
 from sqlalchemy import DateTime
 from sqlalchemy.ext.asyncio import AsyncAttrs
@@ -12,17 +11,6 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-id_key = Annotated[
-    int,
-    mapped_column(
-        primary_key=True,
-        index=True,
-        autoincrement=True,
-        sort_order=-999,
-    ),
-]
 
 
 class CreatedAtMixin:

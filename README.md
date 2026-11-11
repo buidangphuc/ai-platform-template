@@ -36,11 +36,10 @@ app/
     platform/           identity/, audit/, idempotency/, rate_limit/, cache/,
                         objects/, mongo/, quota/, model_server/
 alembic/                Migration environment
-docs/                   usage.md, template-guide.md, adr/, migration/, agents/
+docs/                   usage.md, template-guide.md, agents/
 evals/                  Eval cases for the eval gate
 ops/
   compose/              Docker Compose stacks: local.yaml, langfuse.yaml, langfuse.env.example
-  mlops/                MLflow local env example
   observability/        OpenTelemetry collector debug config
 openspec/               Specs and change proposals
 scripts/                Local helper scripts (including Langfuse smoke runners)
@@ -64,6 +63,5 @@ The API starts on `http://localhost:8000`. For Docker, Langfuse, configuration a
 - [docs/usage.md](docs/usage.md): requirements, quickstart, Docker, commands, env defaults, bearer auth.
 - [docs/template-guide.md](docs/template-guide.md): fork checklist, enabling capabilities, adding a business domain.
 - [docs/agents/project.md](docs/agents/project.md): feedback loops, checks, and an index of the architecture and AI-engineering docs.
-- [docs/adr/](docs/adr/): architecture decision records.
 - [openspec/](openspec/): specs and change proposals.
 - [ops/compose/local.yaml](ops/compose/local.yaml) and [ops/compose/langfuse.yaml](ops/compose/langfuse.yaml): local Docker stacks.

@@ -111,7 +111,7 @@ Swap the handler, or add checks through `create_app(completion_guards_factory=..
 - **Evals:** at least one eval case covering the new behavior.
 
 > **Open seam: traces are NOT auto-redacted.**
-> The Langfuse callback captures prompt/output content as-is; only RAG redacts by construction (`rag/service.py`). `RedactionPolicy.from_trace_content` is the intended hook, but it has zero callers and there is no `TRACE_CONTENT` setting; that flag was deliberately trimmed with the other advanced settings (`tests/unit/core/test_config.py` pins its absence). A product that traces sensitive data adds its own setting and applies the policy at the call site. The policy is regex-based: a floor, not a PII guarantee.
+> The Langfuse callback captures prompt/output content as-is; only RAG redacts by construction (`rag/service.py`). There is no `TRACE_CONTENT` setting; that flag was deliberately trimmed with the other advanced settings (`tests/unit/core/test_config.py` pins its absence). A product that traces sensitive data adds its own setting and applies the policy at the call site. The policy is regex-based: a floor, not a PII guarantee.
 
 ## Ship checklist for an AI feature
 

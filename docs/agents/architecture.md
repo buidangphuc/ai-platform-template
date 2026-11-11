@@ -27,7 +27,6 @@ Prefer existing repo patterns over new abstractions.
 
 - Owns route paths, request parsing, query/path/body parameters, response models/envelopes, auth dependencies.
 - Calls one business service method per endpoint when possible.
-- Preserves legacy contracts during migration: path, method, query names, body shape, envelope, status behavior.
 - Views read services from `get_app_resources(request.app)` (the deliberate `app.state` seam). Feature-gated groups use one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
 - Endpoint files never build stores, DB clients, HTTP clients, quota adapters, LLMs or generators, and never hold business workflow decisions.
 - No generic `app/api/deps.py` that collects unrelated wiring.
@@ -38,7 +37,7 @@ Prefer existing repo patterns over new abstractions.
 - Use it for app-lifetime dependencies: shared HTTP clients, LLM instances, Mongo gateway, quota service, task service, cache, object storage, webhook dispatcher.
 - Anchors:
   - `resources.py`: `ApplicationResources`, open/close lifecycle.
-  - `addons.py`: `BootstrapAddon` protocol and default addon order.
+  - `addons/base.py`: `BootstrapAddon` protocol and default addon order.
   - `state.py`: typed helpers such as `get_app_resources(...)`, `get_task_services(...)`.
   - `services.py`: `compose_business_services`, handler factories.
   - `addons/<name>.py`: one addon per capability. Contract (`addons/base.py`): `open(resources, settings, stack)` builds the capability with factory functions that take required dependencies, stores it on `resources`, and pushes its close onto `stack`. No `close` method.
@@ -85,19 +84,6 @@ API endpoint
 ```
 
 Leave bootstrap alone when the service already has its dependencies. Touch bootstrap only when the endpoint introduces a new app-level service or a new lifecycle-owned runtime dependency.
-
-## Legacy/DGL migration
-
-Keep legacy transport contracts stable; improve internals only:
-
-```text
-legacy endpoint path stays the same
-  -> API calls service
-  -> service owns business flow
-  -> platform capabilities provide shared infrastructure
-```
-
-Keep legacy endpoints off the template `/api/v1/completions` pattern unless a new endpoint is requested. The completions surface is a scaffold pattern, not a replacement for migrated legacy contracts.
 
 ## Canonical Feature: completions
 

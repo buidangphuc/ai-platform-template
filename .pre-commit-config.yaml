@@ -31,14 +31,6 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
-        exclude: ^(project/artifacts/|project/data/|data/|mlruns/|minio/)
-
-  # Shell
-  - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
-    hooks:
-      - id: shellcheck
-        files: ^(scripts/|.*\.sh)$
 
   # Verify .env.example matches Settings fields
   - repo: local
@@ -48,7 +40,7 @@ repos:
         entry: uv run python -m scripts.check_env_example
         language: system
         pass_filenames: false
-        files: ^(\.env\.example|app/core/config\.py)$
+        files: ^(\.env\.example|app/core/config/.*\.py)$
 
   # Commit message (Conventional Commits)
   - repo: https://github.com/commitizen-tools/commitizen

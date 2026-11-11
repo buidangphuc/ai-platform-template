@@ -57,7 +57,7 @@ app/core/config/<domain>.py
 ```
 
 If the domain needs a new lifecycle resource, add an addon in
-`app/bootstrap/addons.py:default_resource_addons()`. Include your router in
+`app/bootstrap/addons/base.py:default_resource_addons()`. Include your router in
 `app/api/router.py` gated on your flag. The `completions` surface is the living
 reference for the thin-transport shape; its handler comes from
 `create_app(completion_handler_factory=...)`.
@@ -76,7 +76,7 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
 | Extra | Brings | Needed for |
 |---|---|---|
-| `ai` | langchain, langchain-openai, langgraph, langfuse, llama-index-core, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
+| `ai` | langchain, langchain-openai, langfuse, llama-index-core, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
 | `aws` | aioboto3 | S3 object storage, SQS queue |
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |

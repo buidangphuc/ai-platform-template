@@ -34,20 +34,6 @@ class PostgresOutboxStore:
             await session.flush()
             return _to_record(event)
 
-    async def list_pending(
-        self,
-        *,
-        limit: int = 100,
-        now: datetime | None = None,
-    ) -> Sequence[OutboxRecord]:
-        if limit <= 0:
-            raise ValueError("limit must be positive")
-        now = now or datetime.now(UTC)
-        stmt = _pending_stmt(limit=limit, now=now)
-        async with self.sessionmaker() as session:
-            rows = (await session.scalars(stmt)).all()
-            return [_to_record(row) for row in rows]
-
     async def claim_pending(
         self,
         *,
