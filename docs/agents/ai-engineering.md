@@ -41,6 +41,20 @@ build_llm_instance(settings, instance_id=, service_name=, tags=)
 
 - Business code takes an `LLMInstance` (or a handler built from one) as a **constructor dependency**.
 - App-lifetime LLM instances are composed in `app/bootstrap` and registered in `ApplicationResources`, like other platform resources. `LlmAddon` (`app/bootstrap/addons/llm.py`) builds `resources.llm` with `build_llm_instance` when `LLM_ENABLED=true` (default false: `resources.llm` is `None`). With no `CHAT_MODEL` the router's fake model answers, so no provider key is needed.
+- Tests: `build_llm_instance(..., model_builder=lambda target: model)` injects the model. It applies only when `CHAT_MODEL` is non-empty; otherwise the router returns the built-in fake that always answers "fake response". The router builds a model per target, so keep captured state on the builder's closure:
+
+```python
+class Capturing(FakeListChatModel):
+    prompts: list = Field(default_factory=list)
+
+    def _call(self, messages, *args, **kwargs):
+        self.prompts.append(messages)
+        return super()._call(messages, *args, **kwargs)
+
+model = Capturing(responses=["ok"])
+llm = build_llm_instance(settings.model_copy(update={"CHAT_MODEL": "m"}), instance_id="t", service_name="t", model_builder=lambda target: model)
+```
+
 - `LLMInstance.trace_config(context)` returns the config passed into the LangChain call so Langfuse captures the trace.
 
 ### Model selection and fallback: `ModelRouter` (`llm/router.py`)

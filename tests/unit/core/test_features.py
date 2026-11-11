@@ -76,8 +76,10 @@ def _paths(app) -> set[str]:
 
 
 def test_default_registry_holds_completions_and_conversations():
-    assert [feature.name for feature in FEATURES] == ["completions", "conversations"]
-    assert FEATURES[0].service is CompletionService
+    names = [feature.name for feature in FEATURES]
+    assert "completions" in names
+    assert "conversations" in names
+    assert FEATURES[names.index("completions")].service is CompletionService
 
 
 async def test_second_feature_route_service_and_task_need_no_shared_edits(

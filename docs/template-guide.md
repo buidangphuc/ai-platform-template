@@ -11,8 +11,10 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 1. Clone/fork, then `cp .env.example .env` and set `AUTH_API_KEYS` (hash tokens with `python -m scripts.hash_api_key --generate`).
 2. `make dev` → `curl localhost:8000/healthz` — you have a running core.
 3. Rename the project in `pyproject.toml` + `PROJECT_NAME` default.
-4. Delete what you won't use: `app/modules/ai/` (and the `[ai]` extra) if the
-   product has no LLM features; `alembic/` if no Postgres.
+4. Delete what you won't use: `app/modules/ai/` (and the `[ai]` extra) only if
+   the product has no LLM features, which also means removing the
+   `conversations` sample and any domain using `LLMInstance`; `alembic/` if no
+   Postgres.
 
 ## 1. Turn on capabilities as you need them
 
@@ -45,7 +47,7 @@ app/modules/business/<domain>/
   types.py          # enums/constants
   service.py        # <Domain>Service — constructor deps only, no Request/app.state
   stores/           # own the table/collection details
-  integrations/     # external HTTP APIs — __init__(self, client, settings)
+  integrations/     # external HTTP APIs — __init__(self, client: UpstreamClient, ...plain options)
 app/api/v1/<domain>/
   router.py         # mounts leaf routers, attaches Depends(require_principal)
   <leaf>.py         # thin endpoints: get_app_resources(request.app).service(<Domain>Service) -> one call
@@ -70,6 +72,16 @@ handler comes from `completions_feature(handler_factory=...)`.
 > needs the complete output — enforcing it would break the stream path.
 > A product that needs guaranteed JSON applies `with_structured_output` on
 > its own sync endpoint only.
+
+### Add a domain: checklist
+
+1. Create `app/modules/business/<domain>/` (`schemas.py`, `service.py`, plus stores/integrations as needed) and `app/api/v1/<domain>/router.py`.
+2. Write `<domain>_feature()` in `app/bootstrap/features/<domain>.py` returning a `Feature`. A task handler lives in this file: `async def handler(resources, task) -> dict`, parsing `task.payload` with the request schema and raising on failure so the worker marks the task failed. Register it in `tasks={TYPE: handler}`.
+3. Settings: new file `app/core/config/<domain>.py` with `<Domain>SettingsMixin(BaseModel)`; import it and add it to the `Settings` bases in `app/core/config/__init__.py` (two edits).
+4. Add the new keys to `.env.example` (`scripts/check_env_example.py` fails on drift).
+5. Add one entry to `FEATURES` in `app/bootstrap/features/registry.py`.
+6. Auth: declare `dependencies=[Depends(require_principal)]` once on the router; add `principal: Principal = Depends(require_principal)` to a route only when it needs the id. A missing token answers 401.
+7. Tests: see "Testing a feature" in [agents/architecture.md](agents/architecture.md).
 
 Stores take an `async_sessionmaker` (or `MongoGateway`) through their constructor,
 built in `Feature.build` from `resources.sessionmaker` / `resources.mongo`; there is

@@ -184,7 +184,8 @@ Business services should receive explicit constructor dependencies and must not
 read FastAPI `Request`, `app.state`, or a global service locator. When a product
 service needs lifespan-owned runtime dependencies, declare a `Feature` in
 `app/bootstrap/features/<domain>.py` and add one entry to `FEATURES` in
-`registry.py`. Its `build(resources, settings)` runs once per app, after the
+`registry.py` (step-by-step: "Add a domain: checklist" in
+[template-guide.md](template-guide.md)). Its `build(resources, settings)` runs once per app, after the
 platform resources are open, and the instance lives on
 `ApplicationResources.services`. Views read it with
 `get_app_resources(request.app).service(<Domain>Service)`; no per-surface getter

@@ -80,7 +80,15 @@ service consumes interface/capability
 
 ## Calling external HTTP APIs
 
-Declare an `Upstream(name, base_url, timeout, retries, headers, follow_redirects)` in the feature's `upstreams` (`app/modules/platform/http/upstream.py`) and call it with `resources.http(name)`, an `UpstreamClient` (`get`, `post`, `request`). Bootstrap opens one `httpx.AsyncClient` per upstream of every enabled feature and closes it on shutdown; each call applies the timeout, retries transient failures up to `retries`, trips a per-upstream circuit breaker (`ServiceUnavailableError`, code `upstream_unavailable`), sends `X-Request-ID` and logs one line without bodies or headers. Two enabled features declaring the same upstream name fail at startup; an unknown name raises `upstream_not_configured`. Do not build an `httpx.AsyncClient` in a feature or service.
+Declare an `Upstream(name, base_url, timeout, retries, headers, follow_redirects)` in the feature's `upstreams` (`app/modules/platform/http/upstream.py`) and call it with `resources.http(name)`, an `UpstreamClient` (`get`, `post`, `request`). Bootstrap opens one `httpx.AsyncClient` per upstream of every enabled feature and closes it on shutdown; each call applies the timeout, retries transient failures up to `retries`, trips a per-upstream circuit breaker (`ServiceUnavailableError`, code `upstream_unavailable`), sends `X-Request-ID` and logs one line without bodies or headers. Two enabled features declaring the same upstream name fail at startup; an unknown name raises `upstream_not_configured`. `retries` applies to every method including POST, so enable it only for idempotent calls. Do not build an `httpx.AsyncClient` in a feature or service.
+
+In integration or worker tests, mock the upstream with `mock_upstreams` from `tests/factories.py` (named upstreams use an `httpx.MockTransport`; other names keep the real transport):
+
+```python
+def test_lookup(monkeypatch):
+    mock_upstreams(monkeypatch, {"geo": lambda request: httpx.Response(200, json={"city": "x"})})
+    # then create_app(...) / worker_context(...) as usual; resources.http("geo") hits the handler
+```
 
 ## Adding an endpoint
 
@@ -97,7 +105,7 @@ Leave bootstrap alone when the service already has its dependencies. Touch boots
 
 `app/api/v1/completions/` and `app/bootstrap/features/completions.py` are the reference. For a new feature `<domain>`, copy their shape; reuse the service rules above (`<Domain>Service`, one `Feature` entry in `FEATURES`, `get_app_resources`). Products pass their handler to `completions_feature(handler_factory=..., guards_factory=...)`.
 
-- API package `app/api/v1/<domain>/`: an empty `__init__.py` and `router.py`, which declares `APIRouter(prefix=..., tags=..., dependencies=[Depends(require_principal)])` once. Every router file declares its own prefix/tags (no wrapper router in `app/api/router.py`). A feature behind a `*_ENABLED` flag adds a second file (e.g. `tasks.py`, `APIRouter(prefix="/<domain>", tags=["<domain>"])`) that `app/api/router.py` imports and mounts only when enabled; its routes take `principal: Principal = Depends(require_principal)` as a parameter when they need the id.
+- API package `app/api/v1/<domain>/`: an empty `__init__.py` and `router.py`, which declares `APIRouter(prefix=..., tags=..., dependencies=[Depends(require_principal)])` once. Every router file declares its own prefix/tags (no wrapper router in `app/api/router.py`). A feature behind a `*_ENABLED` flag adds a second file (e.g. `tasks.py`, `APIRouter(prefix="/<domain>", tags=["<domain>"])`) that the feature lists in `task_routers`; it is mounted only when `TASKS_ENABLED`, and its routes take `principal: Principal = Depends(require_principal)` as a parameter when they need the id.
 - View: `get_app_resources(request.app).service(<Domain>Service)`, one service call, `<Response>.model_validate(result, from_attributes=True)`. Response ids default in the response schema (`Field(default_factory=...)`). A view does not time, log, record telemetry, apply deadlines or mint ids.
 - Streaming: the view passes an async generator of `ServerSentEvent` to `event_stream_response(request, events)` from `app/api/sse.py`, which owns headers, heartbeat, first-event priming (errors before it stay JSON errors), `event: error` frames and shielded close. The generator closes the service stream with `contextlib.aclosing`. A feature owns no SSE engine, heartbeat or deadline code. Frames: each non-empty delta yields `ServerSentEvent({"type": "content.delta", "delta": ..., "metadata": ...})`; the stream ends with `ServerSentEvent({"type": "done", **summary.model_dump(exclude_none=True)})`.
 - Timing, outcome labels and telemetry live in `LLMInstance` (one `LlmObservation` per model call, reported to an `LlmSink` composed by `LlmAddon`); the business service keeps guards and `StreamPolicy` deadlines. `completions_feature(...).build` in `app/bootstrap/features/completions.py` builds the service once; the API and the worker share it, so both are observed.
@@ -121,12 +129,13 @@ async def stream(payload: CompletionRequest, request: Request) -> StreamingRespo
 
 ## Verification
 
-Run the narrowest useful checks, then widen:
+The canonical check list is `## Checks` in `docs/agents/project.md`; CI mirrors it. Run the narrowest useful check first (focused pytest for the touched module/API), then widen to the full list after bootstrap, platform, or public API changes.
 
-- `uv run ruff check app tests`
-- `uv run pyright`
-- focused pytest for the touched module/API
-- full `uv run pytest` after bootstrap, platform, or public API changes
+### Testing a feature
+
+- Integration: `create_app(settings=build_test_settings(...))` with the feature's flags flipped (default registry), or `create_app(features=(<domain>_feature(...),))` for a custom handler. `init_resources` defaults to True; the lifespan opens addons either way.
+- Worker: settings `QUEUE_ENABLED=True, TASKS_ENABLED=True, QUEUE_BACKEND="memory", TASK_STORE_BACKEND="memory"`, then `worker_context(settings, features=...)`: `ctx.tasks.service.submit(...)`, `[message] = await ctx.tasks.queue.receive(max_messages=1)`, `await ctx.worker.handler(message)`. `tests/unit/core/test_features.py` is the working example.
+- Upstreams: `mock_upstreams` (see "Calling external HTTP APIs"). LLM: `model_builder` (see `docs/agents/ai-engineering.md`).
 
 Docker smoke checks: use a minimal local runtime with external AI dependencies disabled unless real provider calls are requested.
 
