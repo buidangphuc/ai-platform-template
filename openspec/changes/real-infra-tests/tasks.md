@@ -28,8 +28,13 @@ Owns: `tests/infra.py` (new), `tests/conftest.py`, `pyproject.toml` (markers), `
 ## 4. Remove `Fake*` port doubles (wave 2)
 
 - [x] 4.1 Lifespan tests open real resources and assert closure from the server side (`pg_stat_activity`, Redis client id, Mongo `InvalidOperation`)
-- [x] 4.2 Failure paths via real infra: closed port, wrong credentials, foreign bucket, missing queue
-- [x] 4.3 Dropped because real infra cannot produce them: SQS `AccessDenied` at open and bad-credential errors (ElasticMQ has no auth), S3 `ExpiredToken` (MinIO), "session `__aexit__` called" spies, SQL-text assertions (replaced by behaviour tests), `InMemoryRateLimiter` clock-injected boundary tests
+- [x] 4.2 Failure paths via real infra: closed port, wrong credentials, foreign bucket, missing queue. Not done: timeouts via `docker pause` (pausing shared Redis/Postgres would stall other apps on localinfra); HTTP timeouts are covered by `local_http_server` delays
+- [x] 4.3 Dropped because real infra cannot produce them, and what covers the intent now:
+  - SQS `AccessDenied` at open (ElasticMQ has no auth): `is_permission_denied` is unit-tested; the 6-line "log and continue" branch in `SqsQueueGateway.open` stays uncovered
+  - SQS `InvalidClientTokenId`/`SignatureDoesNotMatch`, S3 `ExpiredToken`: `test_aws_errors.py` asserts they are not treated as permission denials, so `open()` fails fast; S3 wrong key/secret is tested on real MinIO
+  - "session `__aexit__` called" spies: no server-side signal for S3/SQS clients
+  - SQL-text assertions: replaced by behaviour tests
+  - `InMemoryRateLimiter` clock-injected boundary tests: the class is gone
 
 ## 5. Real HTTP server instead of `MockTransport` (wave 2)
 
@@ -38,7 +43,7 @@ Owns: `tests/infra.py` (new), `tests/conftest.py`, `pyproject.toml` (markers), `
 
 ## 5b. RabbitMQ real tests (wave 2)
 
-- [x] 5b.1 13 tests on a real broker: publish/consume/ack, batching, dead letter on/off, requeue counts, redelivery after close, wrong password, closed port, idempotent close, re-open, argument mismatch. Not done: reconnect after broker restart (needs broker control)
+- [x] 5b.1 13 tests on a real broker: publish/consume/ack, batching, dead letter on/off, requeue counts, redelivery after close, wrong password, closed port, idempotent close, re-open, argument mismatch, and reconnect after the broker drops every `aipt` connection (`rabbitmqctl close_all_user_connections` via `TEST_RABBITMQ_CONTAINER`; a mutation to non-robust `aio_pika.connect` turns it red). A real `docker restart` was checked once by hand: recovered in 5 s, no message lost
 - [x] 5b.2 Adapter bugs fixed: `send()` returns the message id the receiver sees; `close()` before `open()` is a no-op. (The file was never omitted from coverage; the `pyproject.toml` entry is a pyright exclude and stays.)
 
 ## 6. Remove in-memory backends from app (wave 3)

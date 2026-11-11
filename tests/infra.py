@@ -41,6 +41,7 @@ ENGINE_VARS = {
     "s3": "TEST_S3_ENDPOINT_URL",
     "sqs": "TEST_SQS_ENDPOINT_URL",
     "rabbitmq": "TEST_RABBITMQ_URL",
+    "rabbitmq_container": "TEST_RABBITMQ_CONTAINER",
 }
 
 INFRA_FIXTURES = frozenset(

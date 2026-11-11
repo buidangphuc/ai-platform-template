@@ -15,6 +15,7 @@ from yarl import URL
 from app.core.config import Settings
 from app.modules.messaging.queue.adapters.rabbitmq import RabbitMQQueueGateway
 from app.modules.messaging.queue.factory import open_queue_gateway
+from tests.infra import require
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,47 @@ async def test_publish_then_consume_returns_the_message_and_ack_removes_it(
 
         assert await gateway.receive(wait_seconds=0.3) == []
         assert await _wait_depth(topology.url, topology.queue, 0) == 0
+    finally:
+        await gateway.close()
+
+
+async def _drop_broker_connections(container: str) -> None:
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "exec",
+        container,
+        "rabbitmqctl",
+        "close_all_user_connections",
+        "aipt",
+        "test: broker dropped the connection",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    assert process.returncode == 0, stderr.decode()
+
+
+async def test_gateway_reconnects_after_the_broker_drops_its_connection(
+    build_settings,
+):
+    container = require("rabbitmq_container")
+    gateway = await _open(build_settings())
+    try:
+        await gateway.send({"n": 1})
+        await _drop_broker_connections(container)
+
+        received: list = []
+        for _ in range(30):
+            try:
+                await gateway.send({"n": 2})
+                received = await gateway.receive(max_messages=10, wait_seconds=2.0)
+                break
+            except Exception:
+                await asyncio.sleep(0.5)
+
+        assert [m.body for m in received] == [{"n": 1}, {"n": 2}]
+        for message in received:
+            await gateway.ack(message)
     finally:
         await gateway.close()
 
