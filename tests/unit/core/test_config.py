@@ -354,8 +354,23 @@ def test_llm_chain_deadline_must_cover_one_call_timeout():
         "CACHE_BACKEND",
         "OBJECT_BACKEND",
         "QUOTA_BACKEND",
+        "RAG_BACKEND",
     ],
 )
 def test_memory_backend_is_rejected(backend_setting: str):
     with pytest.raises(ValidationError, match=backend_setting):
         build_test_settings(**{backend_setting: "memory"})
+
+
+def test_rag_requires_database():
+    with pytest.raises(ValidationError, match="RAG_ENABLED requires DATABASE_ENABLED"):
+        build_test_settings(RAG_ENABLED=True, DATABASE_ENABLED=False)
+
+    settings = build_test_settings(RAG_ENABLED=True, DATABASE_ENABLED=True)
+    assert settings.RAG_BACKEND == "pgvector"
+    assert settings.RAG_PGVECTOR_TABLE == "rag_chunks"
+
+
+def test_rag_table_name_must_be_a_plain_identifier():
+    with pytest.raises(ValidationError, match="RAG_PGVECTOR_TABLE"):
+        build_test_settings(RAG_PGVECTOR_TABLE="rag; DROP TABLE users")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources
@@ -21,5 +22,6 @@ class RagAddon:
         settings: Settings,
         stack: AsyncExitStack,
     ) -> None:
-        # The retrieval service holds no connection; nothing to register.
-        resources.rag_service = build_rag_service(settings)
+        service = await asyncio.to_thread(build_rag_service, settings)
+        stack.push_async_callback(service.aclose)
+        resources.rag_service = service

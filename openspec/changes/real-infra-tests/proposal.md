@@ -1,6 +1,6 @@
 ## Status
 
-Plan only. No code changes until the open decisions below are closed.
+Implemented on branch `feat/real-infra-tests`.
 
 ## Why
 
@@ -27,7 +27,7 @@ Measured 2026-11-11: dropping every test file that needs infra leaves 351 tests 
 
 **Decided (D1, 2026-11-11): A′.** B costs 1-2 min per run (mostly the ~1 GB Mongo image) and connection failures already surface at startup (`check_postgres_connection`, `check_redis_connection` in `app/bootstrap/resources.py`, `/readyz`). A′:
 
-- CI runs only tests without `@pytest.mark.infra`, with its own coverage gate (set to the measured value after phase 3-6, rounded down; ~55 % estimated).
+- CI runs only tests without the `infra` marker, with its own coverage gate: 74 % (measured 74.57 % after all phases).
 - Infra tests run on the developer machine against localinfra (already running, no startup cost) with `TEST_INFRA_REQUIRED=1` and the full 80 % gate, through one documented command used by `pre-commit-ci`.
 - Accepted risk: a store, migration or queue bug reaches `main` if the committer skipped the local run.
 - Also: `on: push` limited to `main` so a PR push no longer runs the workflow twice.
@@ -39,7 +39,7 @@ Measured 2026-11-11: dropping every test file that needs infra leaves 351 tests 
 3. **Delete infra emulators:** `fakeredis`, `aiosqlite` dev deps, `tests/plugins/real_redis.py`, `tests/mongo_fake.py`; every caller moves to the real fixture.
 4. **Delete `Fake*` doubles of our ports:** tests go through the real adapter. Failure paths use real infra in a failing state: closed port, wrong password, missing bucket or queue, container paused (`docker pause`) for timeouts. Failures that cannot be produced this way lose their test and are listed in `tasks.md` 4.x.
 5. **Delete `httpx.MockTransport`:** a real local HTTP server fixture (`uvicorn` on an ephemeral port, scripted responses: status, delay, drop) for `Upstream`, `ModelServerClient`, webhooks; `mock_upstreams` becomes `local_upstreams`.
-6. **Delete in-memory backends from app code:** queue, task store, rate limit, cache, object, quota, rag `memory` options go away; defaults become the real backend. **BREAKING:** the app no longer boots with core dependencies only; `.env.example` points at localinfra; the "core-deps-only `import main`" check changes to "import only, no boot".
+6. **Delete in-memory backends from app code:** queue, task store, rate limit, cache, object, quota and RAG `memory` options go away; defaults become the real backend (RAG: Postgres pgvector). **BREAKING:** `*_BACKEND=memory` is rejected and enabling a capability requires its real service. Every `*_ENABLED` flag still defaults to false, so the app boots without infra until something is enabled.
 7. **Langfuse is out of scope (D3):** the long-term direction is one shared LLM observability layer outside business code; this change does not touch it. Langfuse is treated like the LLM in tests: its fakes stay.
 8. **RabbitMQ tested for real (D4):** the adapter loses its coverage omit in `pyproject.toml` and gets real-broker tests (publish, consume, ack, dead letter).
 9. **localinfra (shared repo, separate PR there):** add profiles `postgres` (`postgres:16-alpine`, already on disk), `elasticmq` (`softwaremill/elasticmq-native`, already on disk), `rabbitmq` (no image on disk: pull exactly one, `rabbitmq:4-alpine`); register app `aipt` in `apps.yaml` with engines `[postgres, redis, mongo, minio, rabbitmq]`.

@@ -14,6 +14,8 @@ from tests.infra import (
     pytest_collection_modifyitems as pytest_collection_modifyitems,
     rabbitmq_queue_name as rabbitmq_queue_name,
     rabbitmq_url as rabbitmq_url,
+    rag_service as rag_service,
+    rag_settings as rag_settings,
     redis_client as redis_client,
     redis_prefix as redis_prefix,
     redis_queue as redis_queue,

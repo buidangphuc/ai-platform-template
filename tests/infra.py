@@ -23,6 +23,8 @@ from sqlalchemy.pool import NullPool
 from alembic import command
 from alembic.config import Config
 from app.core.config import Settings
+from app.modules.ai.rag.factory import build_rag_service
+from app.modules.ai.rag.service import KnowledgeRetrievalService
 from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
 from app.modules.messaging.tasks.factory import build_postgres_task_store
 from app.modules.messaging.tasks.store import TaskStore
@@ -43,6 +45,8 @@ ENGINE_VARS = {
 
 INFRA_FIXTURES = frozenset(
     {
+        "rag_settings",
+        "rag_service",
         "pg_url",
         "pg_engine",
         "pg_sessionmaker",
@@ -290,6 +294,28 @@ def infra_settings(request: pytest.FixtureRequest) -> Callable[..., Settings]:
         return settings_from_env(**values)
 
     return build
+
+
+@pytest.fixture()
+def rag_settings(pg_url: str, infra_settings: Callable[..., Settings]) -> Settings:
+    return infra_settings(
+        RAG_ENABLED=True,
+        DATABASE_ENABLED=True,
+        RAG_PGVECTOR_TABLE=f"rag_t_{uuid.uuid4().hex[:8]}",
+        RAG_CHUNK_SIZE=64,
+        RAG_CHUNK_OVERLAP=8,
+    )
+
+
+@pytest.fixture()
+async def rag_service(
+    rag_settings: Settings,
+) -> AsyncIterator[KnowledgeRetrievalService]:
+    service = build_rag_service(rag_settings)
+    try:
+        yield service
+    finally:
+        await service.aclose()
 
 
 @pytest.fixture()

@@ -100,7 +100,7 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
 | Extra | Brings | Needed for |
 |---|---|---|
-| `ai` | langchain, langchain-openai, langfuse, llama-index-core, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
+| `ai` | langchain, langchain-openai, langfuse, llama-index-core, llama-index-vector-stores-postgres, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
 | `aws` | aioboto3 | S3 object storage, SQS queue |
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |
@@ -163,10 +163,12 @@ LangChain client via `base_url`), or a managed endpoint. Add it as a compose
 service — profile-gate it if it needs a GPU — and select the backend with a
 settings flag so a stub/fallback path keeps working without it.
 
-RAG storage scales the same way: `build_storage_context`/`build_embed_model`
-raise at the extension points — plug in LlamaIndex's ecosystem
-(`llama-index-vector-stores-qdrant`, `-postgres`, embedding providers)
-without touching the service.
+RAG stores vectors in Postgres (`RAG_BACKEND=pgvector`, table
+`data_<RAG_PGVECTOR_TABLE>`, created at startup by the vector store; the app
+role cannot `CREATE EXTENSION`, so the database must already have `vector`).
+`build_vector_store`/`build_embed_model` are the extension points — plug in
+another LlamaIndex vector store or an embedding provider without touching the
+service.
 
 ## 6. Test layout
 
