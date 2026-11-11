@@ -4,6 +4,20 @@ from httpx import AsyncClient
 from app.bootstrap.application import create_app
 from app.core.config import Settings
 from tests.factories import api_client_for, build_test_settings
+from tests.infra import (
+    infra_settings as infra_settings,
+    mongo_gateway as mongo_gateway,
+    pg_engine as pg_engine,
+    pg_sessionmaker as pg_sessionmaker,
+    pg_url as pg_url,
+    pytest_collection_modifyitems as pytest_collection_modifyitems,
+    rabbitmq_queue_name as rabbitmq_queue_name,
+    rabbitmq_url as rabbitmq_url,
+    redis_client as redis_client,
+    redis_prefix as redis_prefix,
+    s3_target as s3_target,
+    sqs_queue as sqs_queue,
+)
 
 
 @pytest.fixture()

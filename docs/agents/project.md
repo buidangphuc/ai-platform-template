@@ -4,12 +4,10 @@
 <!-- read by: diagnosing-bugs, tdd -->
 - Unit/integration: `uv run --all-extras pytest -q`
 - Eval gate: `uv run --env-file .env.example --all-extras python -m scripts.run_eval --min-score 0.8`
-- Real-infra tests are env-gated and run locally only (CI dropped them). Fakes hid real bugs, so adapter/lifecycle changes also run these:
-  - `TASKS_TEST_POSTGRES_URL`, `IDEMPOTENCY_TEST_POSTGRES_URL`, `QUOTA_TEST_POSTGRES_URL` (postgres+asyncpg; alembic also needs `REDIS_HOST`)
-  - `REAL_REDIS_URL` with `-p tests.plugins.real_redis`
-  - `QUOTA_TEST_MONGO_URI`
-  - `S3_TEST_ENDPOINT_URL` (LocalStack)
-  - `SQS_TEST_ENDPOINT_URL` (ElasticMQ)
+- Tests fake only the LLM and Langfuse; everything else runs on real services from localinfra. Tests using an infra fixture (`tests/infra.py`) get the `infra` marker automatically.
+  - Start services: `cd ~/Documents/localinfra && bin/li up core postgres mongo minio elasticmq rabbitmq`
+  - Run: `uv run --env-file .env.test pytest` (`.env.test` sets `TEST_*` URLs and `TEST_INFRA_REQUIRED=1`; a missing service then fails instead of skipping)
+  - CI runs `pytest -m "not infra"` and never loads `.env.test`.
 
 ## Checks
 <!-- read by: pre-commit-ci. Mirror CI exactly. -->

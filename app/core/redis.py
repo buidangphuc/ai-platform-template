@@ -7,6 +7,7 @@ def build_redis_client(settings: Settings) -> Redis:
     return Redis(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
+        username=settings.REDIS_USERNAME or None,
         password=settings.REDIS_PASSWORD or None,
         db=settings.REDIS_DATABASE,
         socket_timeout=settings.REDIS_TIMEOUT_SECONDS,

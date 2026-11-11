@@ -21,10 +21,9 @@ import_models(FEATURES)
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-settings = get_settings()
-database_url = settings.POSTGRES_URL
+database_url = config.attributes.get("database_url") or get_settings().POSTGRES_URL
 config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
