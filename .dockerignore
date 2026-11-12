@@ -12,7 +12,6 @@ __pycache__/
 
 .uv-cache/
 .codegraph/
-openspec/
 docs/
 tests/
 scripts/smoke/

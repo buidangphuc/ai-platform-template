@@ -105,6 +105,7 @@ forces exit.
   `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` (connection drain), plus another
   `GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS` in the worst case (the lifespan then waits
   for in-flight requests): `5 + 2 * 30 + margin` with the defaults.
+
 ## Local commands
 
 Run `make help` for every target. The main ones:
@@ -116,7 +117,7 @@ make test-infra             # every test on localinfra, 80% coverage gate
 make smoke-langfuse         # exercise the Langfuse callback against the local stack
 make smoke-langfuse-prompt  # exercise the Langfuse prompt-management flow
 make check-env              # verify .env.example matches Settings fields
-make ci                     # ruff checks + env check + typecheck + tests
+make ci                     # ruff checks + env check + typecheck + test-infra
 ```
 
 ## Secrets
@@ -160,7 +161,8 @@ rerankers, or vector-store adapters. Retrieval runs on Postgres pgvector
 HTTP middleware provides CORS, trusted-host enforcement, a request body limit,
 standard error envelopes for FastAPI/Starlette HTTP errors, and access logs with
 method, path, status, duration, request id, and authenticated principal when
-available.
+available. An inbound `X-Request-ID` is kept only if it matches
+`[A-Za-z0-9._-]{1,128}`; otherwise a `req_<hex>` id is generated.
 
 Endpoints reach the request boundary through small per-concern dependencies,
 not a single context object:
@@ -176,31 +178,7 @@ raises `503 idempotency_disabled`). No shared context object carries Redis,
 object storage clients, feature flags, or AI runtimes; add those directly at the
 business module boundary when a project actually needs them.
 
-Application wiring is centralized in the bootstrap layer. API routers should
-keep only HTTP concerns: path/query/body parsing, response models or envelopes,
-and a small call into a business service. Platform modules expose reusable
-capabilities such as Mongo, quota, cache, objects, LLM, queues, and task stores;
-`app/bootstrap/resources.py` opens those capabilities once for the app.
-
-Business services should receive explicit constructor dependencies and must not
-read FastAPI `Request`, `app.state`, or a global service locator. When a product
-service needs lifespan-owned runtime dependencies, declare a `Feature` in
-`app/bootstrap/features/<domain>.py` and add one entry to `FEATURES` in
-`registry.py` (step-by-step: "Add a domain: checklist" in
-[template-guide.md](template-guide.md)). Its `build(resources, settings)` runs once per app, after the
-platform resources are open, and the instance lives on
-`ApplicationResources.services`. Views read it with
-`get_app_resources(request.app).service(<Domain>Service)`; no per-surface getter
-helpers.
-
-To call an external HTTP API, declare an `Upstream` in the feature's `upstreams`
-and use `resources.http(name)` (timeout, retry, circuit breaker and request-id
-included); do not build your own `httpx.AsyncClient`.
-
-Adding a new endpoint usually should not touch bootstrap. Add or extend the
-business service method, then call it from the API router. Update bootstrap only
-when the endpoint introduces a new runtime dependency or a new application
-service that must be created once per app lifecycle.
+Wiring rules (bootstrap, `Feature`, external HTTP upstreams, adding an endpoint) live in [architecture.md](agents/architecture.md): "Bootstrap", "Adding or changing a service", "Calling external HTTP APIs" and "Adding an endpoint". The step-by-step checklist is "Add a domain: checklist" in [template-guide.md](template-guide.md).
 
 Database access has one pattern: a store takes an
 `async_sessionmaker[AsyncSession]` through its constructor, built in
@@ -234,8 +212,8 @@ When `IDEMPOTENCY_ENABLED=true`,
 `app.modules.platform.idempotency.http.get_idempotency_key` validates the
 optional `Idempotency-Key` header, and the same
 `app.modules.platform.idempotency` package adds concrete persistence with an
-`idempotency_keys` table. Request hashes include method, path, body, and
-principal id. Reusing the same key with a different request returns
+`idempotency_keys` table. Request hashes include method, path, query string,
+body, and principal id. Reusing the same key with a different request returns
 `409 idempotency_key_conflict`; reusing an in-progress key returns
 `409 idempotency_key_in_progress`. Streaming responses are intentionally outside
 this contract.
@@ -255,8 +233,8 @@ REPORTS = QuotaPolicy("reports", limit=100, window_seconds=3600)
 async def create_report(...): ...
 ```
 
-`@idempotent` (`app.modules.platform.idempotency.http`) wraps a synchronous
-route that declares `request: Request`. A repeated `Idempotency-Key` replays the
+`@idempotent` (`app.modules.platform.idempotency.http`) wraps a route (not an
+async task endpoint) that declares `request: Request`. A repeated `Idempotency-Key` replays the
 response the first request received without running the handler: the route's
 declared `status_code` and the body after `response_model` filtering (any JSON
 value: object, list, scalar or null). The request hash covers method, path,
@@ -277,7 +255,6 @@ template adapters in this phase. Object storage (`app/modules/platform/objects`)
 queues (`app/modules/messaging/queue`) and OpenTelemetry
 (`app/core/telemetry_otel.py`) are wrapped. Use the tools required by the target
 project directly at the module boundary for anything else.
-Database access goes through stores that take a `sessionmaker` (see above).
 
 Langfuse is only wired at the AI execution boundary. Use
 `build_llm_instance(..., instance_id="...", service_name="...")` from
@@ -333,16 +310,14 @@ so a handler can run more than once for one task id and must be idempotent. A
 handler is cancelled after `TASKS_LEASE_SECONDS` and its task fails with
 `lease_exceeded`; a result that arrives after the task was settled is dropped.
 
-The app factory registers a FastAPI lifespan that calls
-`langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and
-`init_resources=True`, so any buffered traces from per-instance trackers are
-drained before the process exits. The app factory also owns shared runtime
+The app factory registers a FastAPI lifespan that owns shared runtime
 resources on `app.state.resources` (an `ApplicationResources` holding `.engine`,
-`.sessionmaker`, and `.redis`); readiness checks and DB dependencies reuse those
-handles, and the lifespan closes Redis plus disposes the SQLAlchemy engine on
-shutdown.
-Tests construct the app with `init_resources=False`, which skips external
-readiness checks.
+`.sessionmaker`, and `.redis`); readiness checks reuse those handles, and the
+lifespan closes Redis plus disposes the SQLAlchemy engine on shutdown. With
+`LLM_ENABLED=true` and `LANGFUSE_ENABLED=true` the LLM addon also flushes the
+Langfuse tracker on shutdown, so buffered traces are drained before the process
+exits. Tests construct the app with `init_resources=False`, which skips the
+database, Redis and queue resources and external readiness checks.
 
 ## Bearer Auth
 

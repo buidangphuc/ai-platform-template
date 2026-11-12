@@ -40,7 +40,7 @@ Prefer existing repo patterns over new abstractions.
   - `addons/base.py`: `BootstrapAddon` protocol and default addon order.
   - `state.py`: typed helpers such as `get_app_resources(...)`, `get_task_services(...)`.
   - `features/base.py`: the `Feature` declaration. `features/registry.py`: `FEATURES`, the one list `create_app(features=FEATURES)` and `worker_context(features=FEATURES)` read. `features/<domain>.py`: one file per domain (e.g. `completions.py`).
-  - `services.py`: `compose_business_services`, `open_runtime`; builds each enabled feature's service and rejects duplicate service or task types at startup.
+  - `services.py`: `compose_business_services`, `open_runtime`; builds each enabled feature's service and rejects duplicate service types, task types or upstream names at startup.
   - `addons/<name>.py`: one addon per capability. Contract (`addons/base.py`): `open(resources, settings, stack)` builds the capability with factory functions that take required dependencies, stores it on `resources`, and pushes its close onto `stack`. No `close` method.
 - Cross-setting rules ("X requires Y") live in a `@model_validator` on the owning settings mixin, not in addons or factories.
 
@@ -70,7 +70,7 @@ service consumes interface/capability
 
 1. Define one `<Domain>Service` class in `app/modules/business/<domain>/service.py` (e.g. `CompletionService`); add schemas/types/models/stores/integrations under the same domain.
 2. Keep stores, handlers and external integrations as constructor dependencies.
-3. Declare the domain once: `app/bootstrap/features/<domain>.py` returns a `Feature` (`name`, `service`, `build(resources, settings)`, `routers`, `task_routers`, `tasks`, `models`, `upstreams`, `enabled(settings)`), and `app/bootstrap/features/registry.py` gets one entry in `FEATURES`. That is the only shared-file edit: `resources.py`, `services.py`, `api/router.py`, `worker.py` and `alembic/env.py` read the registry.
+3. Declare the domain once: `app/bootstrap/features/<domain>.py` returns a `Feature` (`name`, `service`, `build(resources, settings)`, `routers`, `task_routers`, `tasks`, `models`, `upstreams`, `enabled(settings)`), and `app/bootstrap/features/registry.py` gets one entry in `FEATURES`. That is the only shared-file edit: `application.py`, `worker.py` and `alembic/env.py` import `FEATURES`, and pass it on to `services.py` and `api/router.py`.
 4. Scope: the service is built once per app in lifespan after resources open (`Feature.build`) and stored on `resources.services`; read it with `resources.service(<Domain>Service)`, which raises `ServiceUnavailableError` when the feature is disabled. No module-level singletons.
 5. A feature behind a `*_ENABLED` flag sets `enabled=lambda settings: settings.<DOMAIN>_ENABLED`: a disabled feature is not built, not mounted and not resolvable. Routes that need `TASKS_ENABLED` go in `task_routers`. A platform capability behind a flag still gets a feature group (e.g. `TaskServices`) and one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
 6. Background tasks: `tasks={TASK_TYPE: handler}` with `handler(resources, task) -> dict`; the worker dispatches by `task.type`. An unknown type fails the task and dead-letters the message; two features registering the same task type or service type fail at startup.
@@ -90,7 +90,7 @@ One path on both task stores: `TaskService.submit` stores the row, then sends a 
 
 Declare an `Upstream(name, base_url, timeout, retries, headers, follow_redirects)` in the feature's `upstreams` (`app/modules/platform/http/upstream.py`) and call it with `resources.http(name)`, an `UpstreamClient` (`get`, `post`, `request`). Bootstrap opens one `httpx.AsyncClient` per upstream of every enabled feature and closes it on shutdown; each call applies the timeout, retries transient failures up to `retries`, trips a per-upstream circuit breaker (`ServiceUnavailableError`, code `upstream_unavailable`), sends `X-Request-ID` and logs one line without bodies or headers. Two enabled features declaring the same upstream name fail at startup; an unknown name raises `upstream_not_configured`. `retries` applies to every method including POST, so enable it only for idempotent calls. Do not build an `httpx.AsyncClient` in a feature or service.
 
-In integration or worker tests, point the upstream at the real local HTTP server from `tests/http_server.py` (fixture `local_http_server`: `.url`, `.script(path, *Reply(status, json, headers, delay, drop))`, `.requests`) with `local_upstreams` from `tests/factories.py` (named upstreams get the local base URL; other names keep their own). The call goes over a real socket, so retry, breaker and timeout behave as in production:
+In integration or worker tests, point the upstream at the real local HTTP server from `tests/http_server.py` (fixture `local_http_server`: `.url`, `.script(path, *Reply(status, json, body, headers, delay, drop))`, `.requests`) with `local_upstreams` from `tests/factories.py` (named upstreams get the local base URL; other names keep their own). The call goes over a real socket, so retry, breaker and timeout behave as in production:
 
 ```python
 async def test_lookup(monkeypatch, local_http_server):
@@ -144,7 +144,7 @@ The canonical check list is `## Checks` in `docs/agents/project.md`; CI mirrors 
 
 - Integration: `create_app(settings=build_test_settings(...))` with the feature's flags flipped (default registry), or `create_app(features=(<domain>_feature(...),))` for a custom handler. `init_resources` defaults to True; the lifespan opens addons either way.
 - Worker: real infra (`tests/infra.py` fixtures; no in-memory backend exists): settings `QUEUE_ENABLED=True, TASKS_ENABLED=True, REDIS_ENABLED=True, DATABASE_ENABLED=True` with `QUEUE_NAME` and `TASK_REDIS_PREFIX` under `redis_prefix`, then `worker_context(settings, features=...)`: `ctx.tasks.service.submit(...)`, `[message] = await ctx.tasks.queue.receive(max_messages=1)`, `await ctx.worker.handler(message)`. `tests/unit/core/test_features.py` is the working example.
-- Upstreams: `local_http_server` + `local_upstreams` (see "Calling external HTTP APIs"). LLM: `model_builder` (see `docs/agents/ai-engineering.md`).
+- Upstreams: `local_http_server` + `local_upstreams` (see "Calling external HTTP APIs"). LLM: `build_llm_instance(..., model_builder=...)` (see `docs/agents/ai-engineering.md`).
 
 Docker smoke checks: use a minimal local runtime with external AI dependencies disabled unless real provider calls are requested.
 

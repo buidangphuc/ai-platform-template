@@ -17,7 +17,7 @@ Optional OpenTelemetry export of traces and GenAI metrics over OTLP/HTTP. Off by
 ## What is emitted
 
 - FastAPI auto-instrumentation (HTTP server spans and metrics; `healthz` and `readyz` excluded).
-- Per completion (sync and stream), at the completions edge: a `chat` span and the GenAI client histograms `gen_ai.client.operation.duration` (s), `gen_ai.client.token.usage` (`gen_ai.token.type` = `input` or `output`) and, for streams, `gen_ai.client.operation.time_to_first_chunk` (s). Attributes: `gen_ai.operation.name`, `gen_ai.request.model` (`CHAT_MODEL`), `gen_ai.response.model`, `app.completion.mode`, `app.completion.outcome`, `error.type` on failure; the span also carries `gen_ai.response.finish_reasons` and token counts.
+- Per LLM call (sync and stream, API and worker; needs `LLM_ENABLED=true`): a `chat` span and the GenAI client histograms `gen_ai.client.operation.duration` (s), `gen_ai.client.token.usage` (`gen_ai.token.type` = `input` or `output`) and, for streams, `gen_ai.client.operation.time_to_first_chunk` (s). Attributes: `gen_ai.operation.name`, `gen_ai.request.model` (`CHAT_MODEL`), `gen_ai.response.model`, `app.completion.mode`, `app.completion.outcome`, `error.type` on failure; the span also carries `gen_ai.response.finish_reasons` and token counts.
 - Never prompt or output content.
 
 Langfuse (`LANGFUSE_*`) is a separate, independent tracing integration for LLM calls.
@@ -37,4 +37,4 @@ Route to a real backend by changing the collector's exporters, not the app.
 
 ## Not covered
 
-Worker and queue spans, trace-context propagation into async tasks, and prompt/output capture.
+Worker task and queue spans (worker LLM calls are still recorded), trace-context propagation into async tasks, and prompt/output capture.
