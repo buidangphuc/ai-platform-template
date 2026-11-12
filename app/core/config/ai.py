@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 RagBackend = Literal["pgvector"]
+RagEmbedBackend = Literal["mock", "model_server"]
 
 
 class AISettingsMixin(BaseModel):
@@ -62,8 +63,12 @@ class AISettingsMixin(BaseModel):
     RAG_CHUNK_SIZE: int = Field(default=512, gt=0)
     RAG_CHUNK_OVERLAP: int = Field(default=50, ge=0)
     RAG_DEFAULT_TOP_K: int = Field(default=5, gt=0)
-    RAG_EMBED_MODEL: str = ""
-    RAG_MOCK_EMBED_DIM: int = Field(default=16, gt=0)
+    RAG_EMBED_BACKEND: RagEmbedBackend = "mock"
+    RAG_EMBED_DIM: int = Field(default=16, gt=0)
+    RAG_EMBED_SERVER_URL: str = ""
+    RAG_EMBED_SERVER_PATH: str = "/embed"
+    RAG_EMBED_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0)
+    RAG_EMBED_RETRIES: int = Field(default=1, ge=0, le=5)
     RAG_RETRIEVE_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0)
 
     @model_validator(mode="after")
@@ -74,4 +79,12 @@ class AISettingsMixin(BaseModel):
             and not self.DATABASE_ENABLED
         ):
             raise ValueError("RAG_ENABLED requires DATABASE_ENABLED")
+        if (
+            self.RAG_ENABLED
+            and self.RAG_EMBED_BACKEND == "model_server"
+            and not self.RAG_EMBED_SERVER_URL
+        ):
+            raise ValueError(
+                "RAG_EMBED_BACKEND=model_server requires RAG_EMBED_SERVER_URL"
+            )
         return self
