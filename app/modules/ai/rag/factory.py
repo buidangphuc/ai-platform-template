@@ -6,6 +6,7 @@ from app.core.config import Settings
 from app.core.redaction import RedactionPolicy
 from app.core.resilience import TimeoutPolicy
 from app.modules.ai._deps import require_llama_index
+from app.modules.platform.http.upstream import Upstream, UpstreamClient
 
 if TYPE_CHECKING:
     from llama_index.core.base.embeddings.base import BaseEmbedding
@@ -20,15 +21,29 @@ if TYPE_CHECKING:
 
 def build_embed_model(settings: Settings) -> BaseEmbedding:
     require_llama_index()
-    from llama_index.core.embeddings import MockEmbedding
 
-    if not settings.RAG_EMBED_MODEL:
-        return MockEmbedding(embed_dim=settings.RAG_MOCK_EMBED_DIM)
+    match settings.RAG_EMBED_BACKEND:
+        case "mock":
+            from llama_index.core.embeddings import MockEmbedding
 
-    raise RuntimeError(
-        f"RAG_EMBED_MODEL={settings.RAG_EMBED_MODEL!r} not implemented. "
-        "Extend build_embed_model() to wire your embedding provider."
-    )
+            return MockEmbedding(embed_dim=settings.RAG_EMBED_DIM)
+        case "model_server":
+            from app.modules.ai.rag.embeddings import build_model_server_embedding
+
+            client = UpstreamClient.from_upstream(
+                Upstream(
+                    "rag_embeddings",
+                    lambda s: s.RAG_EMBED_SERVER_URL,
+                    timeout=settings.RAG_EMBED_TIMEOUT_SECONDS,
+                    retries=settings.RAG_EMBED_RETRIES,
+                ),
+                settings,
+            )
+            return build_model_server_embedding(
+                client,
+                path=settings.RAG_EMBED_SERVER_PATH,
+                dim=settings.RAG_EMBED_DIM,
+            )
 
 
 def build_vector_store(settings: Settings) -> ParameterizedPGVectorStore:
@@ -62,7 +77,7 @@ def build_vector_store(settings: Settings) -> ParameterizedPGVectorStore:
                 cache_ok=False,
                 debug=False,
                 hnsw_kwargs=None,
-                embed_dim=settings.RAG_MOCK_EMBED_DIM,
+                embed_dim=settings.RAG_EMBED_DIM,
                 use_jsonb=True,
                 perform_setup=True,
                 initialization_fail_on_error=True,

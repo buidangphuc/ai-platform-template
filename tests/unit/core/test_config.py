@@ -443,3 +443,62 @@ def test_rag_requires_database():
 def test_rag_table_name_must_be_a_plain_identifier():
     with pytest.raises(ValidationError, match="RAG_PGVECTOR_TABLE"):
         build_test_settings(RAG_PGVECTOR_TABLE="rag; DROP TABLE users")
+
+
+def test_rag_embedding_defaults_are_valid_and_mock():
+    settings = build_test_settings(RAG_ENABLED=True, DATABASE_ENABLED=True)
+
+    assert settings.RAG_EMBED_BACKEND == "mock"
+    assert settings.RAG_EMBED_DIM == 16
+    assert settings.RAG_EMBED_SERVER_URL == ""
+    assert settings.RAG_EMBED_SERVER_PATH == "/embed"
+    assert settings.RAG_EMBED_TIMEOUT_SECONDS == 10.0
+    assert settings.RAG_EMBED_RETRIES == 1
+
+
+def test_rag_model_server_embedding_requires_a_server_url():
+    with pytest.raises(ValidationError, match="RAG_EMBED_SERVER_URL"):
+        build_test_settings(
+            RAG_ENABLED=True,
+            DATABASE_ENABLED=True,
+            RAG_EMBED_BACKEND="model_server",
+        )
+
+
+def test_rag_model_server_embedding_with_a_server_url_is_valid():
+    settings = build_test_settings(
+        RAG_ENABLED=True,
+        DATABASE_ENABLED=True,
+        RAG_EMBED_BACKEND="model_server",
+        RAG_EMBED_SERVER_URL="http://embeddings:8080",
+    )
+
+    assert settings.RAG_EMBED_BACKEND == "model_server"
+
+
+def test_rag_model_server_embedding_needs_no_url_while_rag_is_disabled():
+    settings = build_test_settings(RAG_EMBED_BACKEND="model_server")
+
+    assert settings.RAG_ENABLED is False
+
+
+@pytest.mark.parametrize("removed", ["RAG_EMBED_MODEL", "RAG_MOCK_EMBED_DIM"])
+def test_removed_rag_embedding_settings_are_rejected(removed):
+    assert removed not in Settings.model_fields
+    with pytest.raises(ValidationError):
+        build_test_settings(**{removed: "x"})
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"RAG_EMBED_BACKEND": "openai"},
+        {"RAG_EMBED_DIM": 0},
+        {"RAG_EMBED_TIMEOUT_SECONDS": 0},
+        {"RAG_EMBED_RETRIES": 6},
+        {"RAG_EMBED_RETRIES": -1},
+    ],
+)
+def test_rag_embedding_settings_reject_invalid_values(override):
+    with pytest.raises(ValidationError):
+        build_test_settings(**override)
