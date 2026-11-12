@@ -208,10 +208,10 @@ Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (per-target circ
 
 Two functions only:
 
-- `build_redis_client(settings) -> Redis` — single async client with timeout config
+- `build_redis_client(settings, *, decode_responses=True) -> Redis` — async client with timeout config; responses decode to `str` by default, `decode_responses=False` returns raw bytes
 - `check_redis_connection(redis) -> None` — ping for health check
 
-The client is owned by `app.state.resources.redis` and shared across cache, rate_limit, queue, task store. (Idempotency is postgres-backed via `PostgresIdempotencyStore`, not Redis.) Don't close it from individual modules — bootstrap closes it on shutdown.
+The decoding client is owned by `app.state.resources.redis` and shared across rate_limit, queue, task store. The cache addon opens its own non-decoding client (cache values are arbitrary bytes) and closes it on the stack. (Idempotency is postgres-backed via `PostgresIdempotencyStore`, not Redis.) Don't close it from individual modules — bootstrap closes it on shutdown.
 
 ---
 
@@ -253,6 +253,8 @@ policy.redact_mapping(metadata) # redacts dict values, keeps keys
 Modes: `"full"` passes text through unchanged, `"redacted"` (default) strips
 email/bearer/secret patterns, `"off"` replaces content with `"[redacted]"`
 entirely.
+
+Redacted mode leaves decimals, dates and token-count keys (`max_tokens`, `input_tokens`, ...) alone, and mapping keys that are not strings are kept as they are. Phone numbers use one kind of separator; a leading `0` is followed directly by a digit.
 
 Used by `app/modules/ai/rag/service.py` before indexing documents (so vector store never contains raw PII).
 

@@ -23,7 +23,8 @@ class RedisCacheGateway:
         self.default_ttl_seconds = default_ttl_seconds
 
     async def get(self, key: str) -> bytes | None:
-        return _coerce_bytes(await self.redis.get(self._key(key)))
+        value: bytes | None = await self.redis.get(self._key(key))
+        return value
 
     async def set(
         self,
@@ -48,9 +49,8 @@ class RedisCacheGateway:
         raw_values = await self.redis.mget(cache_keys)
         result: dict[str, bytes] = {}
         for original_key, raw in zip(keys, raw_values, strict=True):
-            value = _coerce_bytes(raw)
-            if value is not None:
-                result[original_key] = value
+            if raw is not None:
+                result[original_key] = raw
         return result
 
     async def set_many(
@@ -84,11 +84,3 @@ class RedisCacheGateway:
         if ttl <= 0:
             raise ValueError("ttl_seconds must be positive")
         return max(math.ceil(ttl * 1000), 1)
-
-
-def _coerce_bytes(value: object) -> bytes | None:
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        return value
-    return str(value).encode()

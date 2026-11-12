@@ -125,13 +125,25 @@ class S3ObjectGateway:
             raise ValueError("limit must be positive")
         client = self._client
         scoped = self._key(prefix) if prefix else self.prefix
-        response = await client.list_objects_v2(
-            Bucket=self.bucket,
-            Prefix=scoped,
-            MaxKeys=limit,
-        )
+        if scoped and not scoped.endswith("/"):
+            scoped += "/"
         prefix_len = len(self.prefix) + 1 if self.prefix else 0
-        return [obj["Key"][prefix_len:] for obj in response.get("Contents", [])]
+        keys: list[str] = []
+        token: str | None = None
+        while len(keys) < limit:
+            kwargs: dict[str, Any] = {
+                "Bucket": self.bucket,
+                "Prefix": scoped,
+                "MaxKeys": min(limit - len(keys), 1000),
+            }
+            if token:
+                kwargs["ContinuationToken"] = token
+            response = await client.list_objects_v2(**kwargs)
+            keys.extend(obj["Key"][prefix_len:] for obj in response.get("Contents", []))
+            if not response.get("IsTruncated"):
+                break
+            token = response.get("NextContinuationToken")
+        return keys[:limit]
 
     async def presign_get(self, key: str, *, expires_seconds: int = 3600) -> str:
         client = self._client

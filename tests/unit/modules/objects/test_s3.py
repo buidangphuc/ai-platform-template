@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator, Callable
 
 import boto3
@@ -86,6 +87,45 @@ async def test_list_is_scoped_to_the_prefix_and_limited(gateway: S3ObjectGateway
     assert len(await gateway.list(limit=2)) == 2
     with pytest.raises(ValueError, match="limit must be positive"):
         await gateway.list(limit=0)
+
+
+async def test_list_excludes_sibling_prefixes(s3_target: S3Target):
+    base = s3_target.prefix.strip("/")
+    client = _boto_client(s3_target)
+    client.put_object(Bucket=s3_target.bucket, Key=f"{base}/a", Body=b"x")
+    client.put_object(Bucket=s3_target.bucket, Key=f"{base}-staging/b", Body=b"x")
+    store = S3ObjectGateway(
+        bucket=s3_target.bucket,
+        region_name=s3_target.region,
+        prefix=base,
+        endpoint_url=s3_target.endpoint_url,
+        session_factory=lambda: aioboto3.Session(
+            aws_access_key_id=s3_target.access_key,
+            aws_secret_access_key=s3_target.secret_key,
+        ),
+    )
+    await store.open()
+    try:
+        assert await store.list() == ["a"]
+    finally:
+        await store.close()
+        client.delete_object(Bucket=s3_target.bucket, Key=f"{base}-staging/b")
+
+
+async def test_list_follows_continuation_tokens_up_to_limit(
+    gateway: S3ObjectGateway,
+):
+    semaphore = asyncio.Semaphore(50)
+
+    async def put(index: int) -> None:
+        async with semaphore:
+            await gateway.put(f"bulk/{index:04d}", b"x")
+
+    await asyncio.gather(*(put(index) for index in range(1100)))
+
+    assert len(await gateway.list(limit=1050)) == 1050
+    assert len(await gateway.list("bulk", limit=1100)) == 1100
+    assert len(await gateway.list("bulk", limit=5000)) == 1100
 
 
 async def test_presigned_urls_grant_scoped_access(gateway: S3ObjectGateway):
