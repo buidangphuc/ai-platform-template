@@ -2,18 +2,18 @@ from fastapi import APIRouter
 
 from app.bootstrap.application import create_app
 from app.core.errors import (
+    PYDANTIC_ERROR_MESSAGES,
     AppError,
     BadRequestError,
     ConflictError,
     ForbiddenError,
     NotFoundError,
     RateLimitError,
-    ServerError,
     ServiceUnavailableError,
-    TokenError,
     UnauthorizedError,
     UnprocessableEntityError,
     _http_error_code,
+    format_validation_errors,
 )
 from tests.factories import api_client_for, build_test_settings
 
@@ -27,9 +27,7 @@ def test_typed_errors_carry_canonical_status_and_code():
         (ConflictError(), 409, "conflict"),
         (UnprocessableEntityError(), 422, "unprocessable_entity"),
         (RateLimitError(), 429, "rate_limit_exceeded"),
-        (ServerError(), 500, "internal_server_error"),
         (ServiceUnavailableError(), 503, "service_unavailable"),
-        (TokenError(), 401, "invalid_token"),
     ]
     for exc, status, code in cases:
         assert exc.status_code == status, exc
@@ -65,3 +63,19 @@ async def test_typed_error_envelope_via_handler():
     assert body["error"]["message"] == "Already exists"
     assert body["error"]["data"] == {"field": "email"}
     assert body["error"]["request_id"] == "req-c"
+
+
+def test_format_validation_errors_keeps_unknown_type_message():
+    errors = [{"type": "no_such_type", "loc": ["body", "x"], "msg": "original"}]
+
+    assert format_validation_errors(errors)[0]["msg"] == "original"
+
+
+def test_format_validation_errors_uses_unformatted_template_when_ctx_is_missing():
+    template = PYDANTIC_ERROR_MESSAGES["string_too_short"]
+    errors = [{"type": "string_too_short", "loc": ["body", "x"], "msg": "original"}]
+
+    result = format_validation_errors(errors)
+
+    assert "{min_length}" in template
+    assert result[0]["msg"] == template

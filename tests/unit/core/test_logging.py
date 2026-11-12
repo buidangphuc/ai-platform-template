@@ -2,7 +2,7 @@ import logging
 
 from loguru import logger
 
-from app.core.logging import InterceptHandler, configure_logging
+from app.core.logging import _NOISY_LOGGERS, InterceptHandler, configure_logging
 from app.core.request_context import reset_request_id, set_request_id
 
 
@@ -19,10 +19,13 @@ def test_configure_logging_installs_intercept_handler_once():
 
 
 def test_configure_logging_silences_noisy_loggers():
-    configure_logging(noisy_loggers=("sqlalchemy.engine", "httpx"))
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.NOTSET)
 
-    assert logging.getLogger("sqlalchemy.engine").level == logging.WARNING
-    assert logging.getLogger("httpx").level == logging.WARNING
+    configure_logging()
+
+    for name in _NOISY_LOGGERS:
+        assert logging.getLogger(name).level == logging.WARNING
 
 
 def test_loguru_record_contains_request_id():

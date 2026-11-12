@@ -43,7 +43,6 @@ def configure_logging(
     *,
     level: str = "INFO",
     json_mode: bool = False,
-    noisy_loggers: tuple[str, ...] = _NOISY_LOGGERS,
     enqueue: bool = False,
 ) -> None:
     logger.remove()
@@ -83,8 +82,5 @@ def configure_logging(
     logging.root.addHandler(InterceptHandler())
     logging.root.setLevel(logging.NOTSET)
 
-    for name in noisy_loggers:
+    for name in _NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
-
-
-log = logger
