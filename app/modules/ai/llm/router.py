@@ -13,7 +13,7 @@ from app.modules.ai._deps import require_langchain
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
-ModelRole = Literal["default", "judge"]
+ModelRole = Literal["default", "judge", "vision"]
 ModelBuilder = Callable[[str], "BaseChatModel"]
 
 
@@ -45,7 +45,8 @@ class ModelRouter:
 
     The ``default`` chain is ``CHAT_MODEL`` followed by every entry of
     ``CHAT_FALLBACK_MODELS`` (duplicates dropped); the ``judge`` chain is the
-    judge model alone. When a chain has more than one target, each target sits
+    judge model alone; the ``vision`` chain is ``VISION_CHAT_MODEL`` alone, or
+    the ``default`` chain (and its breakers) when that setting is empty. When a chain has more than one target, each target sits
     behind its own circuit breaker that counts transient failures only (429,
     5xx, timeouts, connection errors). ``try_acquire`` is the admission gate: an
     open breaker rejects until its cooldown passes, then admits one probe. A
@@ -85,6 +86,9 @@ class ModelRouter:
         return self._models[target]
 
     def primary_target(self, role: ModelRole = "default") -> str:
+        role = self._effective_role(role)
+        if role == "vision":
+            return self.settings.VISION_CHAT_MODEL
         if role == "judge":
             if self.settings.JUDGE_CHAT_MODEL:
                 return self.settings.JUDGE_CHAT_MODEL
@@ -94,6 +98,7 @@ class ModelRouter:
 
     def chain(self, role: ModelRole = "default") -> tuple[str, ...]:
         """Targets in failover order: primary first, then each fallback."""
+        role = self._effective_role(role)
         targets = [self.primary_target(role)]
         if role == "default":
             targets.extend(_split_csv(self.settings.CHAT_FALLBACK_MODELS))
@@ -148,8 +153,13 @@ class ModelRouter:
         )
         return FakeListChatModel(responses=["fake response"])
 
+    def _effective_role(self, role: ModelRole) -> ModelRole:
+        if role == "vision" and not self.settings.VISION_CHAT_MODEL:
+            return "default"
+        return role
+
     def _breaker(self, role: ModelRole, target: str) -> CircuitBreaker:
-        key = (role, target)
+        key = (self._effective_role(role), target)
         if key not in self._breakers:
             self._breakers[key] = self.breaker_policy.build(clock=self._clock)
         return self._breakers[key]

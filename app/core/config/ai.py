@@ -17,6 +17,7 @@ class AISettingsMixin(BaseModel):
     CHAT_MODEL: str = ""
     CHAT_FALLBACK_MODELS: str = ""
     JUDGE_CHAT_MODEL: str = ""
+    VISION_CHAT_MODEL: str = ""
     # Every provider call is bounded: output cap, per-request timeout and the
     # SDK's own hidden retry budget. LLM_MAX_RETRIES is kept at 1 because the
     # breaker only sees a call after the SDK has exhausted its retries, so each
