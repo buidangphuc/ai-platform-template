@@ -124,9 +124,10 @@ class S3ObjectGateway:
         if limit <= 0:
             raise ValueError("limit must be positive")
         client = self._client
-        scoped = self._key(prefix) if prefix else self.prefix
-        if scoped and not scoped.endswith("/"):
-            scoped += "/"
+        if prefix:
+            scoped = self._key(prefix)
+        else:
+            scoped = f"{self.prefix}/" if self.prefix else ""
         prefix_len = len(self.prefix) + 1 if self.prefix else 0
         keys: list[str] = []
         token: str | None = None

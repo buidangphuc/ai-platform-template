@@ -112,6 +112,16 @@ async def test_list_excludes_sibling_prefixes(s3_target: S3Target):
         client.delete_object(Bucket=s3_target.bucket, Key=f"{base}-staging/b")
 
 
+async def test_list_treats_the_caller_prefix_as_a_string_prefix(
+    gateway: S3ObjectGateway,
+):
+    for name in ("reports/a", "rep.txt", "other/b"):
+        await gateway.put(name, b"x")
+
+    assert sorted(await gateway.list("rep")) == ["rep.txt", "reports/a"]
+    assert await gateway.list("reports/") == ["reports/a"]
+
+
 async def test_list_follows_continuation_tokens_up_to_limit(
     gateway: S3ObjectGateway,
 ):
