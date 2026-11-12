@@ -14,6 +14,8 @@ Where code lives and how it is wired. This repo is a template, not a plugin plat
 | `app/modules/business` | Domain/product logic only. |
 | `app/core` | Settings, infra primitives, health, errors, middleware. |
 
+Import rules between these layers are enforced by `make arch` and defined in `pyproject.toml`.
+
 Layer flow:
 
 - API routers parse HTTP input and call a business service.

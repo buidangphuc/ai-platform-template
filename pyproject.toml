@@ -47,6 +47,7 @@ otel = [
 [dependency-groups]
 dev = [
   "detect-secrets>=1.5.0,<2.0.0",
+  "import-linter>=2.0,<3.0",
   "pre-commit>=4.3.0,<5.0.0",
   "pyright>=1.1.390,<2.0.0",
   "pytest>=8.3.5,<9.0.0",
@@ -55,6 +56,95 @@ dev = [
   "pytest-xdist>=3.6.1,<4.0.0",
   "ruff>=0.11.2,<0.12.0",
 ]
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core does not import api, modules or bootstrap"
+type = "forbidden"
+source_modules = ["app.core"]
+forbidden_modules = ["app.api", "app.modules", "app.bootstrap"]
+ignore_imports = ["app.core.middleware -> app.bootstrap.state"]
+
+[[tool.importlinter.contracts]]
+name = "modules do not import api or bootstrap"
+type = "forbidden"
+source_modules = ["app.modules"]
+forbidden_modules = ["app.api", "app.bootstrap"]
+ignore_imports = [
+  "app.modules.platform.identity.auth -> app.bootstrap.state",
+  "app.modules.platform.idempotency.http -> app.bootstrap.state",
+  "app.modules.platform.quota.http -> app.bootstrap.state",
+]
+
+[[tool.importlinter.contracts]]
+name = "platform does not import business, ai or messaging"
+type = "forbidden"
+source_modules = ["app.modules.platform"]
+forbidden_modules = [
+  "app.modules.business",
+  "app.modules.ai",
+  "app.modules.messaging",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "messaging does not import business or ai"
+type = "forbidden"
+source_modules = ["app.modules.messaging"]
+forbidden_modules = ["app.modules.business", "app.modules.ai"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "ai does not import business or messaging"
+type = "forbidden"
+source_modules = ["app.modules.ai"]
+forbidden_modules = ["app.modules.business", "app.modules.messaging"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "business does not import fastapi or starlette"
+type = "forbidden"
+source_modules = ["app.modules.business"]
+forbidden_modules = ["fastapi", "starlette"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "api does not import infrastructure clients"
+type = "forbidden"
+source_modules = ["app.api"]
+forbidden_modules = [
+  "sqlalchemy",
+  "httpx",
+  "redis",
+  "motor",
+  "pymongo",
+  "langchain",
+  "langchain_openai",
+  "aioboto3",
+  "aio_pika",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "api does not import wiring modules"
+type = "forbidden"
+source_modules = ["app.api"]
+forbidden_modules = [
+  "app.bootstrap.resources",
+  "app.bootstrap.services",
+  "app.bootstrap.application",
+  "app.bootstrap.worker",
+  "app.bootstrap.addons",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "business domains are independent"
+type = "independence"
+modules = ["app.modules.business.*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

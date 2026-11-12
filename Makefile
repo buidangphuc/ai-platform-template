@@ -1,4 +1,4 @@
-.PHONY: help dev worker test test-fast check-env test-infra infra-up eval lint format typecheck check ci hooks-install \
+.PHONY: help dev worker test test-fast check-env test-infra infra-up eval lint format typecheck arch check ci hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse
@@ -49,6 +49,9 @@ check-env: ## Verify .env.example matches Settings fields
 
 typecheck: ## Pyright type check
 	$(UV_RUN) pyright
+
+arch: ## Enforce layer import rules
+	$(UV_RUN) lint-imports
 
 ci: check check-env typecheck test-infra ## Full suite locally, infra included
 

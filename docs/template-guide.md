@@ -93,7 +93,7 @@ no per-request session dependency. `conversations` (Postgres + LLM, behind
 `app/core/config/conversations.py` (plus its entry in the `Settings` bases and the
 `.env.example` line) and migration `0010_create_conversations`.
 
-Rules that keep the template clean (enforced by review, spelled out in
+Rules that keep the template clean (enforced by `make arch` and review, spelled out in
 [agents/architecture.md](agents/architecture.md)): endpoints never build clients/stores; business services never
 read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
