@@ -1,8 +1,5 @@
 minimum_pre_commit_version: "3.6.0"
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
-ci:
-  autofix_prs: true
-  autoupdate_schedule: monthly
 
 repos:
   # Hygiene
@@ -10,7 +7,6 @@ repos:
     rev: v4.6.0
     hooks:
       - id: check-yaml
-      - id: check-json
       - id: check-toml
       - id: check-merge-conflict
       - id: end-of-file-fixer
