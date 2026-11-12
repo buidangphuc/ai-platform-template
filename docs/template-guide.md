@@ -34,8 +34,8 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +
 RATE_LIMIT. [`ops/compose/local.yaml`](../ops/compose/local.yaml) is the worked example of the
-whole stack except rate limit: api + worker + postgres + redis with QUEUE, TASKS
-and OUTBOX on. Flip `RATE_LIMIT_ENABLED` in `.env` on top of it. The worker is
+whole stack except rate limit: a one-shot `migrate` service (`alembic upgrade head`), then api + worker
++ postgres + redis with DATABASE, REDIS, QUEUE and TASKS on; the api listens on `127.0.0.1` only. Flip `RATE_LIMIT_ENABLED` in `.env` on top of it. The worker is
 `python -m scripts.run_worker`, the same command `make worker` runs locally.
 
 ## 2. Add a business domain (the one pattern to copy)

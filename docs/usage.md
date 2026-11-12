@@ -70,7 +70,7 @@ make docker-build
 make docker-run
 ```
 
-The Docker path is a local golden path only. It builds the image and runs the API, a worker, PostgreSQL, and Redis with `ops/compose/local.yaml`, with queue, tasks and outbox enabled.
+The Docker path is a local golden path only. It builds the image `ai-platform-template:local` and runs, with `ops/compose/local.yaml`, a one-shot `migrate` service (`alembic upgrade head`), then the API and a worker once it completes, plus PostgreSQL and Redis, with database, redis, queue and tasks enabled. Migrations run automatically; there is no manual `make migrate` step. The API is published on `127.0.0.1:8000` only (`API_PORT` changes the port, not the interface).
 
 To run the API with a local self-hosted Langfuse stack for AI tracing, prompt
 management, and eval scores:
@@ -81,7 +81,7 @@ cp ops/compose/langfuse.env.example .env.langfuse   # optional Langfuse override
 make docker-run-langfuse
 ```
 
-The Langfuse overlay is `ops/compose/langfuse.yaml`; `make docker-run-langfuse` layers it on `ops/compose/local.yaml` and loads `.env.langfuse` when present.
+The Langfuse overlay is `ops/compose/langfuse.yaml`; `make docker-run-langfuse` layers it on `ops/compose/local.yaml` and loads `.env.langfuse` when present. The overlay builds the image with the `ai` extra (`UV_EXTRAS=ai`) for the API, the worker and `migrate`, and sets `LANGFUSE_ENABLED`, the Langfuse keys and the in-network base URL for the API. A trace is produced only when the stack also runs with `LLM_ENABLED=true` and a non-empty `CHAT_MODEL` (plus that model's provider key) in `.env`; with `LLM_ENABLED=false` the echo handler makes no LLM call and nothing is traced.
 
 Langfuse is available at `http://localhost:3000`. The local project and API
 keys are bootstrapped from `.env` through Langfuse headless initialization. The
