@@ -1,65 +1,52 @@
 # messaging/tasks Specification
 
 ## Purpose
-Defines how a submitted task reaches a worker and is processed exactly once to a
-terminal state: the message contract, atomic dispatch, who relays and reclaims,
-the claim rule, and what failure reporting may expose.
+Defines how a submitted task reaches a worker and is processed once to a terminal
+state: the message contract, who reclaims, the claim rule, and what failure
+reporting may expose. Delivery repair (re-announcing queued tasks), the single
+dispatch path and the lease bound on handlers are in `messaging/task-delivery`.
 
 ## Requirements
 
 ### Requirement: One task message contract
 
-Every dispatcher SHALL announce a task with a flat message body containing
-exactly a non-empty string `task_id` and a non-empty string `type`. The worker
-SHALL parse every received message with that same contract. A message that does
-not satisfy it SHALL be rejected without requeue (dead-lettered) and SHALL NOT be
+Task submission and the reclaim loop SHALL announce a task with a flat message
+body containing a non-empty string `task_id`, a non-empty string `type` and, when
+known, a non-empty string `request_id`; no other key is allowed. The worker SHALL
+parse every received message with that same contract. A message that does not
+satisfy it SHALL be rejected without requeue (dead-lettered) and SHALL NOT be
 acknowledged.
 
-#### Scenario: Outbox-dispatched task reaches the worker
-- **WHEN** a task is submitted with outbox dispatch and the relay publishes its event
-- **THEN** the queue message body equals `{"task_id": <id>, "type": <type>}` and the worker processes the task
+#### Scenario: Submitted task reaches the worker
+- **WHEN** a task is submitted and the worker receives its announcement
+- **THEN** the queue message body holds the task's `task_id` and `type` and the worker processes the task
 
 #### Scenario: Malformed message is dead-lettered
-- **WHEN** the worker receives a body without `task_id` or `type`, or with the old outbox envelope
+- **WHEN** the worker receives a body without `task_id` or `type`, or with any extra key
 - **THEN** it nacks the message with `requeue=False` on the first delivery and does not ack it
 
-### Requirement: Outbox dispatch is atomic with task creation
+### Requirement: The worker process owns the reclaim and cleanup loops
 
-With `TASKS_DISPATCH_BACKEND=outbox`, the task row and its outbox event SHALL be
-written in a single database transaction, so a task exists if and only if its
-announcement will be published. Settings SHALL reject `outbox` dispatch with a
-task store other than Postgres.
+While the worker runs, it SHALL periodically requeue PROCESSING tasks whose lease
+expired and re-announce stale QUEUED tasks (reclaim loop), and purge expired rows
+(cleanup loop). Both loops SHALL stop when the worker shuts down and SHALL
+continue after an iteration fails. Multiple worker processes SHALL be able to run
+them concurrently without claiming the same row twice.
 
-#### Scenario: Outbox write fails
-- **WHEN** inserting the outbox event fails during submit
-- **THEN** no task row exists afterwards
-
-#### Scenario: Unsupported store combination
-- **WHEN** settings combine `TASKS_DISPATCH_BACKEND=outbox` with `TASK_STORE_BACKEND` of `memory` or `redis`
-- **THEN** settings validation fails naming the required Postgres task store
-
-### Requirement: The worker process owns the relay and the reclaim loop
-
-While the worker runs, it SHALL publish pending `task.*` outbox events to the work
-queue (only when dispatch is `outbox`) and SHALL periodically requeue PROCESSING
-tasks whose lease expired. Both loops SHALL stop when the worker shuts down and
-SHALL continue after an iteration fails. Multiple worker processes SHALL be able
-to run them concurrently without claiming the same row twice.
-
-#### Scenario: Pending event is published without any other process
-- **WHEN** a task has been submitted with outbox dispatch and only the worker is running
-- **THEN** the task is delivered to the queue and reaches COMPLETED
+#### Scenario: Task reaches a terminal state with only the worker running
+- **WHEN** a task has been submitted and only the worker is running
+- **THEN** the task reaches COMPLETED
 
 #### Scenario: Loops stop with the worker
 - **WHEN** the worker is asked to shut down
-- **THEN** the relay and reclaim loops exit and the process terminates
+- **THEN** the reclaim and cleanup loops exit and the process terminates
 
 ### Requirement: Reclaimed tasks are announced again, boundedly
 
 Reclaiming SHALL change at most the configured batch size of expired-lease
-PROCESSING tasks to QUEUED and SHALL announce each of them to the worker again;
-with outbox dispatch the status change and the new outbox event SHALL commit in
-one transaction.
+PROCESSING tasks to QUEUED and SHALL announce each of them to the worker again. A
+failed announcement SHALL be logged and repaired by a later re-announcement of
+the QUEUED task.
 
 #### Scenario: Crashed worker's task is redelivered
 - **WHEN** a task's processing lease expires and the reclaim loop runs
