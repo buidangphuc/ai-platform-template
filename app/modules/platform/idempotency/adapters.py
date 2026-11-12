@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +9,7 @@ from app.core.config import Settings
 from app.modules.platform.idempotency.service import (
     check_or_store_idempotency_key,
     delete_expired_idempotency_keys,
+    release_idempotency_claim,
     store_idempotency_response,
 )
 from app.modules.platform.idempotency.store import (
@@ -53,7 +53,7 @@ class PostgresIdempotencyStore:
         principal_id: str,
         claim_token: str,
         status_code: int,
-        response_body: Mapping[str, Any],
+        response_body: Any,
     ) -> bool:
         async with self.sessionmaker() as session, session.begin():
             return await store_idempotency_response(
@@ -63,6 +63,21 @@ class PostgresIdempotencyStore:
                 claim_token=claim_token,
                 status_code=status_code,
                 response_body=response_body,
+            )
+
+    async def release(
+        self,
+        *,
+        key: str,
+        principal_id: str,
+        claim_token: str,
+    ) -> bool:
+        async with self.sessionmaker() as session, session.begin():
+            return await release_idempotency_claim(
+                session,
+                key=key,
+                principal_id=principal_id,
+                claim_token=claim_token,
             )
 
     async def delete_expired(self, *, before: datetime, limit: int) -> int:

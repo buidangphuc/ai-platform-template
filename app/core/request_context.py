@@ -1,9 +1,23 @@
+import re
 from contextvars import ContextVar, Token
 from uuid import uuid4
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _request_id: ContextVar[str] = ContextVar("request_id", default="-")
+
+_VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
+
+
+def resolve_request_id(raw: bytes | None) -> str:
+    if raw is not None:
+        try:
+            candidate = raw.decode("ascii")
+        except UnicodeDecodeError:
+            candidate = ""
+        if _VALID_REQUEST_ID.fullmatch(candidate):
+            return candidate
+    return f"req_{uuid4().hex}"
 
 
 def get_request_id() -> str:
@@ -50,8 +64,7 @@ class RequestIdMiddleware:
 
         header_name = self.header_name.encode()
         headers = scope.get("headers") or []
-        raw_request_id = _first_header(headers, header_name)
-        request_id = raw_request_id.decode() if raw_request_id else f"req_{uuid4().hex}"
+        request_id = resolve_request_id(_first_header(headers, header_name))
         scope.setdefault("state", {})["request_id"] = request_id
         token = set_request_id(request_id)
 

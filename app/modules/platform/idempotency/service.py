@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any, cast
@@ -23,10 +23,14 @@ def build_request_hash(
     path: str,
     body: bytes,
     principal_id: str,
+    query_string: str = "",
 ) -> str:
     hasher = sha256()
     for value in (method.upper(), path, principal_id):
         hasher.update(value.encode("utf-8"))
+        hasher.update(b"\0")
+    if query_string:
+        hasher.update(query_string.encode("utf-8"))
         hasher.update(b"\0")
     hasher.update(body)
     return hasher.hexdigest()
@@ -108,7 +112,7 @@ async def check_or_store_idempotency_key(
     if record.status == "completed" and record.response_body is not None:
         return IdempotencyCachedResponse(
             status_code=record.response_status_code or 200,
-            body=dict(record.response_body),
+            body=_unwrap_body(record.response_body),
         )
 
     raise AppError(
@@ -125,7 +129,7 @@ async def store_idempotency_response(
     principal_id: str,
     claim_token: str,
     status_code: int,
-    response_body: Mapping[str, Any],
+    response_body: Any,
 ) -> bool:
     """Complete the record only if it is still the caller's in-progress claim.
 
@@ -145,13 +149,40 @@ async def store_idempotency_response(
         .values(
             status="completed",
             response_status_code=status_code,
-            response_body=dict(response_body),
+            response_body=_wrap_body(response_body),
         )
         .returning(IdempotencyKey.id)
     )
     completed = (await db.execute(statement)).scalar_one_or_none() is not None
     await db.flush()
     return completed
+
+
+async def release_idempotency_claim(
+    db: AsyncSession,
+    *,
+    key: str,
+    principal_id: str,
+    claim_token: str,
+) -> bool:
+    """Delete the record only if it is still the caller's in-progress claim.
+
+    Fenced like ``store_idempotency_response``: a claim another request took
+    over (reclaim) or a completed record is left untouched.
+    """
+    statement = (
+        delete(IdempotencyKey)
+        .where(
+            IdempotencyKey.key == key,
+            IdempotencyKey.principal_id == principal_id,
+            IdempotencyKey.claim_token == claim_token,
+            IdempotencyKey.status == "in_progress",
+        )
+        .returning(IdempotencyKey.id)
+    )
+    released = (await db.execute(statement)).scalar_one_or_none() is not None
+    await db.flush()
+    return released
 
 
 async def delete_expired_idempotency_keys(
@@ -220,6 +251,21 @@ async def _find_record(
     if for_update:
         statement = statement.with_for_update()
     return await db.scalar(statement)
+
+
+_BODY_MARKER = "__idempotent_body__"
+
+
+def _wrap_body(body: Any) -> Any:
+    if isinstance(body, dict) and _BODY_MARKER not in body:
+        return body
+    return {_BODY_MARKER: body}
+
+
+def _unwrap_body(stored: Any) -> Any:
+    if isinstance(stored, dict) and set(stored) == {_BODY_MARKER}:
+        return stored[_BODY_MARKER]
+    return stored
 
 
 def _is_stuck_in_progress(

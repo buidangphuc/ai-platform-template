@@ -34,8 +34,8 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +
 RATE_LIMIT. [`ops/compose/local.yaml`](../ops/compose/local.yaml) is the worked example of the
-whole stack except rate limit: api + worker + postgres + redis with QUEUE, TASKS
-and OUTBOX on. Flip `RATE_LIMIT_ENABLED` in `.env` on top of it. The worker is
+whole stack except rate limit: a one-shot `migrate` service (`alembic upgrade head`), then api + worker
++ postgres + redis with DATABASE, REDIS, QUEUE and TASKS on; the api listens on `127.0.0.1` only. Flip `RATE_LIMIT_ENABLED` in `.env` on top of it. The worker is
 `python -m scripts.run_worker`, the same command `make worker` runs locally.
 
 ## 2. Add a business domain (the one pattern to copy)
@@ -107,6 +107,16 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 | `otel` | opentelemetry-api, opentelemetry-sdk, opentelemetry-exporter-otlp-proto-http, opentelemetry-instrumentation-fastapi | OpenTelemetry traces and GenAI metrics (`OTEL_ENABLED=true`) |
 
 RabbitMQ `receive_count` drives dead-lettering after repeated failures. On a classic queue a message that keeps crashing the worker is only flagged "redelivered", so its count stops at 2. Set `RABBITMQ_QUEUE_TYPE=quorum` (or create the queue in a vhost whose default type is quorum) to get an exact count from the broker. Empty keeps the vhost default; changing the type of an existing queue requires deleting it first.
+
+Task delivery is at-least-once. `submit` stores the task and then sends one
+queue message; if the send fails the task stays `queued`. The worker's reclaim
+loop (`TASKS_RECLAIM_INTERVAL_SECONDS`) announces again every task that stayed
+`queued` for `TASKS_QUEUED_REANNOUNCE_SECONDS` and requeues `processing` tasks
+whose lease expired, so a task can be delivered twice and a handler must be
+idempotent. A handler runs under a timeout of `TASKS_LEASE_SECONDS`: it is
+cancelled, the task fails with `lease_exceeded` and the message is dead-lettered.
+A result that arrives after the task was settled is dropped (logged as
+`worker.result_dropped`), never written over the stored one.
 
 Dev installs everything: `uv sync --dev --all-extras` (what `make test` uses).
 A missing extra fails with an actionable message at the feature's entry point

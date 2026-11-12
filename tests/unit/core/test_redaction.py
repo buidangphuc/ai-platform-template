@@ -111,3 +111,31 @@ def test_redaction_leaves_plain_numbers_alone():
     text = "ticket 12345 on 2026-10-12 costs 1,500,000 dong"
 
     assert RedactionPolicy(mode="redacted").redact_text(text) == text
+
+
+def test_decimals_and_dates_are_not_phone_numbers():
+    text = "ratio 0.123456789 on 01-02-2026 12:30"
+
+    assert RedactionPolicy(mode="redacted").redact_text(text) == text
+
+
+@pytest.mark.parametrize(
+    "key", ["max_tokens", "input_tokens", "output_tokens", "total_tokens"]
+)
+def test_token_count_fields_are_kept(key: str):
+    policy = RedactionPolicy(mode="redacted")
+
+    assert policy.redact_mapping({key: 2048}) == {key: 2048}
+
+
+def test_non_string_mapping_key_does_not_raise():
+    policy = RedactionPolicy(mode="redacted")
+
+    payload = policy.redact_mapping({"nested": {1: "admin@example.com", "x": 2}})
+
+    assert payload == {"nested": {1: "[email]", "x": 2}}
+
+
+@pytest.mark.parametrize("text", ["0912345678", "+84 912 345 678"])
+def test_real_phone_numbers_are_still_redacted(text: str):
+    assert RedactionPolicy(mode="redacted").redact_text(text) == "[phone]"

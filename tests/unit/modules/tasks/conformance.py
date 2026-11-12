@@ -12,6 +12,7 @@ from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.store import (
     MAX_ATTEMPTS_EXCEEDED,
     TaskRecord,
+    TaskRef,
     TaskStore,
 )
 
@@ -135,7 +136,8 @@ class TaskStoreConformance:
     async def test_mark_completed_persists_result(self, store: TaskStore):
         task = _make_task()
         await store.create(task)
-        await store.mark_completed(task.id, {"answer": 42})
+        await store.mark_processing(task.id, lease_seconds=60)
+        assert await store.mark_completed(task.id, {"answer": 42}) is True
 
         fetched = await store.get(task.id)
         assert fetched is not None
@@ -145,7 +147,8 @@ class TaskStoreConformance:
     async def test_mark_failed_persists_error(self, store: TaskStore):
         task = _make_task()
         await store.create(task)
-        await store.mark_failed(task.id, "boom")
+        await store.mark_processing(task.id, lease_seconds=60)
+        assert await store.mark_failed(task.id, "boom") is True
 
         fetched = await store.get(task.id)
         assert fetched is not None
@@ -181,12 +184,13 @@ class TaskStoreConformance:
     ):
         task = _make_task()
         await store.create(task)
+        await store.mark_processing(task.id, lease_seconds=60)
         if terminal == "completed":
             await store.mark_completed(task.id, {"answer": 1})
         else:
             await store.mark_failed(task.id, "boom")
 
-        assert await store.mark_processing(task.id, lease_seconds=60) is False
+        assert await store.mark_processing(task.id, lease_seconds=3600) is False
 
         fetched = await store.get(task.id)
         assert fetched is not None
@@ -264,3 +268,119 @@ class TaskStoreConformance:
         )
         statuses = [(await store.get(t.id)).status for t in tasks]  # type: ignore[union-attr]
         assert statuses == [TaskStatus.FAILED] * 3
+
+    async def test_list_stale_queued_returns_old_queued_and_bumps_updated_at(
+        self, store: TaskStore
+    ):
+        task = _make_task(request_id="req_abc")
+        await store.create(task)
+        now = datetime.now(UTC) + timedelta(seconds=120)
+
+        first = await store.list_stale_queued(now=now, older_than_seconds=60, limit=10)
+        second = await store.list_stale_queued(
+            now=now + timedelta(seconds=10), older_than_seconds=60, limit=10
+        )
+        third = await store.list_stale_queued(
+            now=now + timedelta(seconds=61), older_than_seconds=60, limit=10
+        )
+
+        assert first == [TaskRef(id=task.id, type="completion", request_id="req_abc")]
+        assert second == []
+        assert [ref.id for ref in third] == [task.id]
+        fetched = await store.get(task.id)
+        assert fetched is not None
+        assert fetched.status == TaskStatus.QUEUED
+        assert fetched.updated_at == now + timedelta(seconds=61)
+
+    async def test_list_stale_queued_skips_fresh_expired_and_non_queued(
+        self, store: TaskStore
+    ):
+        queued = _make_task()
+        expired = _make_task(expires_at=datetime.now(UTC) + timedelta(seconds=60))
+        processing = _make_task()
+        completed = _make_task()
+        failed = _make_task()
+        for task in (queued, expired, processing, completed, failed):
+            await store.create(task)
+        for task in (processing, completed, failed):
+            await store.mark_processing(task.id, lease_seconds=1)
+        await store.mark_completed(completed.id, {"answer": 1})
+        await store.mark_failed(failed.id, "boom")
+        created = datetime.now(UTC)
+
+        fresh = await store.list_stale_queued(
+            now=created + timedelta(seconds=30), older_than_seconds=60, limit=10
+        )
+        stale = await store.list_stale_queued(
+            now=created + timedelta(seconds=120), older_than_seconds=60, limit=10
+        )
+
+        assert fresh == []
+        assert [ref.id for ref in stale] == [queued.id]
+
+    async def test_list_stale_queued_respects_limit(self, store: TaskStore):
+        tasks = [_make_task() for _ in range(3)]
+        for task in tasks:
+            await store.create(task)
+        now = datetime.now(UTC) + timedelta(seconds=120)
+
+        first = await store.list_stale_queued(now=now, older_than_seconds=60, limit=2)
+        second = await store.list_stale_queued(now=now, older_than_seconds=60, limit=2)
+
+        assert (len(first), len(second)) == (2, 1)
+        assert {ref.id for ref in (*first, *second)} == {t.id for t in tasks}
+
+    @pytest.mark.parametrize("first", ["completed", "failed"])
+    async def test_mark_completed_is_refused_after_settlement(
+        self, store: TaskStore, first: str
+    ):
+        task = await self._settled(store, first)
+
+        assert await store.mark_completed(task.id, {"answer": "late"}) is False
+
+        await self._assert_unchanged(store, task.id, first)
+
+    @pytest.mark.parametrize("first", ["completed", "failed"])
+    async def test_mark_failed_is_refused_after_settlement(
+        self, store: TaskStore, first: str
+    ):
+        task = await self._settled(store, first)
+
+        assert await store.mark_failed(task.id, "late") is False
+
+        await self._assert_unchanged(store, task.id, first)
+
+    async def test_settlement_is_refused_for_a_task_nobody_claimed(
+        self, store: TaskStore
+    ):
+        task = _make_task()
+        await store.create(task)
+
+        assert await store.mark_completed(task.id, {"answer": 1}) is False
+        assert await store.mark_failed(task.id, "boom") is False
+
+        fetched = await store.get(task.id)
+        assert fetched is not None and fetched.status == TaskStatus.QUEUED
+
+    async def test_settlement_of_an_unknown_task_raises(self, store: TaskStore):
+        with pytest.raises(KeyError):
+            await store.mark_completed("missing", {})
+        with pytest.raises(KeyError):
+            await store.mark_failed("missing", "boom")
+
+    async def _settled(self, store: TaskStore, how: str) -> TaskRecord:
+        task = _make_task()
+        await store.create(task)
+        await store.mark_processing(task.id, lease_seconds=60)
+        if how == "completed":
+            assert await store.mark_completed(task.id, {"answer": "first"}) is True
+        else:
+            assert await store.mark_failed(task.id, "first") is True
+        return task
+
+    async def _assert_unchanged(self, store: TaskStore, task_id: str, how: str):
+        fetched = await store.get(task_id)
+        assert fetched is not None
+        assert fetched.status.value == how
+        assert fetched.result == ({"answer": "first"} if how == "completed" else None)
+        assert fetched.error == (None if how == "completed" else "first")

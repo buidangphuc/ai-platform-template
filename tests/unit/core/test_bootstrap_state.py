@@ -76,21 +76,15 @@ def test_require_raises_service_unavailable_when_none() -> None:
     assert "disabled or lifespan" in exc_info.value.message
 
 
-class _NoopDispatcher:
-    async def dispatch(self, task_id: str, *, type: str) -> None:
-        return None
-
-
 def test_get_task_services_returns_feature_group() -> None:
     app = FastAPI()
     redis = Redis()
     store = RedisTaskStore(redis=redis, prefix="tasks")
-    dispatcher = _NoopDispatcher()
+    queue = RedisStreamQueueGateway(redis=redis, stream="queue")
     tasks = TaskServices(
-        service=TaskService(store=store, dispatcher=dispatcher),
+        service=TaskService(store=store, queue=queue),
         store=store,
-        dispatcher=dispatcher,
-        queue=RedisStreamQueueGateway(redis=redis, stream="queue"),
+        queue=queue,
     )
     app.state.resources = ApplicationResources(tasks=tasks)
 

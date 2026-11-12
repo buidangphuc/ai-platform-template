@@ -46,14 +46,11 @@ def _settings() -> Settings:
 
 
 async def test_worker_context_wires_all_components():
-    from app.modules.messaging.tasks.service import QueueTaskDispatcher
-
     async with worker_context(_settings()) as ctx:
         assert isinstance(ctx, WorkerContext)
         assert isinstance(ctx.worker, AsyncPollingWorker)
         assert isinstance(ctx.tasks.service, TaskService)
-        assert isinstance(ctx.tasks.dispatcher, QueueTaskDispatcher)
-        assert ctx.tasks.queue is ctx.tasks.dispatcher.queue
+        assert ctx.tasks.queue is ctx.tasks.service.queue
         assert ctx.tasks.store is ctx.tasks.service.store
         assert ctx.worker.max_concurrent == 4
 
@@ -102,6 +99,8 @@ async def test_worker_context_uses_the_same_handler_factory_as_the_api():
 
 async def test_worker_message_handler_marks_task_completed():
     class _Service:
+        lease_seconds = 300
+
         def __init__(self) -> None:
             self.processing: list[str] = []
             self.completed: list[tuple[str, dict]] = []
@@ -119,10 +118,11 @@ async def test_worker_message_handler_marks_task_completed():
             self.processing.append(task_id)
             return True
 
-        async def mark_completed(self, task_id: str, result: dict) -> None:
+        async def mark_completed(self, task_id: str, result: dict) -> bool:
             self.completed.append((task_id, result))
+            return True
 
-        async def mark_failed(self, task_id: str, error: str) -> None:
+        async def mark_failed(self, task_id: str, error: str) -> bool:
             pytest.fail("success path should not mark failed")
 
     service = _Service()
@@ -281,8 +281,16 @@ async def test_worker_entry_logs_redacted_settings(monkeypatch):
 class _ScriptedService:
     """TaskService stand-in: records transitions, claim result is scripted."""
 
-    def __init__(self, *, claims: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        claims: bool = True,
+        lease_seconds: float = 300,
+        settles: bool = True,
+    ) -> None:
         self.claims = claims
+        self.lease_seconds = lease_seconds
+        self.settles = settles
         self.completed: list[str] = []
         self.failed: list[tuple[str, str]] = []
 
@@ -298,11 +306,13 @@ class _ScriptedService:
     async def mark_processing(self, task_id: str) -> bool:
         return self.claims
 
-    async def mark_completed(self, task_id: str, result: dict) -> None:
+    async def mark_completed(self, task_id: str, result: dict) -> bool:
         self.completed.append(task_id)
+        return self.settles
 
-    async def mark_failed(self, task_id: str, error: str) -> None:
+    async def mark_failed(self, task_id: str, error: str) -> bool:
         self.failed.append((task_id, error))
+        return self.settles
 
 
 def _resources(completion_handler) -> ApplicationResources:
@@ -409,3 +419,80 @@ async def test_worker_handler_runs_the_task_under_the_submitting_request_id():
 
     assert seen == ["req_abc"]
     assert get_request_id() == "-"  # restored after the message
+
+
+async def test_handler_exceeding_the_lease_is_cancelled_and_task_failed():
+    import asyncio
+
+    cancelled = asyncio.Event()
+
+    class _Hanging:
+        async def complete(self, request):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async def stream(self, request): ...
+
+    service = _ScriptedService(lease_seconds=0.05)
+
+    with pytest.raises(NonRetryableMessageError):
+        await _handler(service, _Hanging())(
+            QueueMessage(id="m", body={"task_id": "t-1", "type": "completion"})
+        )
+
+    assert cancelled.is_set()
+    assert service.failed == [("t-1", "lease_exceeded")]
+    assert service.completed == []
+
+
+async def test_handler_timeout_inside_the_lease_is_an_ordinary_failure():
+    class _TimingOut:
+        async def complete(self, request):
+            raise TimeoutError("upstream timed out")
+
+        async def stream(self, request): ...
+
+    service = _ScriptedService()
+
+    with pytest.raises(NonRetryableMessageError):
+        await _handler(service, _TimingOut())(
+            QueueMessage(id="m", body={"task_id": "t-1", "type": "completion"})
+        )
+
+    [(_, error)] = service.failed
+    assert error.startswith("TimeoutError")
+
+
+async def test_late_result_is_dropped_not_applied():
+    from loguru import logger
+
+    lines: list[str] = []
+    sink_id = logger.add(lambda message: lines.append(message.record["message"]))
+    service = _ScriptedService(settles=False)
+    try:
+        await _handler(service)(
+            QueueMessage(id="m", body={"task_id": "t-1", "type": "completion"})
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert service.completed == ["t-1"]
+    assert any(line.startswith("worker.result_dropped task_id=t-1") for line in lines)
+
+
+async def test_late_failure_is_dropped_without_dead_lettering():
+    class _Failing:
+        async def complete(self, request):
+            raise RuntimeError("boom")
+
+        async def stream(self, request): ...
+
+    service = _ScriptedService(settles=False)
+
+    await _handler(service, _Failing())(
+        QueueMessage(id="m", body={"task_id": "t-1", "type": "completion"})
+    )
+
+    assert service.failed == [("t-1", "RuntimeError: task failed (see worker logs)")]

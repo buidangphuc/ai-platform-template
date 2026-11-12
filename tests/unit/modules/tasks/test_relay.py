@@ -1,11 +1,25 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.relay import run_cleanup_loop, run_reclaim_loop
-from app.modules.messaging.tasks.service import QueueTaskDispatcher, TaskService
+from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskRecord, TaskStore
+
+
+async def _wait_until(condition: Callable[[], Awaitable[bool] | bool]) -> None:
+    for _ in range(500):
+        outcome = condition()
+        if not isinstance(outcome, bool):
+            outcome = await outcome
+        if outcome:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("condition not met within 5s")
 
 
 async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops(
@@ -14,7 +28,7 @@ async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops(
     store, queue = task_store, redis_queue
     service = TaskService(
         store=store,
-        dispatcher=QueueTaskDispatcher(store, queue),
+        queue=queue,
         ttl_seconds=3600,
         lease_seconds=1,
     )
@@ -93,7 +107,8 @@ async def test_cleanup_loop_purges_expired_tasks_and_old_published_events_in_bat
             stop=stop,
         )
     )
-    await asyncio.sleep(0.1)
+    await _wait_until(lambda: outbox.remaining == 0)
+    await _wait_until(lambda: _gone(store, "old-0", "old-4"))
     stop.set()
     await asyncio.wait_for(loop, timeout=2)
 
@@ -122,7 +137,7 @@ async def test_cleanup_loop_purges_expired_idempotency_keys_in_batches(
             stop=stop,
         )
     )
-    await asyncio.sleep(0.1)
+    await _wait_until(lambda: idempotency.remaining == 0)
     stop.set()
     await asyncio.wait_for(loop, timeout=2)
 
@@ -137,6 +152,14 @@ async def test_cleanup_loop_without_an_outbox_only_purges_tasks(
     task_store: TaskStore,
 ):
     store = task_store
+    expired = TaskRecord(
+        id="old",
+        type="completion",
+        status=TaskStatus.COMPLETED,
+        payload={},
+        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    await store.create(expired)
     stop = asyncio.Event()
     loop = asyncio.create_task(
         run_cleanup_loop(
@@ -149,9 +172,13 @@ async def test_cleanup_loop_without_an_outbox_only_purges_tasks(
             stop=stop,
         )
     )
-    await asyncio.sleep(0.05)
+    await _wait_until(lambda: _gone(store, "old"))
     stop.set()
     await asyncio.wait_for(loop, timeout=2)
+
+
+async def _gone(store: TaskStore, *task_ids: str) -> bool:
+    return all([await store.get(task_id) is None for task_id in task_ids])
 
 
 class _CountingOutbox:

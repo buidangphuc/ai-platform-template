@@ -1,5 +1,18 @@
+x-uv-extras: &uv-extras
+  UV_EXTRAS: ai
+
 services:
+  migrate:
+    build:
+      args: *uv-extras
+
+  worker:
+    build:
+      args: *uv-extras
+
   api:
+    build:
+      args: *uv-extras
     environment:
       LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-true}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-lf_pk_local_ai_platform}

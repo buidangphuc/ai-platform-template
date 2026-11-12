@@ -74,6 +74,14 @@ service consumes interface/capability
 4. Scope: the service is built once per app in lifespan after resources open (`Feature.build`) and stored on `resources.services`; read it with `resources.service(<Domain>Service)`, which raises `ServiceUnavailableError` when the feature is disabled. No module-level singletons.
 5. A feature behind a `*_ENABLED` flag sets `enabled=lambda settings: settings.<DOMAIN>_ENABLED`: a disabled feature is not built, not mounted and not resolvable. Routes that need `TASKS_ENABLED` go in `task_routers`. A platform capability behind a flag still gets a feature group (e.g. `TaskServices`) and one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
 6. Background tasks: `tasks={TASK_TYPE: handler}` with `handler(resources, task) -> dict`; the worker dispatches by `task.type`. An unknown type fails the task and dead-letters the message; two features registering the same task type or service type fail at startup.
+
+### Task delivery
+
+One path on both task stores: `TaskService.submit` stores the row, then sends a `TaskMessage`; a failed send is logged and the task stays QUEUED. The worker's reclaim loop (`TaskService.reclaim_stale_processing`, every `TASKS_RECLAIM_INTERVAL_SECONDS`) requeues PROCESSING tasks whose lease expired and announces them, then announces QUEUED tasks whose `updated_at` is older than `TASKS_QUEUED_REANNOUNCE_SECONDS` (`TaskStore.list_stale_queued` bumps `updated_at`, so one announcement per interval). There is no task outbox; the generic outbox (`OUTBOX_ENABLED`) is a separate capability.
+
+- Guarantees: at-least-once delivery; a handler must be idempotent. `mark_processing` is the claim, so a duplicate message is skipped.
+- The lease bounds handler time: the worker runs each handler under `asyncio.timeout(TASKS_LEASE_SECONDS)`; on expiry the handler is cancelled, the task fails with `lease_exceeded` and the message is dead-lettered.
+- `mark_completed` / `mark_failed` are compare-and-set on PROCESSING and return whether they applied; the worker logs `worker.result_dropped` and drops a result that was not applied.
 7. ORM tables: list the model modules in `models=(...)`; `alembic/env.py` imports them.
 8. Endpoint functions read the service from `get_app_resources(request.app).service(<Domain>Service)`, parse HTTP input, call one service method, and return the existing response contract. No per-surface getter helpers.
 9. Tests: unit test for orchestration and failure modes; bootstrap test that lifespan composes the service (`tests/unit/core/test_features.py` shows a second feature); integration test for the API contract (tests run the app lifespan, see `tests/factories.py:api_client_for`; build the app with `create_app(features=(<domain>_feature(...),))`).

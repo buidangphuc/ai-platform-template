@@ -70,7 +70,7 @@ make docker-build
 make docker-run
 ```
 
-The Docker path is a local golden path only. It builds the image and runs the API, a worker, PostgreSQL, and Redis with `ops/compose/local.yaml`, with queue, tasks and outbox enabled.
+The Docker path is a local golden path only. It builds the image `ai-platform-template:local` and runs, with `ops/compose/local.yaml`, a one-shot `migrate` service (`alembic upgrade head`), then the API and a worker once it completes, plus PostgreSQL and Redis, with database, redis, queue and tasks enabled. Migrations run automatically; there is no manual `make migrate` step. The API is published on `127.0.0.1:8000` only (`API_PORT` changes the port, not the interface).
 
 To run the API with a local self-hosted Langfuse stack for AI tracing, prompt
 management, and eval scores:
@@ -81,7 +81,7 @@ cp ops/compose/langfuse.env.example .env.langfuse   # optional Langfuse override
 make docker-run-langfuse
 ```
 
-The Langfuse overlay is `ops/compose/langfuse.yaml`; `make docker-run-langfuse` layers it on `ops/compose/local.yaml` and loads `.env.langfuse` when present.
+The Langfuse overlay is `ops/compose/langfuse.yaml`; `make docker-run-langfuse` layers it on `ops/compose/local.yaml` and loads `.env.langfuse` when present. The overlay builds the image with the `ai` extra (`UV_EXTRAS=ai`) for the API, the worker and `migrate`, and sets `LANGFUSE_ENABLED`, the Langfuse keys and the in-network base URL for the API. A trace is produced only when the stack also runs with `LLM_ENABLED=true` and a non-empty `CHAT_MODEL` (plus that model's provider key) in `.env`; with `LLM_ENABLED=false` the echo handler makes no LLM call and nothing is traced.
 
 Langfuse is available at `http://localhost:3000`. The local project and API
 keys are bootstrapped from `.env` through Langfuse headless initialization. The
@@ -241,21 +241,30 @@ principal id. Reusing the same key with a different request returns
 this contract.
 
 Two route guards are provided as opt-in examples; no route in the template
-enables them. `require_quota(resource, cost=1)`
+enables them. `require_quota(policy, cost=1)`
 (`app.modules.platform.quota.http`) is a dependency that reserves quota for the
 principal before the handler runs and answers `429` with `Retry-After` when
-exceeded; it needs `QUOTA_ENABLED=true` and a policy for the resource:
+exceeded; it takes the `QuotaPolicy` that governs the route and needs
+`QUOTA_ENABLED=true`:
 
 ```python
-@router.post("/reports", dependencies=[Depends(require_quota("reports"))])
+REPORTS = QuotaPolicy("reports", limit=100, window_seconds=3600)
+
+
+@router.post("/reports", dependencies=[Depends(require_quota(REPORTS))])
 async def create_report(...): ...
 ```
 
 `@idempotent` (`app.modules.platform.idempotency.http`) wraps a synchronous
-route that declares `request: Request` and returns a dict or Pydantic model. A
-repeated `Idempotency-Key` replays the stored response (status 200) without
-running the handler; without the header the handler runs untouched. It needs
-`IDEMPOTENCY_ENABLED=true`:
+route that declares `request: Request`. A repeated `Idempotency-Key` replays the
+response the first request received without running the handler: the route's
+declared `status_code` and the body after `response_model` filtering (any JSON
+value: object, list, scalar or null). The request hash covers method, path,
+query string, body and principal, so the same key with another query string is a
+`409 idempotency_key_conflict`. If the handler raises or is cancelled the key is
+released and the next request with it runs the handler again. A handler that
+returns a `Response` object is not stored (its key is released). Without the
+header the handler runs untouched. It needs `IDEMPOTENCY_ENABLED=true`:
 
 ```python
 @router.post("/reports")
@@ -317,7 +326,12 @@ Without a factory, the scaffold `EchoCompletionHandler` answers. Both processes
 read the registry in `app/bootstrap/features/registry.py` (`FEATURES`), so register
 your handler factory there (`completions_feature(handler_factory=build_handler)`)
 to make the worker run it too. The async task routes (`/api/v1/completions/tasks`) are mounted
-only when `TASKS_ENABLED=true`.
+only when `TASKS_ENABLED=true`. Task delivery is at-least-once: submit stores the
+task and then sends one queue message, and the worker's reclaim loop announces
+again any task still `queued` after `TASKS_QUEUED_REANNOUNCE_SECONDS` (default 60),
+so a handler can run more than once for one task id and must be idempotent. A
+handler is cancelled after `TASKS_LEASE_SECONDS` and its task fails with
+`lease_exceeded`; a result that arrives after the task was settled is dropped.
 
 The app factory registers a FastAPI lifespan that calls
 `langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and

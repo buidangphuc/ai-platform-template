@@ -9,14 +9,13 @@ from app.core.config import Settings
 from tests.factories import build_test_settings
 
 
-def _outbox_settings() -> Settings:
+def _task_settings() -> Settings:
     return build_test_settings(
         DATABASE_ENABLED=True,
         QUEUE_ENABLED=True,
         REDIS_ENABLED=True,
         TASKS_ENABLED=True,
         TASK_STORE_BACKEND="postgres",
-        TASKS_DISPATCH_BACKEND="outbox",
         OUTBOX_ENABLED=True,
         OUTBOX_BACKEND="postgres",
     )
@@ -45,30 +44,22 @@ class _Addon:
         stack.callback(self.log.append, f"close:{self.name}")
 
 
-async def test_outbox_dispatch_writes_task_and_event_on_the_shared_sessionmaker():
+async def test_task_service_sends_on_the_queue_gateway_it_exposes():
     from app.bootstrap.addons.base import default_resource_addons
-    from app.modules.messaging.tasks.outbox import PostgresTaskOutboxDispatcher
 
     async with open_application_resources(
-        _outbox_settings(),
+        _task_settings(),
         init_resources=True,
         addons=default_resource_addons(),
     ) as resources:
         assert resources.tasks is not None
-        assert resources.outbox_store is not None
-        dispatcher = resources.tasks.dispatcher
-        assert isinstance(dispatcher, PostgresTaskOutboxDispatcher)
-        assert dispatcher.sessionmaker is resources.sessionmaker
+        assert resources.tasks.service.queue is resources.tasks.queue
+        assert resources.tasks.service.store is resources.tasks.store
+        assert resources.tasks.service.queued_reannounce_seconds == 60
 
 
-async def test_worker_owns_the_outbox_relay_reclaim_and_cleanup_loops():
-    async with worker_context(_outbox_settings()) as ctx:
-        assert len(ctx.loops) == 3
-
-
-async def test_worker_with_queue_dispatch_runs_reclaim_and_cleanup_only():
-    settings = _outbox_settings().model_copy(update={"TASKS_DISPATCH_BACKEND": "queue"})
-    async with worker_context(settings) as ctx:
+async def test_worker_owns_the_reclaim_and_cleanup_loops_and_no_relay():
+    async with worker_context(_task_settings()) as ctx:
         assert len(ctx.loops) == 2
 
 

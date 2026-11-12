@@ -361,14 +361,57 @@ def test_graceful_shutdown_is_on_by_default():
     assert build_test_settings().GRACEFUL_SHUTDOWN_ENABLED is True
 
 
-def test_llm_chain_deadline_must_cover_one_call_timeout():
+def test_chain_deadline_must_cover_the_retry_budget():
     settings = build_test_settings(
-        LLM_TIMEOUT_SECONDS=30, LLM_CHAIN_DEADLINE_SECONDS=30
+        LLM_TIMEOUT_SECONDS=30, LLM_MAX_RETRIES=1, LLM_CHAIN_DEADLINE_SECONDS=60
     )
-    assert settings.LLM_CHAIN_DEADLINE_SECONDS == 30
+    assert settings.LLM_CHAIN_DEADLINE_SECONDS == 60
+
+    with pytest.raises(ValidationError) as raised:
+        build_test_settings(
+            LLM_TIMEOUT_SECONDS=60, LLM_MAX_RETRIES=1, LLM_CHAIN_DEADLINE_SECONDS=90
+        )
+    message = str(raised.value)
+    for name in (
+        "LLM_CHAIN_DEADLINE_SECONDS",
+        "LLM_TIMEOUT_SECONDS",
+        "LLM_MAX_RETRIES",
+    ):
+        assert name in message
 
     with pytest.raises(ValidationError, match="LLM_CHAIN_DEADLINE_SECONDS"):
-        build_test_settings(LLM_TIMEOUT_SECONDS=60, LLM_CHAIN_DEADLINE_SECONDS=30)
+        build_test_settings(
+            LLM_TIMEOUT_SECONDS=30, LLM_MAX_RETRIES=0, LLM_CHAIN_DEADLINE_SECONDS=20
+        )
+
+
+def test_default_llm_settings_satisfy_the_budget_rule():
+    settings = build_test_settings()
+
+    assert settings.LLM_TIMEOUT_SECONDS == 30
+    assert settings.LLM_CHAIN_DEADLINE_SECONDS >= settings.LLM_TIMEOUT_SECONDS * (
+        settings.LLM_MAX_RETRIES + 1
+    )
+    assert Settings.model_fields["LLM_TIMEOUT_SECONDS"].default == 30
+
+
+def _locked_down(**overrides: object):
+    return build_test_settings(
+        ENVIRONMENT="production",
+        AUTH_API_KEYS=PROD_KEYS,
+        DOCS_ENABLED=False,
+        CORS_ALLOW_ORIGINS="https://app.example.com",
+        TRUSTED_HOSTS="api.example.com",
+        **overrides,
+    )
+
+
+def test_production_rejects_llm_enabled_without_chat_model():
+    with pytest.raises(ValidationError, match="CHAT_MODEL"):
+        _locked_down(LLM_ENABLED=True, CHAT_MODEL="")
+
+    assert _locked_down(LLM_ENABLED=True, CHAT_MODEL="openai:m").LLM_ENABLED is True
+    assert _locked_down(LLM_ENABLED=False).CHAT_MODEL == ""
 
 
 @pytest.mark.parametrize(

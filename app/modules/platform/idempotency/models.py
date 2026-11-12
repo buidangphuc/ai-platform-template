@@ -49,7 +49,7 @@ class IdempotencyKey(Base, TimestampMixin):
     # claimed before the column existed (they can only expire or be reclaimed).
     claim_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     response_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    response_body: Mapped[dict[str, Any] | None] = mapped_column(
+    response_body: Mapped[Any | None] = mapped_column(
         JSONB_TYPE,
         nullable=True,
     )

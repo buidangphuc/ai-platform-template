@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from contextlib import AsyncExitStack
 
-from app.bootstrap.resources import ApplicationResources, opened
+from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
+from app.core.redis import build_redis_client
 from app.modules.platform.cache.factory import build_redis_cache_gateway
 from app.modules.platform.cache.gateway import CacheGateway
 
@@ -25,8 +26,8 @@ class CacheAddon:
         cache: CacheGateway
         match settings.CACHE_BACKEND:
             case "redis":
-                cache = build_redis_cache_gateway(
-                    settings, opened(resources.redis, "redis")
-                )
+                redis = build_redis_client(settings, decode_responses=False)
+                stack.push_async_callback(redis.aclose)
+                cache = build_redis_cache_gateway(settings, redis)
         stack.push_async_callback(cache.close)
         resources.cache = cache

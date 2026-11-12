@@ -22,10 +22,12 @@ class AISettingsMixin(BaseModel):
     # breaker only sees a call after the SDK has exhausted its retries, so each
     # extra retry multiplies the latency before failover can engage.
     LLM_MAX_TOKENS: int = Field(default=2048, gt=0, le=200_000)
-    LLM_TIMEOUT_SECONDS: float = Field(default=60.0, gt=0, le=600)
+    LLM_TIMEOUT_SECONDS: float = Field(default=30.0, gt=0, le=600)
     LLM_MAX_RETRIES: int = Field(default=1, ge=0, le=5)
     # Overall budget for one ``LLMInstance.ainvoke`` across the whole fallback
-    # chain; without it a 3-model chain can cost 3x LLM_TIMEOUT_SECONDS.
+    # chain; without it a 3-model chain can cost 3x LLM_TIMEOUT_SECONDS. It must
+    # cover one target's full retry budget, LLM_TIMEOUT_SECONDS * (LLM_MAX_RETRIES
+    # + 1), or a hung primary eats the whole chain before the fallback is tried.
     LLM_CHAIN_DEADLINE_SECONDS: float = Field(default=90.0, gt=0, le=1800)
     # Primary-model circuit breaker: consecutive transient failures (429, 5xx,
     # timeouts, connection errors) before failover, and the cooldown before the
@@ -34,10 +36,13 @@ class AISettingsMixin(BaseModel):
     LLM_BREAKER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0)
 
     @model_validator(mode="after")
-    def _chain_deadline_covers_one_call(self) -> AISettingsMixin:
-        if self.LLM_CHAIN_DEADLINE_SECONDS < self.LLM_TIMEOUT_SECONDS:
+    def _chain_deadline_covers_the_retry_budget(self) -> AISettingsMixin:
+        budget = self.LLM_TIMEOUT_SECONDS * (self.LLM_MAX_RETRIES + 1)
+        if budget > self.LLM_CHAIN_DEADLINE_SECONDS:
             raise ValueError(
-                "LLM_CHAIN_DEADLINE_SECONDS must be >= LLM_TIMEOUT_SECONDS"
+                "LLM_CHAIN_DEADLINE_SECONDS must be >= LLM_TIMEOUT_SECONDS * "
+                f"(LLM_MAX_RETRIES + 1) = {budget:g}, "
+                f"got {self.LLM_CHAIN_DEADLINE_SECONDS:g}"
             )
         return self
 

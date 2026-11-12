@@ -1,22 +1,29 @@
+import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
+from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
-from app.core.errors import AppError
+from app.core.errors import AppError, register_exception_handlers
 from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
 from app.modules.platform.idempotency.http import (
     IdempotentCall,
     get_idempotency_key,
+    idempotent,
     replay_or_start_idempotent_request,
     store_idempotent_response,
 )
 from app.modules.platform.idempotency.models import IdempotencyKey
+from app.modules.platform.identity.auth import require_principal
 from tests.factories import build_test_settings
 
 
@@ -230,3 +237,175 @@ async def test_idempotency_boundary_fails_clearly_when_disabled():
 
     assert exc_info.value.code == "idempotency_disabled"
     assert exc_info.value.status_code == 503
+
+
+HEADERS = {"Authorization": "Bearer test-token", "Idempotency-Key": "k1"}
+
+
+class Public(BaseModel):
+    id: int
+    name: str = "unnamed"
+
+
+Install = Callable[[APIRouter], None]
+
+
+@pytest.fixture
+def served(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+) -> Callable[[Install], Any]:
+    def build(install: Install) -> AsyncClient:
+        router = APIRouter(dependencies=[Depends(require_principal)])
+        install(router)
+        app = _app_with_idempotency(pg_sessionmaker)
+        register_exception_handlers(app)
+        app.include_router(router)
+        return AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        )
+
+    return build
+
+
+async def test_failed_handler_releases_the_key(served, pg_sessionmaker):
+    calls: list[int] = []
+
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs")
+        @idempotent
+        async def jobs(request: Request) -> dict[str, int]:
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return {"run": len(calls)}
+
+    async with served(install) as client:
+        first = await client.post("/jobs", headers=HEADERS, json={"a": 1})
+        assert first.status_code == 500
+        assert await _rows(pg_sessionmaker) == []
+
+        second = await client.post("/jobs", headers=HEADERS, json={"a": 1})
+
+    assert second.status_code == 200
+    assert second.json() == {"run": 2}
+    assert calls == [1, 1]
+
+
+async def test_cancelled_handler_releases_the_key(served, pg_sessionmaker):
+    entered = asyncio.Event()
+    calls: list[int] = []
+
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs")
+        @idempotent
+        async def jobs(request: Request) -> dict[str, int]:
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set()
+                await asyncio.Event().wait()
+            return {"run": len(calls)}
+
+    async with served(install) as client:
+        pending = asyncio.create_task(client.post("/jobs", headers=HEADERS))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        assert await _rows(pg_sessionmaker) == []
+
+        second = await client.post("/jobs", headers=HEADERS)
+
+    assert second.status_code == 200
+    assert second.json() == {"run": 2}
+
+
+async def test_replay_uses_the_declared_status_code(served):
+    calls: list[int] = []
+
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs", status_code=201)
+        @idempotent
+        async def jobs(request: Request) -> dict[str, int]:
+            calls.append(1)
+            return {"run": len(calls)}
+
+    async with served(install) as client:
+        first = await client.post("/jobs", headers=HEADERS)
+        second = await client.post("/jobs", headers=HEADERS)
+
+    assert first.status_code == second.status_code == 201
+    assert first.json() == second.json() == {"run": 1}
+    assert len(calls) == 1
+
+
+async def test_replay_is_filtered_by_the_response_model(served, pg_sessionmaker):
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs", response_model=Public)
+        @idempotent
+        async def jobs(request: Request) -> dict[str, Any]:
+            return {"id": 7, "name": "seven", "hidden": "internal"}
+
+    async with served(install) as client:
+        first = await client.post("/jobs", headers=HEADERS)
+        second = await client.post("/jobs", headers=HEADERS)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json() == {"id": 7, "name": "seven"}
+    [row] = await _rows(pg_sessionmaker)
+    assert "hidden" not in str(row.response_body)
+
+
+async def test_replay_honours_the_response_model_options(served):
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs", response_model=Public, response_model_exclude_unset=True)
+        @idempotent
+        async def jobs(request: Request) -> Public:
+            return Public(id=3)
+
+    async with served(install) as client:
+        first = await client.post("/jobs", headers=HEADERS)
+        second = await client.post("/jobs", headers=HEADERS)
+
+    assert first.json() == second.json() == {"id": 3}
+
+
+@pytest.mark.parametrize("body", [[1, "two", {"three": 3}], [], "text", 7, None])
+async def test_list_body_is_stored_and_replayed(served, body):
+    calls: list[int] = []
+
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs")
+        @idempotent
+        async def jobs(request: Request) -> Any:
+            calls.append(1)
+            return body
+
+    async with served(install) as client:
+        first = await client.post("/jobs", headers=HEADERS)
+        second = await client.post("/jobs", headers=HEADERS)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json() == body
+    assert len(calls) == 1
+
+
+async def test_query_string_is_part_of_the_request_hash(served):
+    calls: list[str] = []
+
+    def install(router: APIRouter) -> None:
+        @router.post("/jobs")
+        @idempotent
+        async def jobs(request: Request) -> dict[str, str]:
+            calls.append(request.url.query)
+            return {"query": request.url.query}
+
+    async with served(install) as client:
+        first = await client.post("/jobs?mode=a", headers=HEADERS)
+        same = await client.post("/jobs?mode=a", headers=HEADERS)
+        other = await client.post("/jobs?mode=b", headers=HEADERS)
+
+    assert first.json() == same.json() == {"query": "mode=a"}
+    assert other.status_code == 409
+    assert other.json()["error"]["code"] == "idempotency_key_conflict"
+    assert calls == ["mode=a"]

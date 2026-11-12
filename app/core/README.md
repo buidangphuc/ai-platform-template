@@ -36,7 +36,7 @@ config/
 ├── __init__.py       # Settings composed + get_settings() + production safety + redacted_summary
 ├── runtime.py        # Environment enum, project metadata, logging, graceful shutdown
 ├── http.py           # CORS, trusted hosts, body limit, security headers, gzip, request timeout
-├── infra.py          # Postgres + Redis
+├── infra.py          # Postgres + Redis; POSTGRES_URL is built with SQLAlchemy URL.create (percent-encoded password)
 ├── mongo.py          # Mongo (MONGO_ENABLED, MONGODB_URI, timeouts) — disabled by default
 ├── conversations.py  # CONVERSATIONS_ENABLED + its requirements
 ├── ai.py             # LLM router + Langfuse + RAG (pgvector on Postgres)
@@ -163,14 +163,16 @@ server) = one `register` call in its opener, no change in `health.py`.
 
 | Class | Role |
 |---|---|
-| `AccessLogMiddleware` | Logs method/path/status/duration/principal/request_id |
-| `RequestBodyLimitMiddleware` | Reject bodies > `MAX_REQUEST_BODY_BYTES` |
+| `AccessLogMiddleware` | Logs method/path/status/duration/principal/request_id; the status is the one the client received |
+| `RequestBodyLimitMiddleware` | Reject bodies > `MAX_REQUEST_BODY_BYTES` with 413: by `Content-Length`, or while the body is read (chunked). If the application answers the failed read with its own error response (FastAPI turns it into 400) and no response has started, that response is replaced by the 413 envelope; a response already started is left alone |
 | `SecurityHeadersMiddleware` | HSTS + standard security headers |
 | `InFlightTracker` + `InFlightTrackerMiddleware` | Drains in-flight requests during graceful shutdown |
 | `RequestTimeoutMiddleware` | Wraps handler in `asyncio.wait_for`. Exclude paths via `REQUEST_TIMEOUT_EXCLUDE_PATTERNS` |
 | `IPRateLimitMiddleware` | Per-IP rate limit; reads `app.state.resources.ip_rate_limiter` lazily (works even before lifespan opens limiters) |
 
-Install order is set by `app/bootstrap/middleware.py::install_core_middlewares()`. Middleware that reads from `app.state.resources` uses lazy lookup at request time — middleware is added during `create_app`, resources are built during lifespan.
+Exclude patterns (`REQUEST_TIMEOUT_EXCLUDE_PATTERNS`, `RATE_LIMIT_EXCLUDE_PATHS`) are matched by `path_matches_any`: a pattern matches when its segments appear as consecutive whole segments of the path (`/stream` matches `/api/v1/completions/stream`, not `/api/v1/streamers/1`).
+
+Install order is set by `app/bootstrap/middleware.py::install_core_middlewares()`, which registers innermost first because the last `add_middleware` call becomes the outermost layer. Outermost first: request id, access log, CORS, security headers, trusted host, IP rate limit, request timeout, gzip, in-flight tracker, body limit. Access log and CORS sit outside the middlewares that short-circuit (429, 504, 413, 400 for an untrusted host), so those responses are logged with their real status and carry CORS and security headers; a CORS preflight is answered by the CORS layer before it reaches the rate limiter. Middleware that reads from `app.state.resources` uses lazy lookup at request time — middleware is added during `create_app`, resources are built during lifespan.
 
 ---
 
@@ -208,16 +210,16 @@ Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (per-target circ
 
 Two functions only:
 
-- `build_redis_client(settings) -> Redis` — single async client with timeout config
+- `build_redis_client(settings, *, decode_responses=True) -> Redis` — async client with timeout config; responses decode to `str` by default, `decode_responses=False` returns raw bytes
 - `check_redis_connection(redis) -> None` — ping for health check
 
-The client is owned by `app.state.resources.redis` and shared across cache, rate_limit, queue, task store. (Idempotency is postgres-backed via `PostgresIdempotencyStore`, not Redis.) Don't close it from individual modules — bootstrap closes it on shutdown.
+The decoding client is owned by `app.state.resources.redis` and shared across rate_limit, queue, task store. The cache addon opens its own non-decoding client (cache values are arbitrary bytes) and closes it on the stack. (Idempotency is postgres-backed via `PostgresIdempotencyStore`, not Redis.) Don't close it from individual modules — bootstrap closes it on shutdown.
 
 ---
 
 ## request_context.py
 
-- `RequestIdMiddleware` — generates or accepts `X-Request-ID` header, stores in `request.state.request_id`, emits in response
+- `RequestIdMiddleware` — accepts an incoming `X-Request-ID` only when it matches `[A-Za-z0-9._-]{1,128}`, otherwise generates `req_<hex>`; stores it in `request.state.request_id` and emits it in the response. `resolve_request_id(raw)` holds the rule and is the only place that reads the incoming header value (the body-limit, timeout and rate-limit envelopes use it too)
 - `get_request_id()` — ContextVar accessor (works inside background tasks and logger)
 - `set_request_id(value)` / `reset_request_id(token)` — for tests / manual control
 
@@ -253,6 +255,8 @@ policy.redact_mapping(metadata) # redacts dict values, keeps keys
 Modes: `"full"` passes text through unchanged, `"redacted"` (default) strips
 email/bearer/secret patterns, `"off"` replaces content with `"[redacted]"`
 entirely.
+
+Redacted mode leaves decimals, dates and token-count keys (`max_tokens`, `input_tokens`, ...) alone, and mapping keys that are not strings are kept as they are. Phone numbers use one kind of separator; a leading `0` is followed directly by a digit.
 
 Used by `app/modules/ai/rag/service.py` before indexing documents (so vector store never contains raw PII).
 

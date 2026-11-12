@@ -46,6 +46,24 @@ def test_model_router_uses_fake_model_when_default_model_is_empty():
     assert isinstance(router.chat_model("default"), FakeListChatModel)
 
 
+def test_local_allows_fake_model_and_warns_once():
+    from loguru import logger
+
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, level="WARNING")
+    try:
+        router = ModelRouter(_settings(LLM_ENABLED=True, ENVIRONMENT="local"))
+        first = router.chat_model("default")
+        second = ModelRouter.model_for(router, "")
+    finally:
+        logger.remove(sink_id)
+
+    assert isinstance(first, FakeListChatModel)
+    assert first is second
+    assert len(messages) == 1
+    assert "CHAT_MODEL" in messages[0]
+
+
 def test_model_router_uses_judge_model_when_configured():
     created: list[str] = []
 

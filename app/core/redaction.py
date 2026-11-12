@@ -13,8 +13,12 @@ _SECRET_PATTERNS = (
 # 13-19 digits, optionally grouped by single spaces/dashes; Luhn decides.
 _CARD_CANDIDATE = re.compile(r"(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)")
 # Vietnamese numbers (0xxxxxxxxx / +84xxxxxxxxx) and E.164-style international ones.
+# A leading 0 is followed by a digit and a number uses one kind of separator, so
+# decimals (0.123456789) and dates (01-02-2026 12:30) are not phone numbers.
 _PHONE = re.compile(
-    r"(?<![\w+])(?:\+84|0)(?:[ .-]?\d){9}(?!\d)"
+    r"(?<![\w+])(?<!\d[.,:-])(?:"
+    + "|".join(rf"(?:\+84{sep}?|0)\d(?:{sep}?\d){{8}}" for sep in (" ", r"\.", "-"))
+    + r")(?!\d)"
     r"|(?<![\w+])\+\d{1,3}(?:[ .-]?\d){7,12}(?!\d)"
 )
 _SECRET_KEY_MARKERS = (
@@ -26,6 +30,9 @@ _SECRET_KEY_MARKERS = (
     "password",
     "secret",
     "pepper",
+)
+_TOKEN_COUNT_KEY = re.compile(
+    r"(?:max|min|input|output|prompt|completion|total|cached|reasoning)_tokens"
 )
 
 
@@ -87,6 +94,6 @@ class RedactionPolicy:
             return [self._redact_value(item) for item in value]
         return value
 
-    def _is_secret_key(self, key: str) -> bool:
-        normalized = key.lower().replace("-", "_")
+    def _is_secret_key(self, key: object) -> bool:
+        normalized = _TOKEN_COUNT_KEY.sub("", str(key).lower().replace("-", "_"))
         return any(marker in normalized for marker in _SECRET_KEY_MARKERS)

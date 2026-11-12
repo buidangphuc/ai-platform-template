@@ -25,12 +25,7 @@ from app.modules.messaging.tasks.factory import (
     build_postgres_task_store,
     build_redis_task_store,
 )
-from app.modules.messaging.tasks.outbox import PostgresTaskOutboxDispatcher
-from app.modules.messaging.tasks.service import (
-    QueueTaskDispatcher,
-    TaskDispatcher,
-    TaskService,
-)
+from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskStore
 from app.modules.platform.http.upstream import Upstream, UpstreamClient
 
@@ -68,7 +63,6 @@ class TaskServices:
 
     service: TaskService
     store: TaskStore
-    dispatcher: TaskDispatcher
     queue: QueueGateway
 
 
@@ -224,7 +218,7 @@ def _open_tasks(
     settings: Settings,
     stack: AsyncExitStack,
 ) -> None:
-    """Compose the task feature group (store, dispatcher, service)."""
+    """Compose the task feature group (store, queue, service)."""
     if not settings.TASKS_ENABLED:
         return
     queue = opened(resources.queue_gateway, "queue gateway")
@@ -237,25 +231,15 @@ def _open_tasks(
             store = build_redis_task_store(settings, opened(resources.redis, "redis"))
     stack.push_async_callback(store.close)
 
-    dispatcher: TaskDispatcher
-    match settings.TASKS_DISPATCH_BACKEND:
-        case "queue":
-            dispatcher = QueueTaskDispatcher(store, queue)
-        case "outbox":
-            # Settings guarantee TASK_STORE_BACKEND=postgres: the dispatcher
-            # writes task + outbox event in one transaction on this sessionmaker.
-            dispatcher = PostgresTaskOutboxDispatcher(
-                opened(resources.sessionmaker, "sessionmaker")
-            )
     resources.tasks = TaskServices(
         service=TaskService(
             store=store,
-            dispatcher=dispatcher,
+            queue=queue,
             ttl_seconds=settings.TASK_TTL_SECONDS,
             lease_seconds=settings.TASKS_LEASE_SECONDS,
+            queued_reannounce_seconds=settings.TASKS_QUEUED_REANNOUNCE_SECONDS,
         ),
         store=store,
-        dispatcher=dispatcher,
         queue=queue,
     )
 

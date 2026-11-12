@@ -10,10 +10,15 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.outputs import ChatGenerationChunk
 
+from app.core.config import Settings
 from app.core.errors import ServiceUnavailableError
 from app.core.resilience import BreakerState, is_transient_error
 from app.modules.ai.llm.langfuse import LLMTraceContext
-from app.modules.ai.llm.runtime import LLMDeadlineExceeded, build_llm_instance
+from app.modules.ai.llm.runtime import (
+    LLMDeadlineExceeded,
+    StreamTimeoutError,
+    build_llm_instance,
+)
 
 
 class _StatusError(Exception):
@@ -347,6 +352,64 @@ async def test_a_call_inside_the_deadline_is_unaffected(test_settings):
     assert response.content == "a"
 
 
+class APITimeoutError(Exception):
+    pass
+
+
+class _SdkTimeoutModel(FakeListChatModel):
+    attempt_seconds: float
+    attempts: int
+
+    async def _agenerate(self, *args, **kwargs):
+        for _ in range(self.attempts):
+            await asyncio.sleep(self.attempt_seconds)
+        raise APITimeoutError("Request timed out.")
+
+
+async def test_hung_primary_reaches_the_fallback_within_the_deadline(test_settings):
+    scale = 0.01
+    defaults = {
+        name: Settings.model_fields[name].default
+        for name in (
+            "LLM_TIMEOUT_SECONDS",
+            "LLM_MAX_RETRIES",
+            "LLM_CHAIN_DEADLINE_SECONDS",
+        )
+    }
+    timeout = defaults["LLM_TIMEOUT_SECONDS"] * scale
+    settings = test_settings.model_copy(
+        update={
+            "CHAT_MODEL": "primary",
+            "CHAT_FALLBACK_MODELS": "secondary",
+            "LLM_TIMEOUT_SECONDS": timeout,
+            "LLM_MAX_RETRIES": defaults["LLM_MAX_RETRIES"],
+            "LLM_CHAIN_DEADLINE_SECONDS": defaults["LLM_CHAIN_DEADLINE_SECONDS"]
+            * scale,
+        }
+    )
+
+    budget = timeout * (settings.LLM_MAX_RETRIES + 1)
+    assert settings.LLM_CHAIN_DEADLINE_SECONDS - budget >= 0.3
+
+    def build(target: str) -> BaseChatModel:
+        if target == "primary":
+            return _SdkTimeoutModel(
+                responses=[target],
+                attempt_seconds=timeout,
+                attempts=settings.LLM_MAX_RETRIES + 1,
+            )
+        return FakeListChatModel(responses=[target])
+
+    instance = build_llm_instance(
+        settings, instance_id="t", service_name="test", model_builder=build
+    )
+
+    response = await instance.ainvoke([HumanMessage(content="hi")])
+
+    assert response.content == "secondary"
+    assert instance.router._breakers[("default", "primary")].failure_count == 1
+
+
 class _StreamModel(FakeListChatModel):
     script: list[object]
 
@@ -472,3 +535,79 @@ async def test_astream_honours_the_chain_deadline(test_settings):
 
     with pytest.raises(LLMDeadlineExceeded):
         await _collect(instance)
+
+
+class _StalledStartModel(_StreamModel):
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        await asyncio.sleep(5)
+        yield ChatGenerationChunk(message=AIMessageChunk(content="never"))
+
+
+def _stall_instance(test_settings, targets: dict[str, BaseChatModel], **overrides):
+    settings = test_settings.model_copy(
+        update={
+            "CHAT_MODEL": next(iter(targets)),
+            "CHAT_FALLBACK_MODELS": ",".join(list(targets)[1:]),
+            "LLM_BREAKER_FAILURE_THRESHOLD": 2,
+            **overrides,
+        }
+    )
+    return build_llm_instance(
+        settings,
+        instance_id="t",
+        service_name="test",
+        model_builder=lambda target: targets[target],
+        sink=(sink := _CapturingSink()),
+    ), sink
+
+
+class _CapturingSink:
+    def __init__(self) -> None:
+        self.observations: list = []
+
+    def record_llm(self, observation) -> None:
+        self.observations.append(observation)
+
+
+async def test_first_token_stall_fails_over_and_counts_for_the_breaker(test_settings):
+    instance, sink = _stall_instance(
+        test_settings,
+        {
+            "primary": _StalledStartModel(responses=["p"], script=["x"]),
+            "secondary": _StreamModel(responses=["s"], script=["s1", "s2"]),
+        },
+    )
+
+    assert await _collect(instance, first_token_timeout=0.05) == ["s1", "s2"]
+
+    breakers = instance.router._breakers
+    assert breakers[("default", "primary")].failure_count == 1
+    assert breakers[("default", "secondary")].failure_count == 0
+    assert [o.outcome for o in sink.observations] == ["ok"]
+
+
+async def test_first_token_stall_without_fallback_raises_stream_timeout(test_settings):
+    instance, sink = _stall_instance(
+        test_settings,
+        {"primary": _StalledStartModel(responses=["p"], script=["x"])},
+    )
+
+    with pytest.raises(StreamTimeoutError):
+        await _collect(instance, first_token_timeout=0.05)
+
+    assert [o.outcome for o in sink.observations] == ["timeout"]
+
+
+async def test_first_token_stall_on_every_target_raises_stream_timeout(test_settings):
+    instance, sink = _stall_instance(
+        test_settings,
+        {
+            "primary": _StalledStartModel(responses=["p"], script=["x"]),
+            "secondary": _StalledStartModel(responses=["s"], script=["x"]),
+        },
+    )
+
+    with pytest.raises(StreamTimeoutError):
+        await _collect(instance, first_token_timeout=0.05)
+
+    assert [o.outcome for o in sink.observations] == ["timeout"]

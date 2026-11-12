@@ -196,9 +196,12 @@ class LLMInstance:
         chunk; once a chunk was yielded an error propagates. The chain deadline
         bounds the wait for the first chunk of every attempt.
         ``first_token_timeout`` bounds the wait for the first chunk and
-        ``idle_timeout`` the gap between chunks; a missed one raises
-        ``StreamTimeoutError``. Like the chain deadline it is our budget, so the
-        attempt is released without counting against the target's breaker.
+        ``idle_timeout`` the gap between chunks. A missed first-token timeout is
+        a transient failure of that target: it counts against its breaker and
+        the walk moves to the next target while the chain deadline allows,
+        raising ``StreamTimeoutError`` when none is left. A missed idle timeout
+        comes after output reached the client, so it raises ``StreamTimeoutError``
+        and releases the attempt without counting against the breaker.
         """
         call = _Call("stream", self.sink)
         outcome: Outcome = "disconnected"  # what a closed or cancelled stream means
@@ -239,8 +242,15 @@ class LLMInstance:
                         except Exception as exc:
                             settled = True
                             if stall.expired():
-                                self.router.release(target, role=role)
-                                raise StreamTimeoutError from None
+                                if started:
+                                    self.router.release(target, role=role)
+                                    raise StreamTimeoutError from None
+                                stalled = StreamTimeoutError()
+                                self.router.record_error(
+                                    target, error=stalled, role=role
+                                )
+                                last_error = stalled
+                                break
                             if budget.expired():
                                 self.router.release(target, role=role)
                                 raise LLMDeadlineExceeded(deadline_seconds) from exc

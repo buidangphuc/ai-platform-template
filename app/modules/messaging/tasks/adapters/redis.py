@@ -70,15 +70,63 @@ class RedisTaskStore:
             raise KeyError(task_id)
         return applied
 
-    async def mark_completed(self, task_id: str, result: dict[str, Any]) -> None:
-        await self._update(
-            task_id, status=TaskStatus.COMPLETED, result=result, locked_until=None
-        )
+    async def mark_completed(self, task_id: str, result: dict[str, Any]) -> bool:
+        def settle(task: TaskRecord) -> bool:
+            if task.status != TaskStatus.PROCESSING:
+                return False
+            task.status = TaskStatus.COMPLETED
+            task.result = result
+            task.locked_until = None
+            task.updated_at = datetime.now(UTC)
+            return True
 
-    async def mark_failed(self, task_id: str, error: str) -> None:
-        await self._update(
-            task_id, status=TaskStatus.FAILED, error=error, locked_until=None
-        )
+        return await self._settle(task_id, settle)
+
+    async def mark_failed(self, task_id: str, error: str) -> bool:
+        def settle(task: TaskRecord) -> bool:
+            if task.status != TaskStatus.PROCESSING:
+                return False
+            task.status = TaskStatus.FAILED
+            task.error = error
+            task.locked_until = None
+            task.updated_at = datetime.now(UTC)
+            return True
+
+        return await self._settle(task_id, settle)
+
+    async def list_stale_queued(
+        self, *, now: datetime, older_than_seconds: float, limit: int
+    ) -> list[TaskRef]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        cutoff = now - timedelta(seconds=older_than_seconds)
+        announced: list[TaskRef] = []
+
+        def claim(task: TaskRecord) -> bool:
+            if task.status != TaskStatus.QUEUED or task.expires_at <= now:
+                return False
+            last_touched = task.updated_at or task.created_at
+            if last_touched is not None and last_touched >= cutoff:
+                return False
+            task.updated_at = now
+            return True
+
+        cursor = 0
+        while len(announced) < limit:
+            cursor, keys = await self.redis.scan(
+                cursor=cursor, match=f"{self.prefix}:*", count=200
+            )
+            for raw_key in keys:
+                if len(announced) >= limit:
+                    break
+                task, applied = await self._transition(_decode(raw_key), claim)
+                if task is not None and applied:
+                    announced.append(
+                        TaskRef(id=task.id, type=task.type, request_id=task.request_id)
+                    )
+            if cursor == 0:
+                break
+        return announced
 
     async def reclaim_stale_processing(
         self, *, now: datetime, limit: int = 100, max_attempts: int
@@ -130,32 +178,11 @@ class RedisTaskStore:
     async def close(self) -> None:
         return None
 
-    async def _update(
-        self,
-        task_id: str,
-        *,
-        status: TaskStatus,
-        result: dict[str, Any] | None = None,
-        error: str | None = None,
-        locked_until: datetime | None = None,
-    ) -> None:
-        key = self._key(task_id)
-        raw = await self.redis.get(key)
-        if raw is None:
+    async def _settle(self, task_id: str, settle: Callable[[TaskRecord], bool]) -> bool:
+        task, applied = await self._transition(self._key(task_id), settle)
+        if task is None:
             raise KeyError(task_id)
-
-        task = _deserialize(_decode(raw))
-        task.status = status
-        task.updated_at = datetime.now(UTC)
-        task.locked_until = locked_until
-        if result is not None:
-            task.result = result
-        if error is not None:
-            task.error = error
-
-        remaining = await self.redis.ttl(key)
-        ttl = remaining if remaining and remaining > 0 else 1
-        await self.redis.setex(key, ttl, _serialize(task))
+        return applied
 
     async def _transition(
         self,

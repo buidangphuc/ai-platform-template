@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
-from app.modules.messaging.outbox.publisher import OutboxPublisher
 from app.modules.messaging.outbox.store import OutboxStore
 from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskStore
@@ -35,28 +34,6 @@ async def _every(
             await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
 
 
-async def run_outbox_relay(
-    publisher: OutboxPublisher,
-    *,
-    interval_seconds: float,
-    batch_size: int,
-    stop: asyncio.Event,
-) -> None:
-    """Publish pending task outbox events to the queue."""
-
-    async def step() -> None:
-        report = await publisher.publish_pending(limit=batch_size)
-        if report.total:
-            logger.info(
-                "tasks.outbox_relay published={} retried={} failed={}",
-                report.published,
-                report.retried,
-                report.failed,
-            )
-
-    await _every(interval_seconds, stop, "outbox_relay", step)
-
-
 async def run_reclaim_loop(
     service: TaskService,
     *,
@@ -65,7 +42,8 @@ async def run_reclaim_loop(
     max_attempts: int,
     stop: asyncio.Event,
 ) -> None:
-    """Requeue (and re-announce) tasks whose processing lease expired.
+    """Requeue tasks whose processing lease expired and re-announce tasks that
+    were queued but never picked up (see ``TaskService.reclaim_stale_processing``).
 
     A task already claimed ``max_attempts`` times is failed instead.
     """

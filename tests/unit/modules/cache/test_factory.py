@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pytest
 from pydantic import ValidationError
 from redis.asyncio import Redis
@@ -26,15 +28,17 @@ def test_build_redis_cache_gateway_uses_settings(
 
 
 async def test_cache_addon_opens_the_redis_backend_and_closes_gateway(
-    redis_client: Redis, redis_prefix: str
+    redis_client: Redis,
+    redis_prefix: str,
+    infra_settings: Callable[..., Settings],
 ):
-    resources = ApplicationResources(redis=redis_client)
+    resources = ApplicationResources()
     addon = CacheAddon()
 
     stack = await open_addon(
         addon,
         resources,
-        _settings(
+        infra_settings(
             CACHE_ENABLED=True,
             CACHE_BACKEND="redis",
             CACHE_PREFIX=redis_prefix,
@@ -58,3 +62,31 @@ def test_cache_addon_is_enabled_only_by_flag():
         CacheAddon().is_enabled(_settings(CACHE_ENABLED=True, REDIS_ENABLED=True))
         is True
     )
+
+
+async def test_cache_addon_round_trips_non_utf8_bytes(
+    redis_client: Redis,
+    redis_prefix: str,
+    infra_settings: Callable[..., Settings],
+):
+    resources = ApplicationResources()
+    payloads = {"a": b"\xff\xfe\x00\x80", "b": bytes(range(256))}
+
+    stack = await open_addon(
+        CacheAddon(),
+        resources,
+        infra_settings(
+            CACHE_ENABLED=True,
+            CACHE_BACKEND="redis",
+            CACHE_PREFIX=redis_prefix,
+            REDIS_ENABLED=True,
+        ),
+    )
+    try:
+        assert resources.cache is not None
+        await resources.cache.set_many(payloads)
+
+        assert await resources.cache.get("a") == payloads["a"]
+        assert await resources.cache.get_many(["a", "b"]) == payloads
+    finally:
+        await stack.aclose()

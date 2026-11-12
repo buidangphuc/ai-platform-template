@@ -56,7 +56,7 @@ def _command(
 
 
 async def _used(service: QuotaService) -> int:
-    usage = await service.get_usage(subject_id="u1", resource="tokens", policy=POLICY)
+    usage = await service.get_usage(subject_id="u1", policy=POLICY)
     return usage.used
 
 
@@ -137,26 +137,6 @@ async def test_reserve_same_idempotency_key_returns_existing_without_leak(
     assert counter["used"] == 1
 
 
-async def test_migration_moves_usage_once_under_concurrency(
-    store: MongoQuotaStore, mongo_gateway: MongoGateway
-):
-    await store.reserve(_command("r1", window="w1"))
-    await store.reserve(_command("r2", window="w1"))
-
-    query = QuotaUsageQuery(
-        subject_id="s", resource="r", window_key="w2", limit=5, reset_at=RESET
-    )
-    await asyncio.gather(store.get_usage(query), store.get_usage(query))
-
-    counters = await mongo_gateway.collection("quota_counters").find({}).to_list(None)
-    reservations = (
-        await mongo_gateway.collection("quota_reservations").find({}).to_list(None)
-    )
-    assert [d["window_key"] for d in counters] == ["w2"]
-    assert counters[0]["used"] == 2
-    assert {d["window_key"] for d in reservations} == {"w2"}
-
-
 async def test_ensure_indexes_declares_unique_partial_and_ttl_indexes(
     store: MongoQuotaStore, mongo_gateway: MongoGateway
 ):
@@ -211,7 +191,6 @@ async def test_concurrent_same_idempotency_key_charges_once(quota: QuotaService)
             *(
                 quota.reserve(
                     subject_id="u1",
-                    resource="tokens",
                     cost=3,
                     policy=policy,
                     idempotency_key=f"k{round_no}",
@@ -221,7 +200,7 @@ async def test_concurrent_same_idempotency_key_charges_once(quota: QuotaService)
         )
         assert len({r.id for r in reservations}) == 1
 
-    usage = await quota.get_usage(subject_id="u1", resource="tokens", policy=policy)
+    usage = await quota.get_usage(subject_id="u1", policy=policy)
     assert usage.used == 30 * 3
 
 
@@ -234,7 +213,6 @@ async def test_idempotent_retry_storm_near_the_limit_is_not_rejected(
         *(
             quota.reserve(
                 subject_id="u1",
-                resource="tokens",
                 cost=3,
                 policy=policy,
                 idempotency_key="storm",
@@ -247,9 +225,7 @@ async def test_idempotent_retry_storm_near_the_limit_is_not_rejected(
 
 
 async def test_concurrent_refunds_decrement_once(quota: QuotaService):
-    reservation = await quota.reserve(
-        subject_id="u1", resource="tokens", cost=4, policy=POLICY
-    )
+    reservation = await quota.reserve(subject_id="u1", cost=4, policy=POLICY)
 
     await asyncio.gather(
         *(quota.refund(reservation.id) for _ in range(5)), return_exceptions=True
@@ -262,12 +238,155 @@ async def test_window_rollover_reads_tz_aware_datetimes(
     quota: QuotaService, mongo_gateway: MongoGateway
 ):
     policy = QuotaPolicy(resource="tokens", limit=10, window_seconds=1)
-    await quota.reserve(subject_id="u1", resource="tokens", cost=4, policy=policy)
+    await quota.reserve(subject_id="u1", cost=4, policy=policy)
 
     await asyncio.sleep(1.2)
 
-    usage = await quota.get_usage(subject_id="u1", resource="tokens", policy=policy)
+    usage = await quota.get_usage(subject_id="u1", policy=policy)
     assert usage.used == 0
     stored = await mongo_gateway.collection("quota_counters").find_one({})
     assert stored is not None
     assert stored["reset_at"].tzinfo is not None
+
+
+async def test_retry_after_refund_charges_again(store: MongoQuotaStore):
+    first = await store.reserve(_command("a", key="k"))
+    assert first is not None
+    await store.refund(first.id)
+
+    retry = await store.reserve(_command("b", key="k"))
+
+    assert retry is not None
+    assert retry.id == first.id
+    assert retry.status == QuotaReservationStatus.RESERVED
+    assert retry.usage.used == 1
+
+
+async def test_retry_after_refund_is_rejected_at_the_limit(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    first = await store.reserve(_command("a", key="k"))
+    assert first is not None
+    await store.refund(first.id)
+    for index in range(5):
+        assert await store.reserve(_command(f"o{index}")) is not None
+
+    retry = await store.reserve(_command("b", key="k"))
+
+    assert retry is None
+    counter = await mongo_gateway.collection("quota_counters").find_one({})
+    assert counter["used"] == 5
+    stored = await mongo_gateway.collection("quota_reservations").find_one(
+        {"_id": first.id}
+    )
+    assert stored["status"] == QuotaReservationStatus.REFUNDED.value
+
+
+async def test_concurrent_retries_after_refund_charge_once(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    first = await store.reserve(_command("a", key="k"))
+    assert first is not None
+    await store.refund(first.id)
+
+    retries = await asyncio.gather(
+        *(store.reserve(_command(f"r{index}", key="k")) for index in range(5))
+    )
+
+    assert all(r is not None and r.id == first.id for r in retries)
+    counter = await mongo_gateway.collection("quota_counters").find_one({})
+    assert counter["used"] == 1
+
+
+async def test_rejected_reserve_never_leaves_a_reservation(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    for index in range(5):
+        assert await store.reserve(_command(f"o{index}")) is not None
+    reservations = mongo_gateway.collection("quota_reservations")
+    seen: list[dict] = []
+    done = asyncio.Event()
+
+    async def watch() -> None:
+        while not done.is_set():
+            seen.extend(
+                await reservations.find(
+                    {"idempotency_key": {"$regex": "^over"}}
+                ).to_list(None)
+            )
+            await asyncio.sleep(0)
+
+    watcher = asyncio.create_task(watch())
+    results = await asyncio.gather(
+        *(store.reserve(_command(f"x{i}", key=f"over{i}")) for i in range(20)),
+        *(store.reserve(_command(f"y{i}")) for i in range(20)),
+    )
+    done.set()
+    await watcher
+
+    assert all(r is None for r in results)
+    assert seen == []
+    assert await reservations.count_documents({}) == 5
+    counter = await mongo_gateway.collection("quota_counters").find_one({})
+    assert counter["used"] == 5
+
+
+async def test_concurrent_same_key_reserves_charge_once(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    results = await asyncio.gather(
+        *(store.reserve(_command(f"r{index}", key="k")) for index in range(10))
+    )
+
+    assert all(r is not None for r in results)
+    assert len({r.id for r in results if r is not None}) == 1
+    counter = await mongo_gateway.collection("quota_counters").find_one({})
+    assert counter["used"] == 1
+    assert await mongo_gateway.collection("quota_reservations").count_documents({}) == 1
+
+
+async def test_refund_never_drives_usage_below_zero(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    reservation = await store.reserve(_command("r1"))
+    assert reservation is not None
+    counters = mongo_gateway.collection("quota_counters")
+    await counters.update_one({}, {"$set": {"used": 0}})
+
+    usage = await store.refund(reservation.id)
+
+    assert usage.used == 0
+    assert (await counters.find_one({}))["used"] == 0
+
+
+async def test_rejected_first_reserve_leaves_a_counter_with_reset_at(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    command = ReserveQuota(
+        subject_id="fresh",
+        resource="r",
+        window_key="w1",
+        limit=5,
+        cost=9,
+        reset_at=RESET,
+        reservation_id="big",
+    )
+
+    assert await store.reserve(command) is None
+
+    counter = await mongo_gateway.collection("quota_counters").find_one(
+        {"subject_id": "fresh"}
+    )
+    assert counter["reset_at"] is not None
+    assert counter["limit"] == 5
+    assert counter["used"] == 0
+    usage = await store.get_usage(
+        QuotaUsageQuery(
+            subject_id="fresh",
+            resource="r",
+            window_key="w1",
+            limit=5,
+            reset_at=RESET,
+        )
+    )
+    assert usage.used == 0

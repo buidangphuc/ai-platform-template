@@ -27,26 +27,6 @@ _TASKS_ON = {"QUEUE_ENABLED": True, "TASKS_ENABLED": True}
             "TASK_STORE_BACKEND=redis requires REDIS_ENABLED",
         ),
         (
-            {
-                **_TASKS_ON,
-                "REDIS_ENABLED": True,
-                "DATABASE_ENABLED": True,
-                "TASKS_DISPATCH_BACKEND": "outbox",
-            },
-            "TASKS_DISPATCH_BACKEND=outbox requires OUTBOX_ENABLED",
-        ),
-        (
-            {
-                **_TASKS_ON,
-                "DATABASE_ENABLED": True,
-                "OUTBOX_ENABLED": True,
-                "TASKS_DISPATCH_BACKEND": "outbox",
-                "TASK_STORE_BACKEND": "redis",
-                "REDIS_ENABLED": True,
-            },
-            "TASKS_DISPATCH_BACKEND=outbox requires TASK_STORE_BACKEND=postgres",
-        ),
-        (
             {"OUTBOX_ENABLED": True},
             "OUTBOX_BACKEND=postgres requires DATABASE_ENABLED",
         ),
@@ -76,7 +56,6 @@ def test_settings_reject_inconsistent_messaging_config(
             "REDIS_ENABLED": True,
             "DATABASE_ENABLED": True,
             "OUTBOX_ENABLED": True,
-            "TASKS_DISPATCH_BACKEND": "outbox",
             "TASK_STORE_BACKEND": "postgres",
         },
     ],
@@ -114,3 +93,22 @@ def test_settings_accept_conversations_with_database_and_llm() -> None:
 
     assert settings.CONVERSATIONS_ENABLED is True
     assert build_test_settings().CONVERSATIONS_ENABLED is False
+
+
+@pytest.mark.parametrize(
+    ("removed", "value"),
+    [
+        ("TASKS_DISPATCH_BACKEND", "queue"),
+        ("TASKS_OUTBOX_RELAY_INTERVAL_SECONDS", 1.0),
+        ("TASKS_OUTBOX_RELAY_BATCH_SIZE", 100),
+    ],
+)
+def test_removed_dispatch_setting_is_rejected(removed: str, value: object) -> None:
+    with pytest.raises(ValidationError, match=f"{removed}\\s+Extra inputs"):
+        build_test_settings(**{removed: value})
+
+
+def test_queued_reannounce_interval_defaults_to_a_minute_and_must_be_positive() -> None:
+    assert build_test_settings().TASKS_QUEUED_REANNOUNCE_SECONDS == 60
+    with pytest.raises(ValidationError, match="TASKS_QUEUED_REANNOUNCE_SECONDS"):
+        build_test_settings(TASKS_QUEUED_REANNOUNCE_SECONDS=0)

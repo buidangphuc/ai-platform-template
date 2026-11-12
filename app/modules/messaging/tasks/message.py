@@ -1,7 +1,7 @@
 """The one message contract between task dispatch and the worker.
 
-Every dispatcher (direct queue send, outbox relay) publishes exactly
-``TaskMessage.to_body()``; the worker parses exactly ``TaskMessage.from_body``.
+``TaskService`` publishes exactly ``TaskMessage.to_body()``; the worker parses
+exactly ``TaskMessage.from_body``.
 """
 
 from __future__ import annotations

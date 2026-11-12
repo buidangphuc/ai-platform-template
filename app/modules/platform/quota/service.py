@@ -13,7 +13,7 @@ from app.modules.platform.quota.models import (
     QuotaWindow,
     ReserveQuota,
 )
-from app.modules.platform.quota.store import QuotaPolicyStore, QuotaStore
+from app.modules.platform.quota.store import QuotaStore
 
 
 class QuotaService:
@@ -21,34 +21,30 @@ class QuotaService:
         self,
         *,
         store: QuotaStore,
-        policy_store: QuotaPolicyStore,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
-        self._policy_store = policy_store
         self._clock = clock
 
     async def reserve(
         self,
         *,
         subject_id: str,
-        resource: str,
+        policy: QuotaPolicy,
         cost: int | None = None,
-        policy: QuotaPolicy | None = None,
         idempotency_key: str | None = None,
     ) -> QuotaReservation:
-        resolved_policy = await self._resolve_policy(resource, policy)
-        resolved_cost = resolved_policy.default_cost if cost is None else cost
+        resolved_cost = policy.default_cost if cost is None else cost
         if resolved_cost <= 0:
             raise ValueError("cost must be positive")
 
         now = _ensure_utc(self._clock())
-        window = resolve_fixed_window(now, resolved_policy.window_seconds)
+        window = resolve_fixed_window(now, policy.window_seconds)
         command = ReserveQuota.create(
             subject_id=subject_id,
-            resource=resolved_policy.resource,
+            resource=policy.resource,
             window_key=window.key,
-            limit=resolved_policy.limit,
+            limit=policy.limit,
             cost=resolved_cost,
             reset_at=window.reset_at,
             idempotency_key=idempotency_key,
@@ -56,12 +52,12 @@ class QuotaService:
         reservation = await self._store.reserve(command)
         if reservation is None:
             raise RateLimitError(
-                message=f"Quota exceeded for resource {resolved_policy.resource}",
+                message=f"Quota exceeded for resource {policy.resource}",
                 retry_after_seconds=_retry_after_seconds(window.reset_at, now),
                 data={
                     "subject_id": subject_id,
-                    "resource": resolved_policy.resource,
-                    "limit": resolved_policy.limit,
+                    "resource": policy.resource,
+                    "limit": policy.limit,
                     "cost": resolved_cost,
                     "reset_at": window.reset_at.isoformat(),
                 },
@@ -80,45 +76,23 @@ class QuotaService:
         self,
         *,
         subject_id: str,
-        resource: str,
-        policy: QuotaPolicy | None = None,
+        policy: QuotaPolicy,
     ) -> QuotaUsage:
-        resolved_policy = await self._resolve_policy(resource, policy)
-        return await self._store.get_usage(
-            self._usage_query(subject_id, resolved_policy)
-        )
+        return await self._store.get_usage(self._usage_query(subject_id, policy))
 
     async def reset_usage(
         self,
         *,
         subject_id: str,
-        resource: str,
-        policy: QuotaPolicy | None = None,
+        policy: QuotaPolicy,
     ) -> QuotaUsage:
-        resolved_policy = await self._resolve_policy(resource, policy)
-        return await self._store.reset_usage(
-            self._usage_query(subject_id, resolved_policy)
-        )
+        return await self._store.reset_usage(self._usage_query(subject_id, policy))
 
     async def reset_resource(self, resource: str) -> None:
         await self._store.reset_resource(resource)
 
     async def close(self) -> None:
         await self._store.close()
-
-    async def _resolve_policy(
-        self,
-        resource: str,
-        policy: QuotaPolicy | None,
-    ) -> QuotaPolicy:
-        if policy is not None:
-            if policy.resource != resource:
-                raise ValueError("policy resource must match requested resource")
-            return policy
-        stored = await self._policy_store.get_policy(resource)
-        if stored is None:
-            raise KeyError(f"No quota policy configured for resource {resource!r}")
-        return stored
 
     def _usage_query(
         self,
