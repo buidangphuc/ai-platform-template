@@ -10,8 +10,8 @@ Task ownership: a submitted task is visible only to the principal that submitted
 Each task SHALL record the `principal_id` that submitted it, supplied explicitly
 to `TaskService.submit`. API reads SHALL return a task only to its owner; for any
 other principal the response SHALL be 404 `task_not_found`, identical to a missing
-task. Worker reads SHALL NOT filter by owner. Every task store adapter and the
-Postgres task+outbox insert SHALL persist and filter by `principal_id`. Rows that
+task. Worker reads SHALL NOT filter by owner. Every task store adapter SHALL
+persist and filter by `principal_id`. Rows that
 predate ownership SHALL have an empty owner and SHALL NOT be returned by API reads.
 
 #### Scenario: Another principal polls a task

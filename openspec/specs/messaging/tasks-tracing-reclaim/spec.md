@@ -15,7 +15,7 @@ created before the column existed, is re-announced without a `request_id`.
 #### Scenario: Reclaim after a worker crash
 - **GIVEN** a task submitted with `request_id="req_abc"` whose processing lease expired
 - **WHEN** the reclaim loop requeues it
-- **THEN** the re-announced message body contains `"request_id": "req_abc"`, whether the dispatcher is the direct queue or the Postgres outbox
+- **THEN** the re-announced message body contains `"request_id": "req_abc"`, on every task store
 
 #### Scenario: Task without a request id
 - **WHEN** a task submitted without a request id is reclaimed
