@@ -31,7 +31,7 @@ Prefer existing repo patterns over new abstractions.
 - Calls one business service method per endpoint when possible.
 - Views read services from `get_app_resources(request.app)` (the deliberate `app.state` seam). Feature-gated groups use one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
 - Endpoint files never build stores, DB clients, HTTP clients, quota adapters, LLMs or generators, and never hold business workflow decisions.
-- No generic `app/api/deps.py` that collects unrelated wiring.
+- No generic `deps.py` in `app/api` that collects unrelated wiring.
 
 ### Bootstrap (`app/bootstrap`)
 

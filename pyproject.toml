@@ -196,7 +196,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.pyright]
-include = ["app", "tests", "main.py"]
+include = ["app", "tests", "scripts", "main.py"]
 extraPaths = ["."]
 exclude = [
   "**/__pycache__",
@@ -205,7 +205,6 @@ exclude = [
   ".venv",
   ".uv-cache",
   "alembic/versions",
-  "scripts",
   "docs",
   "app/modules/messaging/queue/adapters/sqs.py",
   "app/modules/messaging/queue/adapters/rabbitmq.py",
@@ -224,9 +223,9 @@ reportInconsistentOverload = "error"
 reportInvalidStringEscapeSequence = "error"
 reportSelfClsParameterName = "warning"
 reportMatchNotExhaustive = "error"
-reportArgumentType = "warning"
-reportCallIssue = "warning"
-reportAttributeAccessIssue = "warning"
+reportArgumentType = "error"
+reportCallIssue = "error"
+reportAttributeAccessIssue = "error"
 
 [[tool.pyright.executionEnvironments]]
 root = "tests"

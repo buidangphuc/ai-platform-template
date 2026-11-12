@@ -15,9 +15,9 @@ Engineering discipline and the LLM/RAG/eval patterns of this repo. Companion to 
 ## Non-negotiables for AI features
 
 - **Go through the platform, not the SDK.** Business code receives an `LLMInstance` (`app/modules/ai/llm/runtime.py`) or a model handler as a constructor dependency and never calls `init_chat_model` or builds a provider client. Model choice and fallback live in `ModelRouter`.
-- **Three requirements:** observability (Langfuse trace via `LLMInstance.trace_config(...)`), resilience (timeout + breaker/fallback from `app/core/resilience`), eval story (cases + evaluators in `app/modules/ai/evals`).
+- **Three requirements:** observability (Langfuse trace via `LLMInstance.trace_config(...)`), resilience (timeout + breaker/fallback from `app/core/resilience.py`), eval story (cases + evaluators in `app/modules/ai/evals`).
 - **Prompts are code, evals are tests.** A prompt or model change is a behavior change and ships with eval cases that gate or monitor it.
-- **Redact before logging or tracing** with `RedactionPolicy` (`app/core/redaction`).
+- **Redact before logging or tracing** with `RedactionPolicy` (`app/core/redaction.py`).
 - RAG and completions have patterns (factory addon; Protocol ports + pipeline). Extend them.
 
 ## Workflow for an AI feature
@@ -115,10 +115,10 @@ Swap the handler, or add checks through `completions_feature(guards_factory=...)
 
 ## Cross-cutting requirements for every AI call
 
-- **Timeout:** wrap with `TimeoutPolicy` (`app/core/resilience`).
+- **Timeout:** wrap with `TimeoutPolicy` (`app/core/resilience.py`).
 - **Resilience:** breaker/fallback via `ModelRouter` (LLM) or `CircuitBreaker` for other external calls.
 - **Observability:** Langfuse trace via `LLMInstance.trace_config(...)`.
-- **Redaction:** `RedactionPolicy` (`app/core/redaction`) before logging/tracing sensitive input or output. It masks emails, bearer/`sk-`/AWS keys, phone numbers (incl. Vietnamese), Luhn-valid card numbers, secret-named keys (`authorization`, `cookie`, `x-api-key`, ...) and recurses into lists.
+- **Redaction:** `RedactionPolicy` (`app/core/redaction.py`) before logging/tracing sensitive input or output. It masks emails, bearer/`sk-`/AWS keys, phone numbers (incl. Vietnamese), Luhn-valid card numbers, secret-named keys (`authorization`, `cookie`, `x-api-key`, ...) and recurses into lists.
 - **Input/output guards:** pass `CompletionGuard`s to `CompletionService(handler, guards=...)` (`business/completions/guards.py`); raise `GuardrailViolation` (422, fail-closed). Output guards run on `complete()` only; streamed output is not guarded yet. An input violation in `stream()` raises on first iteration, which the API awaits before sending headers, so it is a 422 JSON error.
 - **Untrusted content:** clients cannot send `system` messages (the server owns the system prompt). Retrieved text is untrusted: `knowledge_search` wraps each match in `<document id=... source="retrieved">` and says so in its tool description. Do the same for any tool that returns third-party text, and delimit graded output in judge prompts.
 - **Evals:** at least one eval case covering the new behavior.

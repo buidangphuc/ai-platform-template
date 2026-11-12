@@ -4,7 +4,8 @@
 <!-- read by: diagnosing-bugs, tdd -->
 - Without infra (CI): `make test` (`pytest -m "not infra"`)
 - Everything on localinfra: `make infra-up` then `make test-infra`
-- Eval gate: `uv run --env-file .env.example --all-extras python -m scripts.run_eval --min-score 0.8`
+- Eval gate: `make eval-ci`
+- Layer rules: `make arch`
 - Tests fake only the LLM and Langfuse; everything else runs on real services from localinfra. Tests using an infra fixture (`tests/infra.py`) get the `infra` marker automatically.
   - Start services: `make infra-up` (runs `bin/li up redis postgres mongo minio elasticmq rabbitmq` in `LOCALINFRA_DIR`, default `~/Documents/localinfra`; Postgres is `pgvector/pgvector:pg16`)
   - Run: `uv run --env-file .env.test pytest` (`.env.test` sets `TEST_*` URLs and `TEST_INFRA_REQUIRED=1`; a missing service then fails instead of skipping)
@@ -13,14 +14,8 @@
 ## Checks
 <!-- read by: pre-commit-ci. Mirror CI exactly. -->
 - Source: .github/workflows/test.yml (last read: 2026-11-12)
-- `uv sync --dev --all-extras`
-- `uv run ruff format --check app tests scripts alembic`
-- `uv run ruff check app tests scripts alembic`
-- `uv run --all-extras pyright`
-- `SKIP=commitizen uv run pre-commit run --all-files --hook-stage pre-commit`
-- `uv run --all-extras pytest -q -m "not infra" --cov=app --cov-report=term-missing --cov-fail-under=74` (CI)
+- `make verify` (runs `check typecheck arch hooks test-ci eval-ci`, the same targets CI calls)
 - Local only, not in CI: `make infra-up && make test-infra` (all tests on real services, `--cov-fail-under=80`). Run it before every commit/push: CI cannot catch store, migration or queue regressions.
-- `uv run --env-file .env.example --all-extras python -m scripts.run_eval --min-score 0.8`
 
 ## Tracker
 <!-- read by: to-tickets -->
