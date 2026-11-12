@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from app.modules.messaging.queue.gateway import QueueGateway
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.relay import run_cleanup_loop, run_reclaim_loop
-from app.modules.messaging.tasks.service import QueueTaskDispatcher, TaskService
+from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskRecord, TaskStore
 
 
@@ -14,7 +14,7 @@ async def test_reclaim_loop_requeues_expired_tasks_survives_errors_and_stops(
     store, queue = task_store, redis_queue
     service = TaskService(
         store=store,
-        dispatcher=QueueTaskDispatcher(store, queue),
+        queue=queue,
         ttl_seconds=3600,
         lease_seconds=1,
     )

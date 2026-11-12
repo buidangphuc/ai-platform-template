@@ -14,18 +14,12 @@ from app.modules.business.completions.handlers.echo import EchoCompletionHandler
 from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.outbox.adapters import PostgresOutboxStore, new_outbox_row
 from app.modules.messaging.outbox.models import OutboxEvent
-from app.modules.messaging.outbox.publisher import OutboxPublisher
 from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
 from app.modules.messaging.queue.worker import AsyncPollingWorker
 from app.modules.messaging.tasks.adapters.postgres import PostgresTaskStore
-from app.modules.messaging.tasks.models import Task, TaskStatus
-from app.modules.messaging.tasks.outbox import (
-    TASK_EVENT_PREFIX,
-    PostgresTaskOutboxDispatcher,
-    TaskQueueOutboxSink,
-)
-from app.modules.messaging.tasks.relay import run_outbox_relay
+from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.service import TaskService
+from tests.unit.modules.tasks.queue_faults import fail_sends
 
 PAYLOAD = {"messages": [{"role": "user", "content": "hello"}]}
 
@@ -41,14 +35,9 @@ class _Stack:
         self.store = PostgresTaskStore(sessionmaker)
         self.service = TaskService(
             store=self.store,
-            dispatcher=PostgresTaskOutboxDispatcher(sessionmaker),
+            queue=self.queue,
             ttl_seconds=3600,
             lease_seconds=1,
-        )
-        self.publisher = OutboxPublisher(
-            store=PostgresOutboxStore(sessionmaker),
-            sink=TaskQueueOutboxSink(self.queue),
-            event_type_prefix=TASK_EVENT_PREFIX,
         )
         resources = ApplicationResources()
         resources.services[CompletionService] = CompletionService(
@@ -80,27 +69,18 @@ class _Stack:
         pytest.fail(f"task {task_id} never reached {status}")
 
 
-async def test_submitted_task_is_relayed_processed_and_completed(
-    pg_sessionmaker, redis_queue
-):
+async def test_submitted_task_is_processed_and_completed(pg_sessionmaker, redis_queue):
     stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
-    stop = asyncio.Event()
 
-    relay = asyncio.create_task(
-        run_outbox_relay(
-            stack.publisher, interval_seconds=0.02, batch_size=10, stop=stop
-        )
-    )
     worker = asyncio.create_task(stack.worker.run())
     try:
         await stack.wait_for_status(task.id, TaskStatus.COMPLETED)
     finally:
-        stop.set()
         stack.worker.request_shutdown()
-        await asyncio.gather(relay, worker)
+        await worker
 
     done = await stack.store.get(task.id)
     assert done is not None
@@ -112,57 +92,42 @@ async def test_submitted_task_is_relayed_processed_and_completed(
         "metadata": {},
     }
     assert done.attempts == 1
-    assert done.principal_id == "alice"  # stored by the task+outbox insert
+    assert done.principal_id == "alice"
     assert await stack.dead_letters() == 0
     assert await stack.queue_is_empty()
 
 
-async def test_task_row_and_outbox_event_commit_atomically(
+async def test_lost_announcement_is_repaired_by_the_reclaim_sweep(
     pg_sessionmaker, redis_queue, monkeypatch
 ):
     stack = _Stack(pg_sessionmaker, redis_queue)
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("outbox insert failed")
-
-    monkeypatch.setattr("app.modules.messaging.tasks.outbox.new_outbox_row", _boom)
-
-    with pytest.raises(RuntimeError, match="outbox insert failed"):
-        await stack.service.submit(
-            type="completion", payload=PAYLOAD, principal_id="alice"
-        )
-
-    async with pg_sessionmaker() as session:
-        assert (await session.scalars(select(Task))).all() == []
-        assert (await session.scalars(select(OutboxEvent))).all() == []
-
-
-async def test_reclaimed_task_is_announced_again_in_the_same_transaction(
-    pg_sessionmaker, redis_queue
-):
-    stack = _Stack(pg_sessionmaker, redis_queue)
+    faults = fail_sends(monkeypatch, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
-    await stack.publisher.publish_pending()
-    [first] = await stack.queue.receive()
-    await stack.queue.ack(first)
-    assert await stack.service.mark_processing(task.id) is True  # worker "crashes"
+    assert faults.failed == [task.id]
+    assert await stack.queue_is_empty()
+    faults.heal()
 
-    reclaimed = await stack.service.reclaim_stale_processing(
-        now=datetime.now(UTC) + timedelta(seconds=60), max_attempts=5
+    swept = await stack.service.reclaim_stale_processing(
+        now=datetime.now(UTC) + timedelta(seconds=120), max_attempts=5
     )
-    assert reclaimed == 1
-    report = await stack.publisher.publish_pending()
 
-    assert report.published == 1
-    [again] = await stack.queue.receive()
-    assert again.body == {"task_id": task.id, "type": "completion"}
-    refreshed = await stack.store.get(task.id)
-    assert refreshed is not None and refreshed.status == TaskStatus.QUEUED
+    assert swept == 1
+    worker = asyncio.create_task(stack.worker.run())
+    try:
+        await stack.wait_for_status(task.id, TaskStatus.COMPLETED)
+    finally:
+        stack.worker.request_shutdown()
+        await worker
+
+    done = await stack.store.get(task.id)
+    assert done is not None and done.attempts == 1
+    assert await stack.dead_letters() == 0
+    assert await stack.queue_is_empty()
 
 
-async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
+async def test_reclaimed_task_is_announced_again_with_its_original_request_id(
     pg_sessionmaker, redis_queue
 ):
     stack = _Stack(pg_sessionmaker, redis_queue)
@@ -172,7 +137,6 @@ async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
         principal_id="alice",
         request_id="req_abc",
     )
-    await stack.publisher.publish_pending()
     [first] = await stack.queue.receive()
     await stack.queue.ack(first)
     assert await stack.service.mark_processing(task.id) is True  # worker "crashes"
@@ -180,15 +144,16 @@ async def test_reclaimed_task_is_reannounced_with_its_original_request_id(
     reclaimed = await stack.service.reclaim_stale_processing(
         now=datetime.now(UTC) + timedelta(seconds=60), max_attempts=5
     )
-    assert reclaimed == 1
-    await stack.publisher.publish_pending()
 
+    assert reclaimed == 1
     [again] = await stack.queue.receive()
     assert again.body == {
         "task_id": task.id,
         "type": "completion",
         "request_id": "req_abc",
     }
+    refreshed = await stack.store.get(task.id)
+    assert refreshed is not None and refreshed.status == TaskStatus.QUEUED
 
 
 async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
@@ -198,8 +163,6 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
-    await stack.publisher.publish_pending()
-    # The same announcement delivered twice (at-least-once queue).
     await stack.queue.send({"task_id": task.id, "type": "completion"})
 
     worker = asyncio.create_task(stack.worker.run())
@@ -218,14 +181,15 @@ async def test_redelivered_message_for_a_completed_task_is_acked_without_rerun(
     assert await stack.dead_letters() == 0
 
 
-async def test_poison_task_is_failed_without_a_new_outbox_event(
+async def test_poison_task_is_failed_and_not_announced_again(
     pg_sessionmaker, redis_queue
 ):
     stack = _Stack(pg_sessionmaker, redis_queue)
     task = await stack.service.submit(
         type="completion", payload=PAYLOAD, principal_id="alice"
     )
-    await stack.publisher.publish_pending()
+    [first] = await stack.queue.receive()
+    await stack.queue.ack(first)
     assert await stack.service.mark_processing(task.id) is True  # attempts = 1
 
     reclaimed = await stack.service.reclaim_stale_processing(
@@ -237,9 +201,9 @@ async def test_poison_task_is_failed_without_a_new_outbox_event(
     assert refreshed is not None
     assert refreshed.status == TaskStatus.FAILED
     assert refreshed.error == "max_attempts_exceeded"
+    assert await stack.queue.receive() == []
     async with pg_sessionmaker() as session:
-        events = (await session.scalars(select(OutboxEvent))).all()
-    assert len(events) == 1  # only the original submit event
+        assert (await session.scalars(select(OutboxEvent))).all() == []
 
 
 async def test_delete_published_before_purges_only_old_published_rows_in_batches(

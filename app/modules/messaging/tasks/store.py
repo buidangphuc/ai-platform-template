@@ -77,9 +77,19 @@ class TaskStore(Protocol):
         """
         ...
 
-    async def mark_completed(self, task_id: str, result: dict[str, Any]) -> None: ...
+    async def mark_completed(self, task_id: str, result: dict[str, Any]) -> bool:
+        """Compare-and-set settlement: PROCESSING -> COMPLETED.
 
-    async def mark_failed(self, task_id: str, error: str) -> None: ...
+        Returns ``False`` (changing nothing) unless the task is PROCESSING, so a
+        late finisher cannot overwrite a task that was already settled or put
+        back to QUEUED. Unknown id raises ``KeyError``.
+        """
+        ...
+
+    async def mark_failed(self, task_id: str, error: str) -> bool:
+        """Compare-and-set settlement: PROCESSING -> FAILED; same contract as
+        ``mark_completed``."""
+        ...
 
     async def reclaim_stale_processing(
         self, *, now: datetime, limit: int = 100, max_attempts: int
@@ -90,6 +100,19 @@ class TaskStore(Protocol):
         FAILED with error ``MAX_ATTEMPTS_EXCEEDED`` (it keeps crashing its
         worker); every other one goes back to QUEUED. Returns only the requeued
         tasks, which the caller must announce again.
+        """
+        ...
+
+    async def list_stale_queued(
+        self, *, now: datetime, older_than_seconds: float, limit: int
+    ) -> list[TaskRef]:
+        """Claim up to ``limit`` QUEUED tasks for re-announcement.
+
+        Selects QUEUED tasks with ``updated_at < now - older_than_seconds`` and
+        ``expires_at > now`` and, atomically with the selection, sets their
+        ``updated_at`` to ``now``, so each task is returned at most once per
+        interval even with concurrent callers. The caller must announce the
+        returned tasks again.
         """
         ...
 

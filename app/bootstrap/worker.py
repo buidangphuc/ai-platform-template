@@ -17,20 +17,22 @@ from app.bootstrap.resources import ApplicationResources, TaskServices, opened
 from app.bootstrap.services import enabled_features, open_runtime, task_handlers
 from app.core.config import Settings, get_settings
 from app.core.request_context import reset_request_id, set_request_id
-from app.modules.messaging.outbox.publisher import OutboxPublisher
 from app.modules.messaging.queue.gateway import QueueMessage
 from app.modules.messaging.queue.worker import (
     AsyncPollingWorker,
     NonRetryableMessageError,
 )
 from app.modules.messaging.tasks.message import TaskMessage
-from app.modules.messaging.tasks.outbox import TASK_EVENT_PREFIX, TaskQueueOutboxSink
-from app.modules.messaging.tasks.relay import (
-    run_cleanup_loop,
-    run_outbox_relay,
-    run_reclaim_loop,
-)
+from app.modules.messaging.tasks.relay import run_cleanup_loop, run_reclaim_loop
 from app.modules.messaging.tasks.service import TaskService
+from app.modules.messaging.tasks.store import TaskRecord
+
+LEASE_EXCEEDED = "lease_exceeded"
+
+
+class _LeaseExceededError(Exception):
+    pass
+
 
 # A background loop runs until the stop event is set.
 BackgroundLoop = Callable[[asyncio.Event], Coroutine[Any, Any, None]]
@@ -121,18 +123,48 @@ def build_worker_message_handler(
             return
 
         try:
-            handler = handlers.get(task.type)
-            if handler is None:
-                raise ValueError(f"no handler registered for task type {task.type!r}")
-            result = await handler(resources, task)
+            result = await run_handler(task)
+        except _LeaseExceededError as exc:
+            logger.error(
+                "worker.lease_exceeded task_id={} lease_seconds={}",
+                task_id,
+                service.lease_seconds,
+            )
+            await fail(task_id, LEASE_EXCEEDED, exc)
+            return
         except Exception as exc:
             logger.exception("worker.task_failed task_id={}", task_id)
-            await service.mark_failed(task_id, _safe_error(exc))
-            # FAILED is terminal: a redelivery would be skipped, so dead-letter now.
-            raise NonRetryableMessageError(f"task {task_id} failed") from exc
+            await fail(task_id, _safe_error(exc), exc)
+            return
 
-        await service.mark_completed(task_id, result)
-        logger.info("worker.task_completed task_id={}", task_id)
+        if await service.mark_completed(task_id, result):
+            logger.info("worker.task_completed task_id={}", task_id)
+        else:
+            logger.warning(
+                "worker.result_dropped task_id={} settlement=completed", task_id
+            )
+
+    async def run_handler(task: TaskRecord) -> dict[str, Any]:
+        handler = handlers.get(task.type)
+        if handler is None:
+            raise ValueError(f"no handler registered for task type {task.type!r}")
+        scope = asyncio.timeout(service.lease_seconds)
+        try:
+            async with scope:
+                return await handler(resources, task)
+        except TimeoutError as exc:
+            if scope.expired():
+                raise _LeaseExceededError from exc
+            raise
+
+    async def fail(task_id: str, error: str, cause: Exception) -> None:
+        if not await service.mark_failed(task_id, error):
+            logger.warning(
+                "worker.result_dropped task_id={} settlement=failed", task_id
+            )
+            return
+        # FAILED is terminal: a redelivery would be skipped, so dead-letter now.
+        raise NonRetryableMessageError(f"task {task_id} failed") from cause
 
     return process_message
 
@@ -168,25 +200,7 @@ def build_background_loops(
             stop=stop,
         )
 
-    match settings.TASKS_DISPATCH_BACKEND:
-        case "queue":
-            return (reclaim, cleanup)
-        case "outbox":
-            publisher = OutboxPublisher(
-                store=opened(resources.outbox_store, "outbox store"),
-                sink=TaskQueueOutboxSink(tasks.queue),
-                event_type_prefix=TASK_EVENT_PREFIX,
-            )
-
-            async def relay(stop: asyncio.Event) -> None:
-                await run_outbox_relay(
-                    publisher,
-                    interval_seconds=settings.TASKS_OUTBOX_RELAY_INTERVAL_SECONDS,
-                    batch_size=settings.TASKS_OUTBOX_RELAY_BATCH_SIZE,
-                    stop=stop,
-                )
-
-            return (relay, reclaim, cleanup)
+    return (reclaim, cleanup)
 
 
 @asynccontextmanager

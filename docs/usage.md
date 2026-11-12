@@ -326,7 +326,12 @@ Without a factory, the scaffold `EchoCompletionHandler` answers. Both processes
 read the registry in `app/bootstrap/features/registry.py` (`FEATURES`), so register
 your handler factory there (`completions_feature(handler_factory=build_handler)`)
 to make the worker run it too. The async task routes (`/api/v1/completions/tasks`) are mounted
-only when `TASKS_ENABLED=true`.
+only when `TASKS_ENABLED=true`. Task delivery is at-least-once: submit stores the
+task and then sends one queue message, and the worker's reclaim loop announces
+again any task still `queued` after `TASKS_QUEUED_REANNOUNCE_SECONDS` (default 60),
+so a handler can run more than once for one task id and must be idempotent. A
+handler is cancelled after `TASKS_LEASE_SECONDS` and its task fails with
+`lease_exceeded`; a result that arrives after the task was settled is dropped.
 
 The app factory registers a FastAPI lifespan that calls
 `langfuse.get_client().flush()` on shutdown when `LANGFUSE_ENABLED=true` and
