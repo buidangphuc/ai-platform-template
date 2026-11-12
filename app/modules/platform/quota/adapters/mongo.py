@@ -96,7 +96,10 @@ class MongoQuotaStore:
         counter_key = _counter_key(command)
         await self._counters.update_one(
             counter_key,
-            {"$setOnInsert": {**counter_key, "used": 0}},
+            {
+                "$setOnInsert": {**counter_key, "used": 0},
+                "$set": {"limit": command.limit, "reset_at": command.reset_at},
+            },
             upsert=True,
         )
         return await self._counters.find_one_and_update(

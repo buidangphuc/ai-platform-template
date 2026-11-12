@@ -18,6 +18,7 @@ from app.modules.platform.quota.factory import (
 from app.modules.platform.quota.models import (
     QuotaPolicy,
     QuotaReservationStatus,
+    QuotaUsageQuery,
     ReserveQuota,
 )
 from app.modules.platform.quota.service import QuotaService
@@ -356,3 +357,36 @@ async def test_refund_never_drives_usage_below_zero(
 
     assert usage.used == 0
     assert (await counters.find_one({}))["used"] == 0
+
+
+async def test_rejected_first_reserve_leaves_a_counter_with_reset_at(
+    store: MongoQuotaStore, mongo_gateway: MongoGateway
+):
+    command = ReserveQuota(
+        subject_id="fresh",
+        resource="r",
+        window_key="w1",
+        limit=5,
+        cost=9,
+        reset_at=RESET,
+        reservation_id="big",
+    )
+
+    assert await store.reserve(command) is None
+
+    counter = await mongo_gateway.collection("quota_counters").find_one(
+        {"subject_id": "fresh"}
+    )
+    assert counter["reset_at"] is not None
+    assert counter["limit"] == 5
+    assert counter["used"] == 0
+    usage = await store.get_usage(
+        QuotaUsageQuery(
+            subject_id="fresh",
+            resource="r",
+            window_key="w1",
+            limit=5,
+            reset_at=RESET,
+        )
+    )
+    assert usage.used == 0
