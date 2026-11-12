@@ -1,4 +1,4 @@
-.PHONY: help dev worker test test-fast test-ci eval-ci hooks verify check-env test-infra infra-up eval lint format typecheck arch check ci hooks-install \
+.PHONY: help dev worker test test-fast test-ci eval-ci hooks verify check-env test-infra infra-up eval lint format typecheck arch check ci new-domain hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse
@@ -66,6 +66,9 @@ hooks: ## Run all pre-commit hooks (commit-msg stage skipped)
 verify: check typecheck arch hooks test-ci eval-ci ## Exactly what CI runs
 
 ci: verify test-infra ## verify plus every test on real services
+
+new-domain: ## Scaffold a business domain: make new-domain NAME=orders
+	$(UV_RUN) python -m scripts.new_domain $(NAME)
 
 hooks-install: ## Install pre-commit hooks
 	$(UV) run pre-commit install --install-hooks

@@ -70,6 +70,8 @@ service consumes interface/capability
 
 ## Adding or changing a service
 
+Start a new domain with `make new-domain NAME=<domain>`; the steps below describe what it generates and what you edit next.
+
 1. Define one `<Domain>Service` class in `app/modules/business/<domain>/service.py` (e.g. `CompletionService`); add schemas/types/models/stores/integrations under the same domain.
 2. Keep stores, handlers and external integrations as constructor dependencies.
 3. Declare the domain once: `app/bootstrap/features/<domain>.py` returns a `Feature` (`name`, `service`, `build(resources, settings)`, `routers`, `task_routers`, `tasks`, `models`, `upstreams`, `enabled(settings)`), and `app/bootstrap/features/registry.py` gets one entry in `FEATURES`. That is the only shared-file edit: `application.py`, `worker.py` and `alembic/env.py` import `FEATURES`, and pass it on to `services.py` and `api/router.py`.

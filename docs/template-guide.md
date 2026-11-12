@@ -76,11 +76,12 @@ handler comes from `completions_feature(handler_factory=...)`.
 
 ### Add a domain: checklist
 
-1. Create `app/modules/business/<domain>/` (`schemas.py`, `service.py`, plus stores/integrations as needed) and `app/api/v1/<domain>/router.py`.
-2. Write `<domain>_feature()` in `app/bootstrap/features/<domain>.py` returning a `Feature`. A task handler lives in this file: `async def handler(resources, task) -> dict`, parsing `task.payload` with the request schema and raising on failure so the worker marks the task failed. Register it in `tasks={TYPE: handler}`.
-3. Settings: new file `app/core/config/<domain>.py` with `<Domain>SettingsMixin(BaseModel)`; import it and add it to the `Settings` bases in `app/core/config/__init__.py` (two edits).
-4. Add the new keys to `.env.example` (`scripts/check_env_example.py` fails on drift).
-5. Add one entry to `FEATURES` in `app/bootstrap/features/registry.py`.
+0. Run `make new-domain NAME=<domain>`. It generates the files below and registers them.
+1. Generated: `app/modules/business/<domain>/` (`schemas.py`, `service.py`) and `app/api/v1/<domain>/router.py`. Edit: replace the echo service; add stores and integrations as needed.
+2. Generated: `<domain>_feature()` in `app/bootstrap/features/<domain>.py`. Edit: wire your constructor dependencies in `build`. A task handler lives in this file: `async def handler(resources, task) -> dict`, parsing `task.payload` with the request schema and raising on failure so the worker marks the task failed. Register it in `tasks={TYPE: handler}`.
+3. Generated: `app/core/config/<domain>.py` with `<Domain>SettingsMixin(BaseModel)`, added to the `Settings` bases. Edit: add cross-setting rules in a `@model_validator`.
+4. Generated: `<DOMAIN>_ENABLED=false` in `.env.example` (`scripts/check_env_example.py` fails on drift). Edit: add any further keys you introduce.
+5. Generated: one entry in `FEATURES` in `app/bootstrap/features/registry.py`.
 6. Auth: declare `dependencies=[Depends(require_principal)]` once on the router; add `principal: Principal = Depends(require_principal)` to a route only when it needs the id. A missing token answers 401.
 7. Tests: see "Testing a feature" in [agents/architecture.md](agents/architecture.md).
 

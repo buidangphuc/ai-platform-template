@@ -6,6 +6,7 @@
 - Everything on localinfra: `make infra-up` then `make test-infra`
 - Eval gate: `make eval-ci`
 - Layer rules: `make arch`
+- New business domain: `make new-domain NAME=<snake_case>`
 - Tests fake only the LLM and Langfuse; everything else runs on real services from localinfra. Tests using an infra fixture (`tests/infra.py`) get the `infra` marker automatically.
   - Start services: `make infra-up` (runs `bin/li up redis postgres mongo minio elasticmq rabbitmq` in `LOCALINFRA_DIR`, default `~/Documents/localinfra`; Postgres is `pgvector/pgvector:pg16`)
   - Run: `uv run --env-file .env.test pytest` (`.env.test` sets `TEST_*` URLs and `TEST_INFRA_REQUIRED=1`; a missing service then fails instead of skipping)
