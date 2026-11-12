@@ -2,15 +2,26 @@ import asyncio
 import json
 import logging
 from time import perf_counter
-from uuid import uuid4
 
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.bootstrap.state import get_app_resources
-from app.core.request_context import get_request_id
+from app.core.request_context import get_request_id, resolve_request_id
 
 access_logger = logging.getLogger("app.access")
+
+
+def path_matches_any(path: str, patterns: tuple[str, ...]) -> bool:
+    path_segments = [segment for segment in path.split("/") if segment]
+    for pattern in patterns:
+        wanted = [segment for segment in pattern.split("/") if segment]
+        if not wanted:
+            continue
+        for start in range(len(path_segments) - len(wanted) + 1):
+            if path_segments[start : start + len(wanted)] == wanted:
+                return True
+    return False
 
 
 class AccessLogMiddleware:
@@ -69,28 +80,37 @@ class RequestBodyLimitMiddleware:
             return
 
         response_started = False
+        too_large_sent = False
+        overflowed = False
         bytes_received = 0
 
         async def receive_with_limit() -> Message:
-            nonlocal bytes_received
+            nonlocal bytes_received, overflowed
             message = await receive()
             if message["type"] == "http.request":
                 bytes_received += len(message.get("body") or b"")
                 if bytes_received > self.max_body_bytes:
+                    overflowed = True
                     raise RequestBodyTooLarge
             return message
 
-        async def send_with_state(message: Message) -> None:
-            nonlocal response_started
+        async def send_unless_replaced(message: Message) -> None:
+            nonlocal response_started, too_large_sent
+            if overflowed and not response_started:
+                if not too_large_sent:
+                    too_large_sent = True
+                    await self._send_too_large(scope, send)
+                return
             if message["type"] == "http.response.start":
                 response_started = True
             await send(message)
 
         try:
-            await self.app(scope, receive_with_limit, send_with_state)
-        except RequestBodyTooLarge:
-            if response_started:
+            await self.app(scope, receive_with_limit, send_unless_replaced)
+        except Exception:
+            if not overflowed or response_started:
                 raise
+        if overflowed and not response_started and not too_large_sent:
             await self._send_too_large(scope, send)
 
     async def _send_too_large(self, scope: Scope, send: Send) -> None:
@@ -122,13 +142,13 @@ def _request_id_from_scope(scope: Scope) -> str:
     if state.get("request_id"):
         return str(state["request_id"])
 
+    raw: bytes | None = None
     for name, value in scope.get("headers") or []:
         if name.lower() == b"x-request-id":
-            request_id = value.decode("utf-8")
-            state["request_id"] = request_id
-            return request_id
+            raw = value
+            break
 
-    request_id = f"req_{uuid4().hex}"
+    request_id = resolve_request_id(raw)
     state["request_id"] = request_id
     return request_id
 
@@ -270,7 +290,7 @@ class RequestTimeoutMiddleware:
             await self._send_timeout(scope, send)
 
     def _is_excluded(self, path: str) -> bool:
-        return any(pattern in path for pattern in self.exclude_patterns)
+        return path_matches_any(path, self.exclude_patterns)
 
     async def _send_timeout(self, scope: Scope, send: Send) -> None:
         request_id = _request_id_from_scope(scope)
@@ -342,7 +362,7 @@ class IPRateLimitMiddleware:
         await self._send_rate_limited(scope, send, result.retry_after_seconds)
 
     def _is_excluded(self, path: str) -> bool:
-        return any(pattern in path for pattern in self.exclude_patterns)
+        return path_matches_any(path, self.exclude_patterns)
 
     def _lookup_limiter(self, scope: Scope):
         return get_app_resources(scope["app"]).ip_rate_limiter

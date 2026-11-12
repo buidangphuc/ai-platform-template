@@ -62,6 +62,39 @@ async def test_excluded_path_bypasses_timeout():
     assert response.json() == {"streaming": True}
 
 
+async def test_exclude_pattern_matches_whole_segments_only():
+    settings = build_test_settings(
+        REQUEST_TIMEOUT_ENABLED=True,
+        REQUEST_TIMEOUT_SECONDS=1,
+        REQUEST_TIMEOUT_EXCLUDE_PATTERNS="/stream",
+    )
+    app = create_app(settings=settings, init_resources=False)
+    router = APIRouter()
+
+    @router.get("/api/v1/completions/stream")
+    async def excluded():
+        await asyncio.sleep(1.3)
+        return {"ok": True}
+
+    @router.get("/api/v1/streamers/1")
+    async def included():
+        await asyncio.sleep(1.3)
+        return {"ok": True}
+
+    app.include_router(router)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        timeout=10.0,
+    ) as client:
+        excluded_response = await client.get("/api/v1/completions/stream")
+        included_response = await client.get("/api/v1/streamers/1")
+
+    assert excluded_response.status_code == 200
+    assert included_response.status_code == 504
+
+
 async def test_timeout_disabled_lets_slow_request_finish():
     settings = _settings().model_copy(update={"REQUEST_TIMEOUT_ENABLED": False})
     app = _build_app(settings)
