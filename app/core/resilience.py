@@ -51,6 +51,9 @@ def retry_after_seconds(error: BaseException) -> float | None:
     return seconds if seconds is not None and seconds >= 0 else None
 
 
+_hint_from_error = retry_after_seconds
+
+
 def is_transient_error(error: BaseException) -> bool:
     """True for failures that a later attempt or another provider can fix.
 
@@ -88,7 +91,6 @@ class RetryPolicy:
     base_delay_seconds: float = 0.5
     max_delay_seconds: float = 30.0
     rng: Callable[[], float] = random.random
-    _hint_from = staticmethod(retry_after_seconds)
 
     def __post_init__(self) -> None:
         if self.max_attempts <= 0:
@@ -112,7 +114,7 @@ class RetryPolicy:
             if not self.retry_on(error):
                 return RetryDecision(should_retry=False)
             if retry_after_seconds is None:
-                retry_after_seconds = self._hint_from(error)
+                retry_after_seconds = _hint_from_error(error)
         elif status_code not in self.retry_status_codes:
             return RetryDecision(should_retry=False)
         return RetryDecision(True, self._delay(attempt, retry_after_seconds))
