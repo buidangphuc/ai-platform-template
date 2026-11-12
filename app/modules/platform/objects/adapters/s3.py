@@ -100,7 +100,7 @@ class S3ObjectGateway:
         try:
             response = await client.get_object(Bucket=self.bucket, Key=self._key(key))
         except Exception as exc:
-            if exc.__class__.__name__ in {"NoSuchKey", "ClientError"}:
+            if _is_missing(exc):
                 return None
             raise
         body = response["Body"]
@@ -115,7 +115,7 @@ class S3ObjectGateway:
         try:
             await client.head_object(Bucket=self.bucket, Key=self._key(key))
         except Exception as exc:
-            if exc.__class__.__name__ in {"NoSuchKey", "ClientError"}:
+            if _is_missing(exc):
                 return False
             raise
         return True
@@ -170,3 +170,11 @@ class S3ObjectGateway:
     def _key(self, key: str) -> str:
         normalized = key.strip("/")
         return f"{self.prefix}/{normalized}" if self.prefix else normalized
+
+
+_MISSING_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
+
+
+def _is_missing(exc: BaseException) -> bool:
+    response: dict[str, Any] = getattr(exc, "response", None) or {}
+    return response.get("Error", {}).get("Code") in _MISSING_CODES

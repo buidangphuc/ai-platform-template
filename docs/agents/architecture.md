@@ -47,7 +47,7 @@ Prefer existing repo patterns over new abstractions.
 ### Platform modules (`app/modules/platform`)
 
 - Reusable cross-product capabilities and backend adapters; factories choose concrete backends from settings; each adapter implements one backend.
-- Examples: quota service over memory/postgres/mongo stores; Mongo gateway; cache, objects, idempotency, rate limit, identity.
+- Examples: quota service over postgres/mongo stores; Mongo gateway; cache, objects, idempotency, rate limit, identity.
 - No product-specific setup here.
 
 ```text
@@ -82,12 +82,13 @@ service consumes interface/capability
 
 Declare an `Upstream(name, base_url, timeout, retries, headers, follow_redirects)` in the feature's `upstreams` (`app/modules/platform/http/upstream.py`) and call it with `resources.http(name)`, an `UpstreamClient` (`get`, `post`, `request`). Bootstrap opens one `httpx.AsyncClient` per upstream of every enabled feature and closes it on shutdown; each call applies the timeout, retries transient failures up to `retries`, trips a per-upstream circuit breaker (`ServiceUnavailableError`, code `upstream_unavailable`), sends `X-Request-ID` and logs one line without bodies or headers. Two enabled features declaring the same upstream name fail at startup; an unknown name raises `upstream_not_configured`. `retries` applies to every method including POST, so enable it only for idempotent calls. Do not build an `httpx.AsyncClient` in a feature or service.
 
-In integration or worker tests, mock the upstream with `mock_upstreams` from `tests/factories.py` (named upstreams use an `httpx.MockTransport`; other names keep the real transport):
+In integration or worker tests, point the upstream at the real local HTTP server from `tests/http_server.py` (fixture `local_http_server`: `.url`, `.script(path, *Reply(status, json, headers, delay, drop))`, `.requests`) with `local_upstreams` from `tests/factories.py` (named upstreams get the local base URL; other names keep their own). The call goes over a real socket, so retry, breaker and timeout behave as in production:
 
 ```python
-def test_lookup(monkeypatch):
-    mock_upstreams(monkeypatch, {"geo": lambda request: httpx.Response(200, json={"city": "x"})})
-    # then create_app(...) / worker_context(...) as usual; resources.http("geo") hits the handler
+async def test_lookup(monkeypatch, local_http_server):
+    local_http_server.script("/lookup", Reply(json={"city": "x"}))
+    local_upstreams(monkeypatch, {"geo": local_http_server.url})
+    # then create_app(...) / worker_context(...) as usual; resources.http("geo") hits the server
 ```
 
 ## Adding an endpoint
@@ -134,8 +135,8 @@ The canonical check list is `## Checks` in `docs/agents/project.md`; CI mirrors 
 ### Testing a feature
 
 - Integration: `create_app(settings=build_test_settings(...))` with the feature's flags flipped (default registry), or `create_app(features=(<domain>_feature(...),))` for a custom handler. `init_resources` defaults to True; the lifespan opens addons either way.
-- Worker: settings `QUEUE_ENABLED=True, TASKS_ENABLED=True, QUEUE_BACKEND="memory", TASK_STORE_BACKEND="memory"`, then `worker_context(settings, features=...)`: `ctx.tasks.service.submit(...)`, `[message] = await ctx.tasks.queue.receive(max_messages=1)`, `await ctx.worker.handler(message)`. `tests/unit/core/test_features.py` is the working example.
-- Upstreams: `mock_upstreams` (see "Calling external HTTP APIs"). LLM: `model_builder` (see `docs/agents/ai-engineering.md`).
+- Worker: real infra (`tests/infra.py` fixtures; no in-memory backend exists): settings `QUEUE_ENABLED=True, TASKS_ENABLED=True, REDIS_ENABLED=True, DATABASE_ENABLED=True` with `QUEUE_NAME` and `TASK_REDIS_PREFIX` under `redis_prefix`, then `worker_context(settings, features=...)`: `ctx.tasks.service.submit(...)`, `[message] = await ctx.tasks.queue.receive(max_messages=1)`, `await ctx.worker.handler(message)`. `tests/unit/core/test_features.py` is the working example.
+- Upstreams: `local_http_server` + `local_upstreams` (see "Calling external HTTP APIs"). LLM: `model_builder` (see `docs/agents/ai-engineering.md`).
 
 Docker smoke checks: use a minimal local runtime with external AI dependencies disabled unless real provider calls are requested.
 

@@ -35,20 +35,12 @@ from scripts.run_worker import main
 from tests.factories import build_test_settings
 
 
-def _async_returning(value):
-    async def opener(settings, backend):
-        return value
-
-    return opener
-
-
 def _settings() -> Settings:
     return build_test_settings(
-        # The worker stack is opt-in on the template — enable it explicitly.
         QUEUE_ENABLED=True,
         TASKS_ENABLED=True,
-        QUEUE_BACKEND="memory",
-        TASK_STORE_BACKEND="memory",
+        REDIS_ENABLED=True,
+        DATABASE_ENABLED=True,
         WORKER_MAX_CONCURRENT=4,
     )
 
@@ -66,28 +58,19 @@ async def test_worker_context_wires_all_components():
         assert ctx.worker.max_concurrent == 4
 
 
-async def test_worker_context_does_not_open_disabled_database_or_redis(monkeypatch):
+async def test_worker_context_does_not_open_a_disabled_database(monkeypatch):
     settings = _settings().model_copy(
-        update={
-            "DATABASE_ENABLED": False,
-            "REDIS_ENABLED": False,
-            "QUEUE_BACKEND": "memory",
-            "TASK_STORE_BACKEND": "memory",
-        }
+        update={"DATABASE_ENABLED": False, "TASK_STORE_BACKEND": "redis"}
     )
 
     monkeypatch.setattr(
         "app.bootstrap.resources.build_engine",
         lambda _settings: pytest.fail("database should not be opened"),
     )
-    monkeypatch.setattr(
-        "app.bootstrap.resources.build_redis_client",
-        lambda _settings: pytest.fail("redis should not be opened"),
-    )
 
     async with worker_context(settings) as ctx:
         assert ctx.resources.engine is None
-        assert ctx.resources.redis is None
+        assert ctx.resources.redis is not None
 
 
 async def test_worker_context_uses_default_echo_handler():
@@ -173,92 +156,31 @@ async def test_worker_message_handler_marks_task_completed():
 
 
 async def test_worker_context_manager_closes_queue_and_store(monkeypatch):
-    class _FakeQueue:
-        def __init__(self) -> None:
-            self.closed = False
+    from app.modules.messaging.queue.adapters.redis_stream import (
+        RedisStreamQueueGateway,
+    )
+    from app.modules.messaging.tasks.adapters.postgres import PostgresTaskStore
 
-        async def send(self, payload: dict) -> str:
-            return "msg-1"
+    closed: list[str] = []
 
-        async def receive(
-            self,
-            *,
-            max_messages: int = 10,
-            wait_seconds: float = 0.0,
-        ) -> list:
-            return []
-
-        async def ack(self, message) -> None:
-            return None
-
-        async def nack(self, message, *, requeue: bool = True) -> None:
-            return None
+    def spy(cls, name: str) -> None:
+        original = cls.close
 
         async def close(self) -> None:
-            self.closed = True
+            closed.append(name)
+            await original(self)
 
-    class _FakeStore:
-        def __init__(self) -> None:
-            self.closed = False
+        monkeypatch.setattr(cls, "close", close)
 
-        async def create(self, task: TaskRecord) -> None:
-            return None
-
-        async def get(self, task_id: str) -> TaskRecord | None:
-            return None
-
-        async def mark_processing(self, task_id: str, **_: object) -> bool:
-            return True
-
-        async def mark_completed(self, task_id: str, result: dict) -> None:
-            return None
-
-        async def mark_failed(self, task_id: str, error: str) -> None:
-            return None
-
-        async def reclaim_stale_processing(self, **_: object) -> list:
-            return []
-
-        async def delete_expired(self, before) -> int:
-            return 0
-
-        async def close(self) -> None:
-            self.closed = True
-
-    queue = _FakeQueue()
-    store = _FakeStore()
-
-    monkeypatch.setattr(
-        "app.bootstrap.resources.open_queue_gateway",
-        _async_returning(queue),
-    )
-    monkeypatch.setattr(
-        "app.bootstrap.resources.build_memory_task_store",
-        lambda: store,
-    )
+    spy(RedisStreamQueueGateway, "queue")
+    spy(PostgresTaskStore, "store")
 
     async with worker_context(_settings()) as ctx:
-        assert ctx.tasks.queue is queue
-        assert ctx.tasks.store is store
+        assert isinstance(ctx.tasks.queue, RedisStreamQueueGateway)
+        assert isinstance(ctx.tasks.store, PostgresTaskStore)
+        assert closed == []
 
-    assert queue.closed is True
-    assert store.closed is True
-
-
-@pytest.mark.parametrize(
-    "queue_backend",
-    ["memory", "redis"],
-)
-async def test_worker_context_honors_queue_backend(queue_backend: str):
-    settings = _settings().model_copy(
-        update={
-            "QUEUE_BACKEND": queue_backend,
-            # The redis backend additionally requires the redis capability.
-            "REDIS_ENABLED": queue_backend == "redis",
-        }
-    )
-    async with worker_context(settings) as ctx:
-        assert ctx.worker is not None
+    assert sorted(closed) == ["queue", "store"]
 
 
 def test_worker_runtime_settings_require_queue_and_tasks_enabled():
@@ -275,12 +197,7 @@ def test_worker_runtime_settings_require_queue_and_tasks_enabled():
 
 def test_worker_configuration_check_validates_without_opening_sessions(monkeypatch):
     settings = _settings().model_copy(
-        update={
-            "DATABASE_ENABLED": False,
-            "REDIS_ENABLED": False,
-            "QUEUE_BACKEND": "memory",
-            "TASK_STORE_BACKEND": "memory",
-        }
+        update={"DATABASE_ENABLED": False, "TASK_STORE_BACKEND": "redis"}
     )
 
     monkeypatch.setattr(
@@ -403,10 +320,12 @@ async def test_worker_handler_stores_a_safe_error_and_dead_letters_failures():
     assert "sk-123" not in error and "secret" not in error
 
 
-async def test_worker_context_run_stops_the_background_loops_with_the_worker():
+async def test_worker_context_run_stops_the_background_loops_with_the_worker(
+    worker_settings: Settings,
+):
     import asyncio
 
-    async with worker_context(_settings()) as ctx:
+    async with worker_context(worker_settings) as ctx:
         run = asyncio.create_task(ctx.run())
         await asyncio.sleep(0.1)
         assert not run.done()

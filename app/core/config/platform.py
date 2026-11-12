@@ -8,11 +8,11 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
-RateLimitBackend = Literal["memory", "redis"]
-CacheBackend = Literal["memory", "redis"]
-ObjectBackend = Literal["memory", "s3"]
+RateLimitBackend = Literal["redis"]
+CacheBackend = Literal["redis"]
+ObjectBackend = Literal["s3"]
 IdempotencyBackend = Literal["postgres"]
-QuotaBackend = Literal["memory", "postgres", "mongo"]
+QuotaBackend = Literal["postgres", "mongo"]
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ class PlatformSettingsMixin(BaseModel):
 
     # Rate limit (2 layers: IP + principal)
     RATE_LIMIT_ENABLED: bool = False
-    RATE_LIMIT_BACKEND: RateLimitBackend = "memory"
+    RATE_LIMIT_BACKEND: RateLimitBackend = "redis"
     RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60, gt=0)
     RATE_LIMIT_REDIS_PREFIX: str = "rate-limit"
     RATE_LIMIT_IP_ENABLED: bool = True
@@ -78,13 +78,13 @@ class PlatformSettingsMixin(BaseModel):
 
     # Cache
     CACHE_ENABLED: bool = False
-    CACHE_BACKEND: CacheBackend = "memory"
+    CACHE_BACKEND: CacheBackend = "redis"
     CACHE_PREFIX: str = "app"
     CACHE_DEFAULT_TTL_SECONDS: float = Field(default=300, gt=0)
 
     # Object storage
     OBJECTS_ENABLED: bool = False
-    OBJECT_BACKEND: ObjectBackend = "memory"
+    OBJECT_BACKEND: ObjectBackend = "s3"
     OBJECT_PREFIX: str = "app"
     OBJECT_S3_BUCKET: str = ""
     OBJECT_S3_REGION: str = "ap-southeast-1"
@@ -102,7 +102,7 @@ class PlatformSettingsMixin(BaseModel):
 
     # Durable quota / entitlement counters
     QUOTA_ENABLED: bool = False
-    QUOTA_BACKEND: QuotaBackend = "memory"
+    QUOTA_BACKEND: QuotaBackend = "postgres"
 
     @model_validator(mode="after")
     def validate_backend_requirements(self) -> Self:

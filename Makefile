@@ -1,4 +1,4 @@
-.PHONY: help dev test eval lint format typecheck check ci hooks-install \
+.PHONY: help dev test test-infra infra-up eval lint format typecheck check ci hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse
@@ -8,6 +8,7 @@ UV := PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv
 # Dev/test run with every optional extra installed ([ai], [aws], [mongo], ...).
 # Production installs pick extras explicitly: `uv sync --extra ai` etc.
 UV_RUN := $(UV) run --all-extras
+LOCALINFRA_DIR ?= $(HOME)/Documents/localinfra
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -18,8 +19,14 @@ dev: ## Run dev server with autoreload
 worker: ## Run async task worker
 	$(UV_RUN) python -m scripts.run_worker
 
-test: ## Run pytest
-	$(UV_RUN) pytest -v
+test: ## Run pytest without infra (what CI runs)
+	$(UV_RUN) pytest -q -m "not infra"
+
+infra-up: ## Start the localinfra services the tests need
+	cd $(LOCALINFRA_DIR) && bin/li up redis postgres mongo minio elasticmq rabbitmq
+
+test-infra: ## Run every test on localinfra with the 80% coverage gate
+	$(UV_RUN) --env-file .env.test pytest -q --cov=app --cov-fail-under=80
 
 eval: ## Run the eval gate (deterministic cases; judge cases need JUDGE_CHAT_MODEL)
 	$(UV_RUN) python -m scripts.run_eval --min-score 0.8
@@ -43,7 +50,7 @@ check-env: ## Verify .env.example matches Settings fields
 typecheck: ## Pyright type check
 	$(UV_RUN) pyright
 
-ci: check check-env typecheck test ## Full CI suite locally
+ci: check check-env typecheck test-infra ## Full suite locally, infra included
 
 hooks-install: ## Install pre-commit hooks
 	$(UV) run pre-commit install --install-hooks

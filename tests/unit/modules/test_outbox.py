@@ -1,7 +1,10 @@
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
-from fastapi import FastAPI
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.addons.outbox import OutboxAddon
 from app.bootstrap.resources import ApplicationResources
@@ -16,12 +19,79 @@ from app.modules.messaging.outbox.publisher import (
     WebhookOutboxSink,
 )
 from app.modules.messaging.outbox.store import OutboxRecord, OutboxStatus
-from app.modules.messaging.webhooks.dispatcher import WebhookDeliveryResult
+from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
+from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
+from app.modules.messaging.webhooks.signing import WebhookSigner
 from tests.factories import build_test_settings, open_addon
+from tests.http_server import LocalHttpServer, Reply
+from tests.infra import SqsQueue
+
+Sessions = async_sessionmaker[AsyncSession]
+
+RETRY_POLICY = RetryPolicy(
+    max_attempts=3,
+    base_delay_seconds=5.0,
+    max_delay_seconds=5.0,
+    rng=lambda: 1.0,
+    retry_on=lambda _error: True,
+)
 
 
 def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
+
+
+@pytest.fixture()
+async def queue(
+    sqs_queue: SqsQueue, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[SQSQueueGateway]:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    gateway = await SQSQueueGateway(
+        queue_url=sqs_queue.url,
+        region_name=sqs_queue.region,
+        endpoint_url=sqs_queue.endpoint_url,
+    ).open()
+    try:
+        yield gateway
+    finally:
+        await gateway.close()
+
+
+@pytest.fixture()
+async def http_client() -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient() as client:
+        yield client
+
+
+def _webhook_sink(
+    server: LocalHttpServer, client: httpx.AsyncClient
+) -> WebhookOutboxSink:
+    return WebhookOutboxSink(
+        url=f"{server.url}/webhooks",
+        dispatcher=HttpWebhookDispatcher(
+            signer=WebhookSigner(secret="secret"), client=client
+        ),
+    )
+
+
+async def _event(sessions: Sessions, event_id: str) -> OutboxEvent:
+    async with sessions() as session:
+        return (
+            await session.scalars(select(OutboxEvent).where(OutboxEvent.id == event_id))
+        ).one()
+
+
+async def _enqueue(
+    store: PostgresOutboxStore, event_type: str = "generic.event", **kwargs
+) -> OutboxRecord:
+    return await store.enqueue(
+        event_type=event_type,
+        payload={"value": 1},
+        metadata={"trace_id": "trace-1"},
+        available_at=datetime.now(UTC) - timedelta(seconds=1),
+        **kwargs,
+    )
 
 
 def test_outbox_record_is_generic_platform_shape():
@@ -45,24 +115,28 @@ def test_outbox_model_uses_safe_metadata_column_name():
     assert OutboxEvent.event_metadata.property.columns[0].name == "metadata"
 
 
-def test_build_outbox_store_returns_postgres_store():
+def test_build_outbox_store_returns_postgres_store(pg_sessionmaker: Sessions):
     store = build_outbox_store(
-        _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True), object()
+        _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True), pg_sessionmaker
     )
 
     assert isinstance(store, PostgresOutboxStore)
 
 
-async def test_outbox_addon_attaches_store_when_enabled():
-    FastAPI()
-    resources = ApplicationResources(sessionmaker=object())
+async def test_outbox_addon_attaches_store_when_enabled(pg_sessionmaker: Sessions):
+    resources = ApplicationResources(sessionmaker=pg_sessionmaker)
     addon = OutboxAddon()
 
-    await open_addon(
+    stack = await open_addon(
         addon, resources, _settings(OUTBOX_ENABLED=True, DATABASE_ENABLED=True)
     )
 
     assert isinstance(resources.outbox_store, PostgresOutboxStore)
+    record = await resources.outbox_store.enqueue(
+        event_type="generic.event", payload={"ok": True}
+    )
+    assert (await _event(pg_sessionmaker, record.id)).status == "pending"
+    await stack.aclose()
 
 
 def test_outbox_addon_respects_enabled_flag():
@@ -72,202 +146,240 @@ def test_outbox_addon_respects_enabled_flag():
     assert addon.is_enabled(_settings(OUTBOX_ENABLED=False)) is False
 
 
-class _FakeOutboxStore:
-    def __init__(self, records: list[OutboxRecord]) -> None:
-        self.records = records
-        self.published: list[tuple[str, datetime]] = []
-        self.failed: list[tuple[str, str, datetime | None]] = []
-        self.claim_calls: list[tuple[int, datetime | None, float]] = []
-        self.claim_prefixes: list[str | None] = []
+async def test_store_enqueue_persists_a_pending_event(pg_sessionmaker: Sessions):
+    store = PostgresOutboxStore(pg_sessionmaker)
 
-    async def claim_pending(
-        self,
-        *,
-        limit: int = 100,
-        now: datetime | None = None,
-        lock_seconds: float = 60.0,
-        event_type_prefix: str | None = None,
-    ) -> list[OutboxRecord]:
-        self.claim_calls.append((limit, now, lock_seconds))
-        self.claim_prefixes.append(event_type_prefix)
-        return self.records[:limit]
+    record = await _enqueue(store)
 
-    async def mark_published(self, event_id: str, *, published_at: datetime) -> None:
-        self.published.append((event_id, published_at))
-
-    async def mark_failed(
-        self,
-        event_id: str,
-        *,
-        error: str,
-        available_at: datetime | None = None,
-    ) -> None:
-        self.failed.append((event_id, error, available_at))
+    assert record.status is OutboxStatus.PENDING
+    assert record.attempts == 0
+    row = await _event(pg_sessionmaker, record.id)
+    assert row.event_type == "generic.event"
+    assert row.payload == {"value": 1}
+    assert row.event_metadata == {"trace_id": "trace-1"}
 
 
-class _FakeQueue:
-    def __init__(self) -> None:
-        self.payloads: list[dict[str, object]] = []
+async def test_store_claim_locks_rows_for_the_requested_seconds(
+    pg_sessionmaker: Sessions,
+):
+    store = PostgresOutboxStore(pg_sessionmaker)
+    record = await _enqueue(store)
+    now = datetime.now(UTC)
 
-    async def send(self, payload: dict[str, object]) -> str:
-        self.payloads.append(payload)
-        return "msg-1"
+    [claimed] = await store.claim_pending(now=now, lock_seconds=15.5)
 
-
-def _record(**overrides: object) -> OutboxRecord:
-    values: dict[str, object] = {
-        "id": "evt-1",
-        "event_type": "generic.event",
-        "payload": {"value": 1},
-        "metadata": {"trace_id": "trace-1"},
-        "attempts": 0,
-        "available_at": datetime(2026, 5, 22, tzinfo=UTC),
-    }
-    values.update(overrides)
-    return OutboxRecord(**values)
+    assert claimed.id == record.id
+    assert claimed.locked_until == now + timedelta(seconds=15.5)
+    assert await store.claim_pending(now=now + timedelta(seconds=10)) == []
+    [again] = await store.claim_pending(now=now + timedelta(seconds=16))
+    assert again.id == record.id
 
 
-async def test_outbox_publisher_sends_generic_queue_payload_and_marks_published():
-    now = datetime(2026, 5, 22, 10, 30, tzinfo=UTC)
-    store = _FakeOutboxStore([_record()])
-    queue = _FakeQueue()
+async def test_store_claim_rejects_non_positive_arguments(pg_sessionmaker: Sessions):
+    store = PostgresOutboxStore(pg_sessionmaker)
+
+    with pytest.raises(ValueError, match="limit must be positive"):
+        await store.claim_pending(limit=0)
+    with pytest.raises(ValueError, match="lock_seconds must be positive"):
+        await store.claim_pending(lock_seconds=0)
+
+
+async def test_store_marks_on_unknown_events_raise_key_error(
+    pg_sessionmaker: Sessions,
+):
+    store = PostgresOutboxStore(pg_sessionmaker)
+
+    with pytest.raises(KeyError):
+        await store.mark_published("missing", published_at=datetime.now(UTC))
+    with pytest.raises(KeyError):
+        await store.mark_failed("missing", error="boom")
+
+
+async def test_store_deletes_only_old_published_events(pg_sessionmaker: Sessions):
+    store = PostgresOutboxStore(pg_sessionmaker)
+    now = datetime.now(UTC)
+    old = await _enqueue(store)
+    recent = await _enqueue(store)
+    pending = await _enqueue(store)
+    await store.mark_published(old.id, published_at=now - timedelta(days=2))
+    await store.mark_published(recent.id, published_at=now)
+
+    deleted = await store.delete_published_before(now - timedelta(days=1), limit=10)
+
+    assert deleted == 1
+    async with pg_sessionmaker() as session:
+        ids = set(await session.scalars(select(OutboxEvent.id)))
+    assert ids == {recent.id, pending.id}
+    with pytest.raises(ValueError, match="limit must be positive"):
+        await store.delete_published_before(now, limit=0)
+    await store.close()
+
+
+async def test_outbox_publisher_sends_generic_queue_payload_and_marks_published(
+    pg_sessionmaker: Sessions, queue: SQSQueueGateway
+):
+    store = PostgresOutboxStore(pg_sessionmaker)
+    record = await _enqueue(store)
+    now = datetime.now(UTC)
     publisher = OutboxPublisher(store=store, sink=QueueOutboxSink(queue))
 
     report = await publisher.publish_pending(now=now)
 
-    assert queue.payloads == [
-        {
-            "id": "evt-1",
-            "type": "generic.event",
-            "payload": {"value": 1},
-            "metadata": {"trace_id": "trace-1"},
-        }
-    ]
-    assert store.published == [("evt-1", now)]
-    assert report.total == 1
-    assert report.published == 1
-    assert report.failed == 0
-    assert report.retried == 0
-    assert store.claim_calls == [(100, now, 60.0)]
+    [message] = await queue.receive(max_messages=1, wait_seconds=2)
+    assert message.body == {
+        "id": record.id,
+        "type": "generic.event",
+        "payload": {"value": 1},
+        "metadata": {"trace_id": "trace-1"},
+    }
+    row = await _event(pg_sessionmaker, record.id)
+    assert row.status == "published"
+    assert row.published_at == now
+    assert row.locked_until is None
+    assert (report.total, report.published, report.failed, report.retried) == (
+        1,
+        1,
+        0,
+        0,
+    )
 
 
-async def test_outbox_publisher_accepts_custom_claim_lock_seconds():
-    now = datetime(2026, 5, 22, 10, 30, tzinfo=UTC)
-    store = _FakeOutboxStore([_record()])
-    queue = _FakeQueue()
+async def test_outbox_publisher_honours_the_batch_limit(
+    pg_sessionmaker: Sessions, queue: SQSQueueGateway
+):
+    store = PostgresOutboxStore(pg_sessionmaker)
+    for _ in range(3):
+        await _enqueue(store)
     publisher = OutboxPublisher(store=store, sink=QueueOutboxSink(queue))
 
-    await publisher.publish_pending(now=now, limit=5, lock_seconds=15.5)
+    first = await publisher.publish_pending(limit=2, lock_seconds=15.5)
+    second = await publisher.publish_pending(limit=2)
 
-    assert store.claim_calls == [(5, now, 15.5)]
+    assert (first.total, second.total) == (2, 1)
 
 
-async def test_outbox_publisher_rejects_non_positive_claim_lock_seconds():
+async def test_outbox_publisher_rejects_non_positive_claim_lock_seconds(
+    pg_sessionmaker: Sessions, queue: SQSQueueGateway
+):
     publisher = OutboxPublisher(
-        store=_FakeOutboxStore([]),
-        sink=QueueOutboxSink(_FakeQueue()),
+        store=PostgresOutboxStore(pg_sessionmaker), sink=QueueOutboxSink(queue)
     )
 
     with pytest.raises(ValueError, match="lock_seconds must be positive"):
         await publisher.publish_pending(lock_seconds=0)
 
 
-async def test_outbox_publisher_reschedules_transient_failures_before_max_attempts():
-    class _FailingSink:
-        async def publish(
-            self,
-            record: OutboxRecord,
-            *,
-            now: datetime,
-        ) -> None:
-            raise RuntimeError("queue unavailable")
-
-    now = datetime(2026, 5, 22, 10, 30, tzinfo=UTC)
-    store = _FakeOutboxStore([_record(attempts=0)])
+async def test_outbox_publisher_reschedules_transient_failures_before_max_attempts(
+    pg_sessionmaker: Sessions,
+    local_http_server: LocalHttpServer,
+    http_client: httpx.AsyncClient,
+):
+    local_http_server.script("/webhooks", Reply(503))
+    store = PostgresOutboxStore(pg_sessionmaker)
+    record = await _enqueue(store)
+    now = datetime.now(UTC)
     publisher = OutboxPublisher(
         store=store,
-        sink=_FailingSink(),
-        retry_policy=RetryPolicy(
-            max_attempts=3,
-            base_delay_seconds=5.0,
-            max_delay_seconds=5.0,
-            rng=lambda: 1.0,
-            retry_on=lambda _error: True,
-        ),
+        sink=_webhook_sink(local_http_server, http_client),
+        retry_policy=RETRY_POLICY,
     )
 
     report = await publisher.publish_pending(now=now)
 
-    assert store.published == []
-    assert store.failed == [("evt-1", "queue unavailable", now + timedelta(seconds=5))]
+    row = await _event(pg_sessionmaker, record.id)
+    assert row.status == "pending"
+    assert row.attempts == 1
+    assert row.error == "HTTP 503"
+    assert row.available_at == now + timedelta(seconds=5)
+    assert row.locked_until is None
+    assert (report.retried, report.failed, report.published) == (1, 0, 0)
+
+
+async def test_outbox_publisher_marks_final_failure_after_max_attempts(
+    pg_sessionmaker: Sessions,
+    local_http_server: LocalHttpServer,
+    http_client: httpx.AsyncClient,
+):
+    local_http_server.script("/webhooks", Reply(503))
+    store = PostgresOutboxStore(pg_sessionmaker)
+    record = await _enqueue(store)
+    now = datetime.now(UTC)
+    publisher = OutboxPublisher(
+        store=store,
+        sink=_webhook_sink(local_http_server, http_client),
+        retry_policy=RETRY_POLICY,
+    )
+
+    reports = [
+        await publisher.publish_pending(now=now + timedelta(seconds=10 * attempt))
+        for attempt in range(3)
+    ]
+
+    assert [(r.retried, r.failed) for r in reports] == [(1, 0), (1, 0), (0, 1)]
+    row = await _event(pg_sessionmaker, record.id)
+    assert row.status == "failed"
+    assert row.attempts == 3
+    assert row.error == "HTTP 503"
+    assert await store.claim_pending(now=now + timedelta(days=1)) == []
+
+
+async def test_outbox_publisher_retries_when_the_webhook_endpoint_is_unreachable(
+    pg_sessionmaker: Sessions,
+    local_http_server: LocalHttpServer,
+    http_client: httpx.AsyncClient,
+):
+    sink = _webhook_sink(local_http_server, http_client)
+    await local_http_server.stop()
+    store = PostgresOutboxStore(pg_sessionmaker)
+    record = await _enqueue(store)
+    publisher = OutboxPublisher(store=store, sink=sink, retry_policy=RETRY_POLICY)
+
+    report = await publisher.publish_pending()
+
     assert report.retried == 1
-    assert report.failed == 0
+    row = await _event(pg_sessionmaker, record.id)
+    assert row.status == "pending"
+    assert row.error
 
 
-async def test_outbox_publisher_marks_final_failure_after_max_attempts():
-    class _FailingSink:
-        async def publish(
-            self,
-            record: OutboxRecord,
-            *,
-            now: datetime,
-        ) -> None:
-            raise RuntimeError("webhook rejected")
-
+async def test_webhook_outbox_sink_dispatches_generic_envelope(
+    local_http_server: LocalHttpServer, http_client: httpx.AsyncClient
+):
+    local_http_server.script("/webhooks", Reply(202))
     now = datetime(2026, 5, 22, 10, 30, tzinfo=UTC)
-    store = _FakeOutboxStore([_record(attempts=2)])
+    sink = _webhook_sink(local_http_server, http_client)
+    record = OutboxRecord(
+        id="evt-1",
+        event_type="generic.event",
+        payload={"value": 1},
+        metadata={"trace_id": "trace-1"},
+    )
+
+    await sink.publish(record, now=now)
+
+    [request] = local_http_server.requests_to("/webhooks")
+    assert request.json() == {
+        "id": "evt-1",
+        "type": "generic.event",
+        "occurred_at": now.isoformat(),
+        "payload": {"value": 1},
+        "metadata": {"trace_id": "trace-1"},
+    }
+    assert request.headers["x-webhook-signature"].startswith("v1=")
+
+
+async def test_outbox_publisher_claims_only_its_event_family(
+    pg_sessionmaker: Sessions, queue: SQSQueueGateway
+):
+    store = PostgresOutboxStore(pg_sessionmaker)
+    task_event = await _enqueue(store, "task.created")
+    other_event = await _enqueue(store, "other.event")
     publisher = OutboxPublisher(
-        store=store,
-        sink=_FailingSink(),
-        retry_policy=RetryPolicy(
-            max_attempts=3,
-            base_delay_seconds=5.0,
-            max_delay_seconds=5.0,
-            rng=lambda: 1.0,
-            retry_on=lambda _error: True,
-        ),
+        store=store, sink=QueueOutboxSink(queue), event_type_prefix="task."
     )
 
-    report = await publisher.publish_pending(now=now)
+    report = await publisher.publish_pending()
 
-    assert store.failed == [("evt-1", "webhook rejected", None)]
-    assert report.failed == 1
-    assert report.retried == 0
-
-
-async def test_webhook_outbox_sink_dispatches_generic_envelope():
-    class _Dispatcher:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, object]] = []
-
-        async def dispatch(self, url: str, envelope: object) -> WebhookDeliveryResult:
-            self.calls.append((url, envelope))
-            return WebhookDeliveryResult(status_code=202)
-
-    now = datetime(2026, 5, 22, 10, 30, tzinfo=UTC)
-    dispatcher = _Dispatcher()
-    sink = WebhookOutboxSink(
-        url="https://example.test/webhooks",
-        dispatcher=dispatcher,
-    )
-
-    await sink.publish(_record(), now=now)
-
-    url, envelope = dispatcher.calls[0]
-    assert url == "https://example.test/webhooks"
-    assert envelope.id == "evt-1"
-    assert envelope.type == "generic.event"
-    assert envelope.occurred_at == now
-
-
-async def test_outbox_publisher_claims_only_its_event_family():
-    store = _FakeOutboxStore([])
-    publisher = OutboxPublisher(
-        store=store,
-        sink=QueueOutboxSink(_FakeQueue()),
-        event_type_prefix="task.",
-    )
-
-    await publisher.publish_pending()
-
-    assert store.claim_prefixes == ["task."]
+    assert report.published == 1
+    assert (await _event(pg_sessionmaker, task_event.id)).status == "published"
+    assert (await _event(pg_sessionmaker, other_event.id)).status == "pending"

@@ -89,9 +89,9 @@ Choose A when correctness must gate the response, B when you only observe qualit
 
 Factory + bootstrap-addon pattern (`factory.py`):
 
-- `build_embed_model` / `build_storage_context` / `build_rag_service` choose concrete backends from `RAG_*` settings and build `KnowledgeRetrievalService`.
-- Defaults are `MockEmbedding` + in-memory storage; unwired backends raise an explicit `RuntimeError` telling you to extend the factory. **Extend the factory** to add a provider/vector store; never wire providers ad hoc in business code.
-- `RagAddon` is a `BootstrapAddon`: gated by `RAG_ENABLED`, opens the service into `resources.rag_service`, closes it on shutdown.
+- `build_embed_model` / `build_vector_store` / `build_rag_service` choose concrete backends from `RAG_*` settings and build `KnowledgeRetrievalService`.
+- Defaults are `MockEmbedding` + Postgres pgvector (`RAG_BACKEND=pgvector`, table `data_<RAG_PGVECTOR_TABLE>` created at startup, requires `DATABASE_ENABLED`; vector dimension is `RAG_MOCK_EMBED_DIM`, so a real embedding model must set the matching dimension in `build_vector_store`). There is no in-memory backend. Metadata filters go through `ParameterizedPGVectorStore` (`rag/store.py`): the upstream store interpolates filter keys and values into SQL, and `filters` arrive from the LLM tool call. Unwired backends raise an explicit `RuntimeError` telling you to extend the factory. **Extend the factory** to add a provider/vector store; never wire providers ad hoc in business code.
+- `RagAddon` is a `BootstrapAddon`: gated by `RAG_ENABLED`, opens the service into `resources.rag_service`, closes its store connections on shutdown.
 - The service carries a `RedactionPolicy` and a `TimeoutPolicy`, so retrieval is bounded and redacted by construction. Preserve that when extending.
 
 ## Completions business service: `app/modules/business/completions/`

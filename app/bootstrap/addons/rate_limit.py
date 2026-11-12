@@ -6,14 +6,8 @@ from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
-from app.modules.platform.rate_limit.factory import (
-    build_memory_rate_limiter,
-    build_redis_rate_limiter,
-)
-from app.modules.platform.rate_limit.service import (
-    InMemoryRateLimiter,
-    RedisRateLimiter,
-)
+from app.modules.platform.rate_limit.factory import build_redis_rate_limiter
+from app.modules.platform.rate_limit.service import RedisRateLimiter
 
 
 class RateLimitAddon:
@@ -51,13 +45,8 @@ def _build_limiter(
     *,
     limit: int,
     scope: str,
-) -> InMemoryRateLimiter | RedisRateLimiter:
+) -> RedisRateLimiter:
     match settings.RATE_LIMIT_BACKEND:
-        case "memory":
-            return build_memory_rate_limiter(
-                limit=limit,
-                window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
-            )
         case "redis":
             return build_redis_rate_limiter(
                 opened(resources.redis, "redis"),

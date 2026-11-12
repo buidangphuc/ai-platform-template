@@ -24,7 +24,7 @@ def test_settings_defaults_are_local_safe():
     # Minimal-core template: every addon capability is opt-in by default.
     assert settings.IDEMPOTENCY_ENABLED is False
     assert settings.QUOTA_ENABLED is False
-    assert settings.QUOTA_BACKEND == "memory"
+    assert settings.QUOTA_BACKEND == "postgres"
     assert settings.DATABASE_ENABLED is False
     assert settings.MONGO_ENABLED is False
     assert settings.MONGODB_URI == "mongodb://localhost:27017"
@@ -34,7 +34,11 @@ def test_settings_defaults_are_local_safe():
     assert settings.TASKS_ENABLED is False
     assert settings.RATE_LIMIT_ENABLED is False
     assert settings.CACHE_ENABLED is False
-    assert settings.CACHE_BACKEND == "memory"
+    assert settings.CACHE_BACKEND == "redis"
+    assert settings.QUEUE_BACKEND == "redis"
+    assert settings.TASK_STORE_BACKEND == "postgres"
+    assert settings.RATE_LIMIT_BACKEND == "redis"
+    assert settings.OBJECT_BACKEND == "s3"
     assert settings.WEBHOOKS_ENABLED is False
     assert settings.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS == 300
     assert settings.WEBHOOK_TIMEOUT_SECONDS == 10
@@ -276,7 +280,7 @@ def test_env_example_includes_app_settings_defaults():
     assert "MAX_REQUEST_BODY_BYTES=10485760" in env_example
     assert "IDEMPOTENCY_ENABLED=false" in env_example
     assert "QUOTA_ENABLED=false" in env_example
-    assert "QUOTA_BACKEND=memory" in env_example
+    assert "QUOTA_BACKEND=postgres" in env_example
     assert "DATABASE_ENABLED=false" in env_example
     assert "REDIS_ENABLED=false" in env_example
     assert "QUEUE_ENABLED=false" in env_example
@@ -285,7 +289,7 @@ def test_env_example_includes_app_settings_defaults():
     assert "SQS_VISIBILITY_TIMEOUT_SECONDS=0" in env_example
     assert "WORKER_MAX_ATTEMPTS=3" in env_example
     assert "CACHE_ENABLED=false" in env_example
-    assert "CACHE_BACKEND=memory" in env_example
+    assert "CACHE_BACKEND=redis" in env_example
     assert "CACHE_PREFIX=app" in env_example
     assert "CACHE_DEFAULT_TTL_SECONDS=300" in env_example
     assert "WEBHOOKS_ENABLED=false" in env_example
@@ -339,3 +343,34 @@ def test_llm_chain_deadline_must_cover_one_call_timeout():
 
     with pytest.raises(ValidationError, match="LLM_CHAIN_DEADLINE_SECONDS"):
         build_test_settings(LLM_TIMEOUT_SECONDS=60, LLM_CHAIN_DEADLINE_SECONDS=30)
+
+
+@pytest.mark.parametrize(
+    "backend_setting",
+    [
+        "QUEUE_BACKEND",
+        "TASK_STORE_BACKEND",
+        "RATE_LIMIT_BACKEND",
+        "CACHE_BACKEND",
+        "OBJECT_BACKEND",
+        "QUOTA_BACKEND",
+        "RAG_BACKEND",
+    ],
+)
+def test_memory_backend_is_rejected(backend_setting: str):
+    with pytest.raises(ValidationError, match=backend_setting):
+        build_test_settings(**{backend_setting: "memory"})
+
+
+def test_rag_requires_database():
+    with pytest.raises(ValidationError, match="RAG_ENABLED requires DATABASE_ENABLED"):
+        build_test_settings(RAG_ENABLED=True, DATABASE_ENABLED=False)
+
+    settings = build_test_settings(RAG_ENABLED=True, DATABASE_ENABLED=True)
+    assert settings.RAG_BACKEND == "pgvector"
+    assert settings.RAG_PGVECTOR_TABLE == "rag_chunks"
+
+
+def test_rag_table_name_must_be_a_plain_identifier():
+    with pytest.raises(ValidationError, match="RAG_PGVECTOR_TABLE"):
+        build_test_settings(RAG_PGVECTOR_TABLE="rag; DROP TABLE users")

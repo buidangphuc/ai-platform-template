@@ -1,5 +1,6 @@
 import pytest
 from fastapi import FastAPI
+from redis.asyncio import Redis
 
 from app.bootstrap.resources import ApplicationResources, TaskServices
 from app.bootstrap.state import (
@@ -13,8 +14,8 @@ from app.bootstrap.state import (
 from app.core.errors import ServiceUnavailableError
 from app.core.health import HealthService
 from app.core.middleware import InFlightTracker
-from app.modules.messaging.queue.adapters.memory import InMemoryQueueGateway
-from app.modules.messaging.tasks.adapters.memory import InMemoryTaskStore
+from app.modules.messaging.queue.adapters.redis_stream import RedisStreamQueueGateway
+from app.modules.messaging.tasks.adapters.redis import RedisTaskStore
 from app.modules.messaging.tasks.service import TaskService
 from tests.factories import build_test_settings
 
@@ -82,13 +83,14 @@ class _NoopDispatcher:
 
 def test_get_task_services_returns_feature_group() -> None:
     app = FastAPI()
-    store = InMemoryTaskStore()
+    redis = Redis()
+    store = RedisTaskStore(redis=redis, prefix="tasks")
     dispatcher = _NoopDispatcher()
     tasks = TaskServices(
         service=TaskService(store=store, dispatcher=dispatcher),
         store=store,
         dispatcher=dispatcher,
-        queue=InMemoryQueueGateway(),
+        queue=RedisStreamQueueGateway(redis=redis, stream="queue"),
     )
     app.state.resources = ApplicationResources(tasks=tasks)
 

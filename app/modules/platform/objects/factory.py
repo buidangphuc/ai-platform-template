@@ -6,12 +6,6 @@ from app.modules.platform.objects.gateway import ObjectGateway
 
 async def open_object_gateway(settings: Settings) -> ObjectGateway:
     match settings.OBJECT_BACKEND:
-        case "memory":
-            from app.modules.platform.objects.adapters.memory import (
-                MemoryObjectGateway,
-            )
-
-            return MemoryObjectGateway(prefix=settings.OBJECT_PREFIX)
         case "s3":
             from app.modules.platform.objects.adapters.s3 import S3ObjectGateway
 

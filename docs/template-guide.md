@@ -22,14 +22,14 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 |---|---|---|
 | Postgres (SQLAlchemy + Alembic) | `DATABASE_ENABLED=true` + `POSTGRES_*` | postgres |
 | Redis | `REDIS_ENABLED=true` + `REDIS_*` | redis |
-| Async jobs (queue + tasks + worker) | `QUEUE_ENABLED=true TASKS_ENABLED=true` | redis (or memory/sqs/rabbitmq) |
-| Rate limiting | `RATE_LIMIT_ENABLED=true` | memory or redis |
-| Caching | `CACHE_ENABLED=true` | memory or redis |
-| Object storage | `OBJECTS_ENABLED=true` | memory or S3 (`uv sync --extra aws`) |
+| Async jobs (queue + tasks + worker) | `QUEUE_ENABLED=true TASKS_ENABLED=true` | redis (or sqs/rabbitmq) + postgres or redis task store |
+| Rate limiting | `RATE_LIMIT_ENABLED=true` | redis |
+| Caching | `CACHE_ENABLED=true` | redis |
+| Object storage | `OBJECTS_ENABLED=true` | S3 (`uv sync --extra aws`) |
 | MongoDB | `MONGO_ENABLED=true` | mongo (`--extra mongo`) |
 | Idempotency keys | `IDEMPOTENCY_ENABLED=true` | postgres |
 | Outbox / webhooks | `OUTBOX_ENABLED` / `WEBHOOKS_ENABLED` | postgres |
-| Quota | `QUOTA_ENABLED=true` | memory/postgres/mongo |
+| Quota | `QUOTA_ENABLED=true` | postgres/mongo |
 | LLM + tracing + RAG | `uv sync --extra ai`, then `CHAT_MODEL=...`, `LANGFUSE_ENABLED`, `RAG_ENABLED` | provider keys / langfuse |
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +
@@ -100,10 +100,12 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
 | Extra | Brings | Needed for |
 |---|---|---|
-| `ai` | langchain, langchain-openai, langfuse, llama-index-core, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
+| `ai` | langchain, langchain-openai, langfuse, llama-index-core, llama-index-vector-stores-postgres, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
 | `aws` | aioboto3 | S3 object storage, SQS queue |
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |
+
+RabbitMQ `receive_count` drives dead-lettering after repeated failures. On a classic queue a message that keeps crashing the worker is only flagged "redelivered", so its count stops at 2. Set `RABBITMQ_QUEUE_TYPE=quorum` (or create the queue in a vhost whose default type is quorum) to get an exact count from the broker. Empty keeps the vhost default; changing the type of an existing queue requires deleting it first.
 
 Dev installs everything: `uv sync --dev --all-extras` (what `make test` uses).
 A missing extra fails with an actionable message at the feature's entry point
@@ -163,10 +165,12 @@ LangChain client via `base_url`), or a managed endpoint. Add it as a compose
 service — profile-gate it if it needs a GPU — and select the backend with a
 settings flag so a stub/fallback path keeps working without it.
 
-RAG storage scales the same way: `build_storage_context`/`build_embed_model`
-raise at the extension points — plug in LlamaIndex's ecosystem
-(`llama-index-vector-stores-qdrant`, `-postgres`, embedding providers)
-without touching the service.
+RAG stores vectors in Postgres (`RAG_BACKEND=pgvector`, table
+`data_<RAG_PGVECTOR_TABLE>`, created at startup by the vector store; the app
+role cannot `CREATE EXTENSION`, so the database must already have `vector`).
+`build_vector_store`/`build_embed_model` are the extension points — plug in
+another LlamaIndex vector store or an embedding provider without touching the
+service.
 
 ## 6. Test layout
 

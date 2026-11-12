@@ -6,10 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-RagBackend = Literal["memory"]
+RagBackend = Literal["pgvector"]
 
 
 class AISettingsMixin(BaseModel):
+    DATABASE_ENABLED: bool
+
     # LLM router
     LLM_ENABLED: bool = False
     CHAT_MODEL: str = ""
@@ -48,10 +50,23 @@ class AISettingsMixin(BaseModel):
 
     # RAG
     RAG_ENABLED: bool = False
-    RAG_BACKEND: RagBackend = "memory"
+    RAG_BACKEND: RagBackend = "pgvector"
+    RAG_PGVECTOR_TABLE: str = Field(
+        default="rag_chunks", pattern=r"^[a-z_][a-z0-9_]{0,47}$"
+    )
     RAG_CHUNK_SIZE: int = Field(default=512, gt=0)
     RAG_CHUNK_OVERLAP: int = Field(default=50, ge=0)
     RAG_DEFAULT_TOP_K: int = Field(default=5, gt=0)
     RAG_EMBED_MODEL: str = ""
     RAG_MOCK_EMBED_DIM: int = Field(default=16, gt=0)
     RAG_RETRIEVE_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0)
+
+    @model_validator(mode="after")
+    def _rag_backend_requirements(self) -> AISettingsMixin:
+        if (
+            self.RAG_ENABLED
+            and self.RAG_BACKEND == "pgvector"
+            and not self.DATABASE_ENABLED
+        ):
+            raise ValueError("RAG_ENABLED requires DATABASE_ENABLED")
+        return self

@@ -1,193 +1,242 @@
-"""SQS gateway: eager verification at open and dead-letter handling on nack."""
+"""SQS gateway against ElasticMQ: eager verification at open and dead-letter handling."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
+import uuid
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
+import boto3
 import pytest
 from botocore.exceptions import ClientError
 
-import app.modules.messaging.queue.adapters.sqs as sqs_mod
 from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
 from app.modules.messaging.queue.gateway import QueueMessage
+from tests.infra import SqsQueue
 
-pytestmark = pytest.mark.skipif(sqs_mod.aioboto3 is None, reason="aioboto3 missing")
-
-QUEUE_URL = "https://sqs.test/work"
-DLQ_URL = "https://sqs.test/work-dlq"
+UNREACHABLE_ENDPOINT = "http://127.0.0.1:1"
 
 
-class _FakeClient:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.attributes_error: Exception | None = None
-        self.send_error: Exception | None = None
-
-    async def get_queue_attributes(self, **kwargs: Any) -> dict[str, Any]:
-        self.calls.append(("get_queue_attributes", kwargs))
-        if self.attributes_error is not None:
-            raise self.attributes_error
-        return {"Attributes": {"QueueArn": "arn:aws:sqs:r:0:work"}}
-
-    async def send_message(self, **kwargs: Any) -> dict[str, Any]:
-        if self.send_error is not None:
-            raise self.send_error
-        self.calls.append(("send_message", kwargs))
-        return {"MessageId": "new-id"}
-
-    async def delete_message(self, **kwargs: Any) -> None:
-        self.calls.append(("delete_message", kwargs))
-
-    async def change_message_visibility(self, **kwargs: Any) -> None:
-        self.calls.append(("change_message_visibility", kwargs))
+@pytest.fixture(autouse=True)
+def aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
 
 
-class _Context:
-    def __init__(self, client: _FakeClient) -> None:
-        self.client = client
-        self.exited = False
-
-    async def __aenter__(self) -> _FakeClient:
-        return self.client
-
-    async def __aexit__(self, *_exc_info: object) -> None:
-        self.exited = True
-
-
-def _install(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeClient, _Context]:
-    client = _FakeClient()
-    context = _Context(client)
-    session = SimpleNamespace(client=lambda *_a, **_k: context)
-    monkeypatch.setattr(sqs_mod, "aioboto3", SimpleNamespace(Session=lambda: session))
-    return client, context
-
-
-def _message() -> QueueMessage:
-    return QueueMessage(
-        id="m-1",
-        body={"task": 1},
-        receive_count=3,
-        raw={"MessageId": "m-1", "Body": '{"task": 1}', "ReceiptHandle": "rh-1"},
+@pytest.fixture()
+def sqs_client(sqs_queue: SqsQueue) -> Any:
+    return boto3.client(
+        "sqs",
+        endpoint_url=sqs_queue.endpoint_url,
+        region_name=sqs_queue.region,
     )
 
 
-async def test_open_verifies_the_queue(monkeypatch):
-    client, _ = _install(monkeypatch)
+@pytest.fixture()
+def extra_queue(sqs_client: Any) -> Iterator[Callable[..., str]]:
+    created: list[str] = []
 
-    await SQSQueueGateway(queue_url=QUEUE_URL).open()
+    def create(suffix: str, **attributes: str) -> str:
+        url = sqs_client.create_queue(
+            QueueName=f"aipt-test-{uuid.uuid4().hex[:8]}-{suffix}",
+            Attributes=attributes,
+        )["QueueUrl"]
+        created.append(url)
+        return url
 
-    assert client.calls == [
-        (
-            "get_queue_attributes",
-            {"QueueUrl": QUEUE_URL, "AttributeNames": ["QueueArn"]},
-        )
+    yield create
+    for url in created:
+        sqs_client.delete_queue(QueueUrl=url)
+
+
+def _gateway(queue: SqsQueue, **kwargs: Any) -> SQSQueueGateway:
+    return SQSQueueGateway(
+        queue_url=kwargs.pop("queue_url", queue.url),
+        region_name=queue.region,
+        endpoint_url=kwargs.pop("endpoint_url", queue.endpoint_url),
+        **kwargs,
+    )
+
+
+@pytest.fixture()
+async def gateway(sqs_queue: SqsQueue) -> AsyncIterator[SQSQueueGateway]:
+    opened = await _gateway(sqs_queue).open()
+    try:
+        yield opened
+    finally:
+        await opened.close()
+
+
+def _counts(client: Any, url: str) -> tuple[int, int]:
+    attributes = client.get_queue_attributes(QueueUrl=url, AttributeNames=["All"])[
+        "Attributes"
     ]
-
-
-async def test_open_closes_the_client_and_raises_for_an_unreachable_queue(monkeypatch):
-    client, context = _install(monkeypatch)
-    client.attributes_error = _client_error(
-        "AWS.SimpleQueueService.NonExistentQueue", "GetQueueAttributes"
+    return (
+        int(attributes["ApproximateNumberOfMessages"]),
+        int(attributes["ApproximateNumberOfMessagesNotVisible"]),
     )
 
-    with pytest.raises(RuntimeError, match=QUEUE_URL) as excinfo:
-        await SQSQueueGateway(queue_url=QUEUE_URL).open()
+
+def _drain(client: Any, url: str) -> list[dict[str, Any]]:
+    response = client.receive_message(
+        QueueUrl=url,
+        MaxNumberOfMessages=10,
+        WaitTimeSeconds=1,
+        MessageAttributeNames=["All"],
+    )
+    return response.get("Messages", [])
+
+
+async def test_open_verifies_the_queue_and_round_trips_a_message(
+    gateway: SQSQueueGateway, sqs_client: Any, sqs_queue: SqsQueue
+):
+    message_id = await gateway.send({"task": 1})
+
+    [message] = await gateway.receive(max_messages=1, wait_seconds=2)
+
+    assert message.id == message_id
+    assert message.body == {"task": 1}
+    assert message.receive_count == 1
+    assert _counts(sqs_client, sqs_queue.url) == (0, 1)
+    await gateway.ack(message)
+    assert _counts(sqs_client, sqs_queue.url) == (0, 0)
+
+
+async def test_open_fails_for_an_unknown_queue(sqs_queue: SqsQueue):
+    missing = f"{sqs_queue.url}-does-not-exist"
+
+    with pytest.raises(RuntimeError, match="does-not-exist") as excinfo:
+        await _gateway(sqs_queue, queue_url=missing).open()
 
     assert isinstance(excinfo.value.__cause__, ClientError)
-    assert context.exited is True
 
 
-async def test_nack_without_requeue_and_without_dlq_leaves_the_message(monkeypatch):
-    client, _ = _install(monkeypatch)
-    gateway = await SQSQueueGateway(queue_url=QUEUE_URL).open()
-    client.calls.clear()
-
-    await gateway.nack(_message(), requeue=False)
-
-    assert client.calls == []  # the queue's RedrivePolicy takes over
-
-
-async def test_nack_without_requeue_sends_to_the_dlq_then_deletes(monkeypatch):
-    client, _ = _install(monkeypatch)
-    gateway = await SQSQueueGateway(
-        queue_url=QUEUE_URL, dead_letter_queue_url=DLQ_URL
-    ).open()
-    client.calls.clear()
-
-    await gateway.nack(_message(), requeue=False)
-
-    assert client.calls == [
-        (
-            "send_message",
-            {
-                "QueueUrl": DLQ_URL,
-                "MessageBody": '{"task": 1}',
-                "MessageAttributes": {
-                    "reason": {"DataType": "String", "StringValue": "nack_no_requeue"},
-                    "original_message_id": {"DataType": "String", "StringValue": "m-1"},
-                    "receive_count": {"DataType": "Number", "StringValue": "3"},
-                },
-            },
-        ),
-        ("delete_message", {"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-1"}),
-    ]
-
-
-async def test_failed_dlq_send_keeps_the_original_message(monkeypatch):
-    client, _ = _install(monkeypatch)
-    gateway = await SQSQueueGateway(
-        queue_url=QUEUE_URL, dead_letter_queue_url=DLQ_URL
-    ).open()
-    client.send_error = RuntimeError("dlq down")
-    client.calls.clear()
-
-    with pytest.raises(RuntimeError, match="dlq down"):
-        await gateway.nack(_message(), requeue=False)
-
-    assert client.calls == []  # not deleted: it will be redelivered
-
-
-async def test_nack_with_requeue_makes_the_message_visible_again(monkeypatch):
-    client, _ = _install(monkeypatch)
-    gateway = await SQSQueueGateway(
-        queue_url=QUEUE_URL, dead_letter_queue_url=DLQ_URL
-    ).open()
-    client.calls.clear()
-
-    await gateway.nack(_message(), requeue=True)
-
-    assert client.calls == [
-        (
-            "change_message_visibility",
-            {"QueueUrl": QUEUE_URL, "ReceiptHandle": "rh-1", "VisibilityTimeout": 0},
-        )
-    ]
-
-
-def _client_error(code: str, operation: str) -> ClientError:
-    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
-
-
-@pytest.mark.parametrize("code", ["AccessDenied", "AccessDeniedException"])
-async def test_open_tolerates_a_missing_get_queue_attributes_permission(
-    monkeypatch, code: str
+async def test_open_fails_when_the_endpoint_is_unreachable(
+    sqs_queue: SqsQueue, monkeypatch: pytest.MonkeyPatch
 ):
-    client, context = _install(monkeypatch)
-    client.attributes_error = _client_error(code, "GetQueueAttributes")
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "1")
 
-    gateway = await SQSQueueGateway(queue_url=QUEUE_URL).open()
+    with pytest.raises(RuntimeError, match=sqs_queue.name) as excinfo:
+        await _gateway(sqs_queue, endpoint_url=UNREACHABLE_ENDPOINT).open()
 
-    assert context.exited is False
-    assert await gateway.send({"x": 1}) == "new-id"
+    assert UNREACHABLE_ENDPOINT in str(excinfo.value)
+    assert excinfo.value.__cause__ is not None
 
 
-@pytest.mark.parametrize("code", ["InvalidClientTokenId", "SignatureDoesNotMatch"])
-async def test_open_fails_on_bad_credentials(monkeypatch, code: str):
-    client, context = _install(monkeypatch)
-    client.attributes_error = _client_error(code, "GetQueueAttributes")
+async def test_requeue_nacks_redrive_to_the_queue_dlq(
+    sqs_queue: SqsQueue, sqs_client: Any, extra_queue: Callable[..., str]
+):
+    redrive_dlq = extra_queue("redrive-dlq")
+    arn = sqs_client.get_queue_attributes(
+        QueueUrl=redrive_dlq, AttributeNames=["QueueArn"]
+    )["Attributes"]["QueueArn"]
+    work = extra_queue(
+        "work",
+        RedrivePolicy=json.dumps({"maxReceiveCount": "2", "deadLetterTargetArn": arn}),
+    )
+    gateway = await _gateway(sqs_queue, queue_url=work).open()
+    try:
+        await gateway.send({"n": 1})
+        for expected_count in (1, 2):
+            (message,) = await gateway.receive(max_messages=1, wait_seconds=2)
+            assert message.receive_count == expected_count
+            await gateway.nack(message, requeue=True)
+        assert await gateway.receive(max_messages=1, wait_seconds=1) == []
+    finally:
+        await gateway.close()
 
-    with pytest.raises(RuntimeError, match=QUEUE_URL):
-        await SQSQueueGateway(queue_url=QUEUE_URL).open()
+    assert [json.loads(m["Body"]) for m in _drain(sqs_client, redrive_dlq)] == [
+        {"n": 1}
+    ]
 
-    assert context.exited is True
+
+async def test_nack_with_requeue_makes_the_message_visible_again(
+    gateway: SQSQueueGateway,
+):
+    await gateway.send({"n": 3})
+    (first,) = await gateway.receive(max_messages=1, wait_seconds=2)
+
+    await gateway.nack(first, requeue=True)
+
+    (second,) = await gateway.receive(max_messages=1, wait_seconds=2)
+    assert second.body == {"n": 3}
+    assert second.receive_count == 2
+
+
+async def test_nack_without_requeue_and_without_dlq_leaves_the_message(
+    gateway: SQSQueueGateway, sqs_client: Any, sqs_queue: SqsQueue
+):
+    await gateway.send({"n": 4})
+    (message,) = await gateway.receive(max_messages=1, wait_seconds=2)
+
+    await gateway.nack(message, requeue=False)
+
+    assert _counts(sqs_client, sqs_queue.url) == (0, 1)
+    assert await gateway.receive(max_messages=1, wait_seconds=1) == []
+
+
+async def test_nack_without_requeue_lands_in_the_explicit_dlq(
+    sqs_queue: SqsQueue, sqs_client: Any, extra_queue: Callable[..., str]
+):
+    explicit_dlq = extra_queue("explicit-dlq")
+    gateway = await _gateway(sqs_queue, dead_letter_queue_url=explicit_dlq).open()
+    try:
+        await gateway.send({"n": 2})
+        (message,) = await gateway.receive(max_messages=1, wait_seconds=2)
+        await gateway.nack(message, requeue=False)
+        assert await gateway.receive(max_messages=1, wait_seconds=1) == []
+    finally:
+        await gateway.close()
+
+    (dead,) = _drain(sqs_client, explicit_dlq)
+    assert json.loads(dead["Body"]) == {"n": 2}
+    attributes = dead["MessageAttributes"]
+    assert attributes["reason"]["StringValue"] == "nack_no_requeue"
+    assert attributes["original_message_id"]["StringValue"] == message.id
+    assert attributes["receive_count"]["StringValue"] == "1"
+    assert _counts(sqs_client, sqs_queue.url) == (0, 0)
+
+
+async def test_failed_dlq_send_keeps_the_original_message(
+    sqs_queue: SqsQueue, sqs_client: Any
+):
+    gateway = await _gateway(
+        sqs_queue, dead_letter_queue_url=f"{sqs_queue.url}-missing-dlq"
+    ).open()
+    try:
+        await gateway.send({"n": 5})
+        (message,) = await gateway.receive(max_messages=1, wait_seconds=2)
+
+        with pytest.raises(ClientError):
+            await gateway.nack(message, requeue=False)
+    finally:
+        await gateway.close()
+
+    assert _counts(sqs_client, sqs_queue.url) == (0, 1)
+
+
+async def test_visibility_timeout_redelivers_an_unacked_message(sqs_queue: SqsQueue):
+    gateway = await _gateway(sqs_queue, visibility_timeout=1).open()
+    try:
+        await gateway.send({"task": 1})
+        (first,) = await gateway.receive(max_messages=1, wait_seconds=21.5)
+        assert first.receive_count == 1
+
+        (second,) = await gateway.receive(max_messages=1, wait_seconds=5)
+        assert second.id == first.id
+        assert second.receive_count == 2
+    finally:
+        await gateway.close()
+
+
+async def test_ack_and_dead_letter_reject_a_message_without_a_receipt_handle(
+    gateway: SQSQueueGateway, extra_queue: Callable[..., str]
+):
+    gateway.dead_letter_queue_url = extra_queue("dlq")
+    message = QueueMessage(id="m", body={})
+
+    with pytest.raises(ValueError, match="ReceiptHandle"):
+        await gateway.ack(message)
+    with pytest.raises(ValueError, match="ReceiptHandle"):
+        await gateway.nack(message, requeue=False)

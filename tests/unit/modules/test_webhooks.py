@@ -1,8 +1,7 @@
-import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 
 from app.bootstrap.addons.webhooks import WebhookAddon
 from app.bootstrap.resources import ApplicationResources
@@ -15,6 +14,7 @@ from app.modules.messaging.webhooks.dispatcher import (
 from app.modules.messaging.webhooks.envelope import WebhookEnvelope
 from app.modules.messaging.webhooks.signing import WebhookSigner
 from tests.factories import build_test_settings, open_addon
+from tests.http_server import Reply
 
 
 def _settings(**overrides: object) -> Settings:
@@ -103,53 +103,87 @@ def _envelope() -> WebhookEnvelope:
     )
 
 
-async def test_http_webhook_dispatcher_posts_signed_body_through_the_client():
-    seen: list[httpx.Request] = []
+@pytest.fixture()
+async def http_client():
+    async with httpx.AsyncClient() as client:
+        yield client
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(202)
 
+async def test_http_webhook_dispatcher_posts_signed_body_through_the_client(
+    local_http_server, http_client
+):
+    local_http_server.script("/webhooks", Reply(202))
     signer = WebhookSigner(secret="secret", tolerance_seconds=300)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        dispatcher = HttpWebhookDispatcher(signer=signer, client=client)
+    dispatcher = HttpWebhookDispatcher(signer=signer, client=http_client)
 
-        result = await dispatcher.dispatch("https://example.test/webhooks", _envelope())
+    result = await dispatcher.dispatch(f"{local_http_server.url}/webhooks", _envelope())
 
     assert result.status_code == 202
-    assert str(seen[0].url) == "https://example.test/webhooks"
-    assert "x-webhook-signature" in seen[0].headers
-    assert json.loads(seen[0].content)["id"] == "evt_1"
+    [request] = local_http_server.requests
+    assert request.method == "POST"
+    assert request.headers["content-type"] == "application/json"
+    assert request.json()["id"] == "evt_1"
+    timestamp = int(request.headers["x-webhook-timestamp"])
+    assert signer.verify(
+        request.body,
+        signature=request.headers["x-webhook-signature"],
+        timestamp=timestamp,
+        now=timestamp,
+    )
 
 
-async def test_http_webhook_dispatcher_reports_transport_errors():
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused")
-
+async def test_http_webhook_dispatcher_reports_transport_errors(
+    local_http_server, http_client
+):
+    local_http_server.script("/webhooks", Reply(drop=True))
     signer = WebhookSigner(secret="secret", tolerance_seconds=300)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        dispatcher = HttpWebhookDispatcher(signer=signer, client=client)
+    dispatcher = HttpWebhookDispatcher(signer=signer, client=http_client)
 
-        result = await dispatcher.dispatch("https://example.test/webhooks", _envelope())
+    result = await dispatcher.dispatch(f"{local_http_server.url}/webhooks", _envelope())
 
     assert result.status_code is None
-    assert result.error == "refused"
+    assert result.error
 
 
-async def test_http_webhook_dispatcher_applies_timeout_policy_to_send():
-    async def handler(request: httpx.Request) -> httpx.Response:
-        await asyncio.sleep(0.05)
-        return httpx.Response(202)
-
+async def test_http_webhook_dispatcher_reports_a_refused_connection(
+    local_http_server, http_client
+):
+    url = f"{local_http_server.url}/webhooks"
+    await local_http_server.stop()
     signer = WebhookSigner(secret="secret", tolerance_seconds=300)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        dispatcher = HttpWebhookDispatcher(
-            signer=signer,
-            client=client,
-            timeout_policy=TimeoutPolicy(timeout_seconds=0.01),
-        )
+    dispatcher = HttpWebhookDispatcher(signer=signer, client=http_client)
 
-        result = await dispatcher.dispatch("https://example.test/webhooks", _envelope())
+    result = await dispatcher.dispatch(url, _envelope())
+
+    assert result.status_code is None
+    assert result.error
+
+
+async def test_http_webhook_dispatcher_reports_non_2xx_status(
+    local_http_server, http_client
+):
+    local_http_server.script("/webhooks", Reply(503))
+    signer = WebhookSigner(secret="secret", tolerance_seconds=300)
+    dispatcher = HttpWebhookDispatcher(signer=signer, client=http_client)
+
+    result = await dispatcher.dispatch(f"{local_http_server.url}/webhooks", _envelope())
+
+    assert result.status_code == 503
+    assert not result.succeeded
+
+
+async def test_http_webhook_dispatcher_applies_timeout_policy_to_send(
+    local_http_server, http_client
+):
+    local_http_server.script("/webhooks", Reply(202, delay=0.5))
+    signer = WebhookSigner(secret="secret", tolerance_seconds=300)
+    dispatcher = HttpWebhookDispatcher(
+        signer=signer,
+        client=http_client,
+        timeout_policy=TimeoutPolicy(timeout_seconds=0.05),
+    )
+
+    result = await dispatcher.dispatch(f"{local_http_server.url}/webhooks", _envelope())
 
     assert result.status_code is None
     assert result.error == "Webhook dispatch timed out"

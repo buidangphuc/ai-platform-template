@@ -1,22 +1,20 @@
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Any
-from uuid import uuid4
 
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.errors import register_exception_handlers
+from app.modules.platform.idempotency.adapters import PostgresIdempotencyStore
 from app.modules.platform.idempotency.http import idempotent
-from app.modules.platform.idempotency.store import (
-    IdempotencyCachedResponse,
-    IdempotencyClaim,
-)
 from app.modules.platform.identity.auth import require_principal
-from app.modules.platform.quota.adapters.memory import MemoryQuotaStore
-from app.modules.platform.quota.factory import build_quota_service
+from app.modules.platform.quota.factory import (
+    build_postgres_quota_store,
+    build_quota_service,
+)
 from app.modules.platform.quota.http import require_quota
 from app.modules.platform.quota.models import QuotaPolicy
 from tests.factories import build_test_settings
@@ -24,45 +22,10 @@ from tests.factories import build_test_settings
 HEADERS = {"Authorization": "Bearer test-token"}
 
 
-class MemoryIdempotencyStore:
-    def __init__(self) -> None:
-        self.records: dict[tuple[str, str], dict[str, Any]] = {}
-
-    async def check_or_store(
-        self, *, key: str, principal_id: str, request_hash: str, expires_at: datetime
-    ) -> IdempotencyCachedResponse | IdempotencyClaim:
-        record = self.records.get((principal_id, key))
-        if record is not None and record["response"] is not None:
-            status_code, body = record["response"]
-            return IdempotencyCachedResponse(status_code=status_code, body=body)
-        token = str(uuid4())
-        self.records[(principal_id, key)] = {"token": token, "response": None}
-        return IdempotencyClaim(token=token)
-
-    async def store_response(
-        self,
-        *,
-        key: str,
-        principal_id: str,
-        claim_token: str,
-        status_code: int,
-        response_body: Any,
-    ) -> bool:
-        self.records[(principal_id, key)]["response"] = (
-            status_code,
-            dict(response_body),
-        )
-        return True
-
-    async def delete_expired(self, *, before: datetime, limit: int) -> int:
-        return 0
-
-    async def close(self) -> None:
-        return None
-
-
 @pytest.fixture
-async def guarded() -> AsyncIterator[tuple[AsyncClient, list[str]]]:
+async def guarded(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[tuple[AsyncClient, list[str]]]:
     calls: list[str] = []
     router = APIRouter(dependencies=[Depends(require_principal)])
 
@@ -83,10 +46,12 @@ async def guarded() -> AsyncIterator[tuple[AsyncClient, list[str]]]:
     )
     app.state.resources = ApplicationResources(
         quota=build_quota_service(
-            MemoryQuotaStore(),
+            build_postgres_quota_store(pg_sessionmaker),
             policies={"limited": QuotaPolicy("limited", limit=1, window_seconds=3600)},
         ),
-        idempotency_store=MemoryIdempotencyStore(),
+        idempotency_store=PostgresIdempotencyStore(
+            pg_sessionmaker, in_progress_timeout_seconds=60
+        ),
     )
     register_exception_handlers(app)
     app.include_router(router)

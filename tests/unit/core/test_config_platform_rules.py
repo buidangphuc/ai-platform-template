@@ -79,7 +79,6 @@ def test_enabled_feature_backend_requires_its_service(
         {"IDEMPOTENCY_BACKEND": "postgres", "DATABASE_ENABLED": False},
         {"QUOTA_BACKEND": "mongo", "MONGO_ENABLED": False},
         {"OBJECT_BACKEND": "s3"},
-        {"QUOTA_ENABLED": True, "QUOTA_BACKEND": "memory"},
     ],
 )
 def test_valid_backend_combinations_pass(overrides: dict[str, object]):

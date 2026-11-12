@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any, Self
 
 from app.modules.messaging.queue.gateway import QueueMessage
@@ -29,6 +30,7 @@ def _require_aio_pika() -> None:
 _ATTEMPT_HEADER = "x-attempt"
 # Set by RabbitMQ itself on quorum queues: number of prior failed deliveries.
 _DELIVERY_COUNT_HEADER = "x-delivery-count"
+_POLL_INTERVAL_SECONDS = 0.1
 
 
 class RabbitMQQueueGateway:
@@ -40,6 +42,7 @@ class RabbitMQQueueGateway:
         dead_letter_enabled: bool = True,
         dead_letter_exchange: str = "",
         dead_letter_queue: str = "",
+        queue_type: str = "",
     ) -> None:
         _require_aio_pika()
         if not url:
@@ -49,7 +52,10 @@ class RabbitMQQueueGateway:
         self.dead_letter_enabled = dead_letter_enabled
         self.dead_letter_exchange = dead_letter_exchange or f"{queue_name}.dlx"
         self.dead_letter_queue = dead_letter_queue or f"{queue_name}.dead"
+        self.queue_type = queue_type
         self._inflight: dict[str, AbstractIncomingMessage] = {}
+        self._connection: Any = None
+        self._channel: Any = None
 
     async def open(self) -> Self:
         """Connect and declare the topology; call once, before any operation,
@@ -58,7 +64,10 @@ class RabbitMQQueueGateway:
         try:
             self._channel = await self._connection.channel()
             await self._channel.set_qos(prefetch_count=10)
-            arguments: dict[str, Any] | None = None
+            type_arguments: dict[str, Any] = (
+                {"x-queue-type": self.queue_type} if self.queue_type else {}
+            )
+            arguments = dict(type_arguments)
             if self.dead_letter_enabled:
                 dlx = await self._channel.declare_exchange(
                     self.dead_letter_exchange,
@@ -66,15 +75,17 @@ class RabbitMQQueueGateway:
                     durable=True,
                 )
                 dlq = await self._channel.declare_queue(
-                    self.dead_letter_queue, durable=True
+                    self.dead_letter_queue,
+                    durable=True,
+                    arguments=type_arguments or None,
                 )
                 await dlq.bind(dlx, routing_key=self.queue_name)
-                arguments = {
+                arguments |= {
                     "x-dead-letter-exchange": self.dead_letter_exchange,
                     "x-dead-letter-routing-key": self.queue_name,
                 }
             self._queue = await self._channel.declare_queue(
-                self.queue_name, durable=True, arguments=arguments
+                self.queue_name, durable=True, arguments=arguments or None
             )
         except BaseException:
             await self._connection.close()
@@ -85,11 +96,12 @@ class RabbitMQQueueGateway:
         message = aio_pika.Message(
             body=json.dumps(payload).encode("utf-8"),
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            message_id=uuid.uuid4().hex,
         )
         await self._channel.default_exchange.publish(
             message, routing_key=self.queue_name
         )
-        return message.message_id or ""
+        return message.message_id
 
     async def receive(
         self,
@@ -97,26 +109,21 @@ class RabbitMQQueueGateway:
         max_messages: int = 10,
         wait_seconds: float = 0.0,
     ) -> list[QueueMessage]:
-        messages: list[QueueMessage] = []
-        deadline = wait_seconds if wait_seconds > 0 else None
-
-        async def _pull_one() -> AbstractIncomingMessage | None:
-            return await self._queue.get(timeout=deadline, fail=False)
-
-        first = await _pull_one()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(wait_seconds, 0.0)
+        first = await self._queue.get(fail=False)
+        while first is None and loop.time() < deadline:
+            await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, deadline - loop.time()))
+            first = await self._queue.get(fail=False)
         if first is None:
             return []
-        messages.append(self._wrap(first))
 
+        messages = [self._wrap(first)]
         while len(messages) < max_messages:
-            try:
-                more = await asyncio.wait_for(_pull_one(), timeout=0.05)
-            except TimeoutError:
-                break
+            more = await self._queue.get(fail=False)
             if more is None:
                 break
             messages.append(self._wrap(more))
-
         return messages
 
     async def ack(self, message: QueueMessage) -> None:
@@ -148,6 +155,8 @@ class RabbitMQQueueGateway:
         await incoming.ack()
 
     async def close(self) -> None:
+        if self._connection is None:
+            return
         await self._connection.close()
 
     def _wrap(self, incoming: AbstractIncomingMessage) -> QueueMessage:

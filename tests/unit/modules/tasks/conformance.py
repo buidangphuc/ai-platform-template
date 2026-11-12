@@ -152,18 +152,6 @@ class TaskStoreConformance:
         assert fetched.status == TaskStatus.FAILED
         assert fetched.error == "boom"
 
-    async def test_delete_expired_removes_only_past_tasks(self, store: TaskStore):
-        now = datetime.now(UTC)
-        fresh = _make_task(expires_at=now + timedelta(hours=1))
-        stale = _make_task(expires_at=now - timedelta(seconds=1))
-        await store.create(fresh)
-        await store.create(stale)
-
-        deleted = await store.delete_expired(before=now, limit=100)
-        assert deleted >= 1
-        assert await store.get(stale.id) is None
-        assert await store.get(fresh.id) is not None
-
     async def test_mark_processing_refuses_a_live_lease(self, store: TaskStore):
         task = _make_task()
         await store.create(task)
@@ -276,15 +264,3 @@ class TaskStoreConformance:
         )
         statuses = [(await store.get(t.id)).status for t in tasks]  # type: ignore[union-attr]
         assert statuses == [TaskStatus.FAILED] * 3
-
-    async def test_delete_expired_respects_the_batch_limit(self, store: TaskStore):
-        now = datetime.now(UTC)
-        stale = [_make_task(expires_at=now - timedelta(seconds=1)) for _ in range(3)]
-        for task in stale:
-            await store.create(task)
-
-        first = await store.delete_expired(before=now, limit=2)
-        second = await store.delete_expired(before=now, limit=2)
-
-        # Redis expires by TTL and reports 0 (see its module docstring).
-        assert (first, second) in {(2, 1), (0, 0)}

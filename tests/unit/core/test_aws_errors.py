@@ -17,7 +17,15 @@ def test_policy_denials_are_permission_denied(code: str) -> None:
 
 @pytest.mark.parametrize(
     "code",
-    ["NoSuchBucket", "InvalidAccessKeyId", "SignatureDoesNotMatch", "403", "500"],
+    [
+        "NoSuchBucket",
+        "InvalidAccessKeyId",
+        "InvalidClientTokenId",
+        "SignatureDoesNotMatch",
+        "ExpiredToken",
+        "403",
+        "500",
+    ],
 )
 def test_misconfiguration_and_ambiguous_codes_are_not(code: str) -> None:
     assert is_permission_denied(_error(code)) is False

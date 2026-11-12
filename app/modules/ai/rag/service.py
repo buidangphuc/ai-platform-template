@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Sequence
 from typing import Any
 
-from llama_index.core import Document, StorageContext, VectorStoreIndex
+from llama_index.core import Document, VectorStoreIndex
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import BaseNode, NodeWithScore
@@ -15,6 +15,7 @@ from loguru import logger
 
 from app.core.redaction import RedactionPolicy
 from app.core.resilience import TimeoutPolicy
+from app.modules.ai.rag.store import ParameterizedPGVectorStore
 
 
 def build_rag_node_parser(*, chunk_size: int, chunk_overlap: int) -> SentenceSplitter:
@@ -36,20 +37,19 @@ class KnowledgeRetrievalService:
         embed_model: BaseEmbedding,
         node_parser: SentenceSplitter,
         redaction_policy: RedactionPolicy,
-        storage_context: StorageContext | None = None,
+        vector_store: ParameterizedPGVectorStore,
         default_top_k: int = 5,
         retrieve_timeout: TimeoutPolicy | None = None,
     ) -> None:
         self.embed_model = embed_model
         self.node_parser = node_parser
         self.redaction_policy = redaction_policy
-        self.storage_context = storage_context or StorageContext.from_defaults()
+        self.vector_store = vector_store
         self.default_top_k = default_top_k
         self.retrieve_timeout = retrieve_timeout
-        self.index_store = VectorStoreIndex(
-            nodes=[],
-            storage_context=self.storage_context,
-            embed_model=self.embed_model,
+        self.index_store = VectorStoreIndex.from_vector_store(
+            vector_store,
+            embed_model=embed_model,
         )
         self._lock = asyncio.Lock()
 
@@ -64,17 +64,16 @@ class KnowledgeRetrievalService:
                 chunks = await asyncio.to_thread(
                     self.node_parser.get_nodes_from_documents, [doc]
                 )
-                await asyncio.to_thread(self.index_store.insert_nodes, chunks)
+                await self.index_store.ainsert_nodes(chunks)
                 chunk_total += len(chunks)
             return {"indexed_count": len(documents), "chunk_count": chunk_total}
 
     async def delete(self, document_id: str) -> None:
         async with self._lock:
-            await asyncio.to_thread(
-                self.index_store.delete_ref_doc,
-                document_id,
-                delete_from_docstore=True,
-            )
+            await self.vector_store.adelete(document_id)
+
+    async def aclose(self) -> None:
+        await self.vector_store.close()
 
     async def search(
         self,
@@ -102,7 +101,11 @@ class KnowledgeRetrievalService:
             return None
         return MetadataFilters(
             filters=[
-                MetadataFilter(key=key, value=value, operator=FilterOperator.EQ)
+                MetadataFilter(
+                    key=key,
+                    value=str(value).lower() if isinstance(value, bool) else value,
+                    operator=FilterOperator.EQ,
+                )
                 for key, value in filters.items()
             ]
         )

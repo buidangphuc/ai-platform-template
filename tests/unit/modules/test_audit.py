@@ -1,20 +1,14 @@
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.platform.audit.models import AuditEvent
 from app.modules.platform.audit.service import (
     record_audit_event,
     validate_audit_metadata,
 )
-
-
-class _FakeSession:
-    def __init__(self) -> None:
-        self.added = []
-
-    def add(self, value):
-        self.added.append(value)
 
 
 def test_audit_event_model_uses_safe_metadata_column_name():
@@ -30,27 +24,35 @@ def test_validate_audit_metadata_rejects_raw_ai_content_keys():
         validate_audit_metadata({"nested": {"messages": ["raw"]}})
 
 
-async def test_record_audit_event_persists_event_with_explicit_params():
-    db = _FakeSession()
+async def test_record_audit_event_persists_event_with_explicit_params(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+):
+    created_at = datetime(2026, 5, 21, tzinfo=UTC)
 
-    event = await record_audit_event(
-        db,  # type: ignore[arg-type]
-        event_type="document.indexed",
-        actor_id="svc-local",
-        actor_type="service",
-        request_id="req-1",
-        resource_type="document",
-        resource_id="doc-1",
-        status="succeeded",
-        duration_ms=42,
-        error_code=None,
-        langfuse_trace_id="trace-1",
-        metadata={"chunk_count": 3, "source_id": "upload-1"},
-        pii_scrubbed=True,
-        now=lambda: datetime(2026, 5, 21, tzinfo=UTC),
-    )
+    async with pg_sessionmaker() as session, session.begin():
+        recorded = await record_audit_event(
+            session,
+            event_type="document.indexed",
+            actor_id="svc-local",
+            actor_type="service",
+            request_id="req-1",
+            resource_type="document",
+            resource_id="doc-1",
+            status="succeeded",
+            duration_ms=42,
+            error_code=None,
+            langfuse_trace_id="trace-1",
+            metadata={"chunk_count": 3, "source_id": "upload-1"},
+            pii_scrubbed=True,
+            now=lambda: created_at,
+        )
 
-    assert db.added == [event]
+    async with pg_sessionmaker() as session:
+        event = (
+            await session.scalars(
+                select(AuditEvent).where(AuditEvent.id == recorded.id)
+            )
+        ).one()
     assert event.actor_id == "svc-local"
     assert event.actor_type == "service"
     assert event.request_id == "req-1"
@@ -59,6 +61,27 @@ async def test_record_audit_event_persists_event_with_explicit_params():
     assert event.resource_id == "doc-1"
     assert event.status == "succeeded"
     assert event.duration_ms == 42
+    assert event.error_code is None
     assert event.langfuse_trace_id == "trace-1"
     assert event.event_metadata == {"chunk_count": 3, "source_id": "upload-1"}
     assert event.pii_scrubbed is True
+    assert event.created_at == created_at
+
+
+async def test_record_audit_event_rejects_raw_content_before_touching_the_database(
+    pg_sessionmaker: async_sessionmaker[AsyncSession],
+):
+    async with pg_sessionmaker() as session, session.begin():
+        with pytest.raises(ValueError, match="prompt"):
+            await record_audit_event(
+                session,
+                event_type="completion.created",
+                actor_id="svc-local",
+                actor_type="service",
+                request_id="req-1",
+                status="succeeded",
+                metadata={"prompt": "raw user text"},
+            )
+
+    async with pg_sessionmaker() as session:
+        assert list(await session.scalars(select(AuditEvent.id))) == []

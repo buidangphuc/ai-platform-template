@@ -35,7 +35,7 @@ config/
 ├── http.py           # CORS, trusted hosts, body limit, security headers, gzip, request timeout
 ├── infra.py          # Postgres + Redis
 ├── mongo.py          # Mongo (MONGO_ENABLED, MONGODB_URI, timeouts) — disabled by default
-├── ai.py             # LLM router + Langfuse + RAG
+├── ai.py             # LLM router + Langfuse + RAG (pgvector on Postgres)
 ├── messaging.py      # Queue, tasks, worker, outbox, webhooks
 └── platform.py       # Auth, rate limit, cache, objects, idempotency, quota
 ```
@@ -58,7 +58,7 @@ Reserve `@field_validator` and `@model_validator` for cross-field or semantic ch
 
 ### Adding a backend / adapter
 
-Backends are `Literal` aliases (e.g. `RateLimitBackend = Literal["memory", "redis"]`), so `Settings` rejects unknown values. Dispatch is an exhaustive `match` with no default branch; pyright (`reportMatchNotExhaustive`) fails until a new value has its `case`.
+Backends are `Literal` aliases (e.g. `QuotaBackend = Literal["postgres", "mongo"]`), so `Settings` rejects unknown values. Dispatch is an exhaustive `match` with no default branch; pyright (`reportMatchNotExhaustive`) fails until a new value has its `case`.
 
 ### Adding a new section
 

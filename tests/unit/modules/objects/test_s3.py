@@ -1,202 +1,202 @@
+from collections.abc import AsyncIterator, Callable
+
+import boto3
+import httpx
 import pytest
 from botocore.exceptions import ClientError
 
+from app.core.config import Settings
 from app.modules.platform.objects.adapters.s3 import S3ObjectGateway
+from app.modules.platform.objects.factory import open_object_gateway
+from tests.infra import S3Target
+
+aioboto3 = pytest.importorskip("aioboto3")
+
+UNREACHABLE_ENDPOINT = "http://127.0.0.1:1"
 
 
-class _Body:
-    def __init__(self, value: bytes) -> None:
-        self.value = value
-
-    async def read(self) -> bytes:
-        return self.value
-
-
-class _FakeS3Client:
-    def __init__(self) -> None:
-        self.put_calls: list[dict[str, object]] = []
-        self.get_calls: list[dict[str, object]] = []
-        self.delete_calls: list[dict[str, object]] = []
-        self.head_calls: list[dict[str, object]] = []
-        self.probe_calls: list[dict[str, object]] = []
-        self.probe_error: Exception | None = None
-
-    async def list_objects_v2(self, **kwargs: object) -> dict[str, object]:
-        self.probe_calls.append(kwargs)
-        if self.probe_error is not None:
-            raise self.probe_error
-        return {"KeyCount": 0}
-
-    async def put_object(self, **kwargs: object) -> None:
-        self.put_calls.append(kwargs)
-
-    async def get_object(self, **kwargs: object) -> dict[str, object]:
-        self.get_calls.append(kwargs)
-        return {"Body": _Body(b"value")}
-
-    async def delete_object(self, **kwargs: object) -> None:
-        self.delete_calls.append(kwargs)
-
-    async def head_object(self, **kwargs: object) -> None:
-        self.head_calls.append(kwargs)
-
-    def generate_presigned_url(
-        self,
-        operation: str,
-        *,
-        Params: dict[str, object],
-        ExpiresIn: int,
-    ) -> str:
-        return f"https://signed.test/{operation}/{Params['Key']}?ttl={ExpiresIn}"
+def _gateway(
+    target: S3Target,
+    *,
+    bucket: str | None = None,
+    endpoint_url: str | None = None,
+    access_key: str | None = None,
+    secret_key: str | None = None,
+) -> S3ObjectGateway:
+    return S3ObjectGateway(
+        bucket=bucket or target.bucket,
+        region_name=target.region,
+        prefix=target.prefix,
+        endpoint_url=endpoint_url or target.endpoint_url,
+        session_factory=lambda: aioboto3.Session(
+            aws_access_key_id=access_key or target.access_key,
+            aws_secret_access_key=secret_key or target.secret_key,
+        ),
+    )
 
 
-class _ClientContextManager:
-    def __init__(self, client: _FakeS3Client) -> None:
-        self.client = client
-        self.exited = False
-
-    async def __aenter__(self) -> _FakeS3Client:
-        return self.client
-
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.exited = True
+@pytest.fixture()
+async def gateway(s3_target: S3Target) -> AsyncIterator[S3ObjectGateway]:
+    opened = await _gateway(s3_target).open()
+    try:
+        yield opened
+    finally:
+        await opened.close()
 
 
-class _FakeSession:
-    def __init__(self, client: _FakeS3Client) -> None:
-        self.s3_client = client
-        self.context = _ClientContextManager(client)
-        self.client_calls: list[tuple[str, dict[str, object]]] = []
+def _boto_client(target: S3Target):
+    return boto3.client(
+        "s3",
+        endpoint_url=target.endpoint_url,
+        aws_access_key_id=target.access_key,
+        aws_secret_access_key=target.secret_key,
+        region_name=target.region,
+    )
 
-    def client(self, service_name: str, **kwargs: object) -> _ClientContextManager:
-        self.client_calls.append((service_name, kwargs))
-        return self.context
 
-
-async def test_s3_object_gateway_uses_injected_session_and_custom_endpoint():
-    client = _FakeS3Client()
-    session = _FakeSession(client)
-    gateway = await S3ObjectGateway(
-        bucket="bucket",
-        region_name="ap-southeast-1",
-        prefix="artifacts",
-        endpoint_url="http://localstack:4566",
-        session_factory=lambda: session,
-    ).open()
-
-    assert session.client_calls == [  # connected eagerly, before any operation
-        (
-            "s3",
-            {
-                "region_name": "ap-southeast-1",
-                "endpoint_url": "http://localstack:4566",
-            },
-        )
-    ]
+async def test_put_get_exists_and_delete_round_trip_under_the_prefix(
+    gateway: S3ObjectGateway, s3_target: S3Target
+):
     await gateway.put("reports/output.json", b"{}", content_type="application/json")
-    value = await gateway.get("reports/output.json")
-    exists = await gateway.exists("reports/output.json")
-    signed_url = await gateway.presign_get("reports/output.json", expires_seconds=60)
+
+    stored = _boto_client(s3_target).head_object(
+        Bucket=s3_target.bucket, Key=f"{s3_target.prefix}reports/output.json"
+    )
+    assert stored["ContentType"] == "application/json"
+    assert await gateway.get("reports/output.json") == b"{}"
+    assert await gateway.exists("reports/output.json") is True
+
     await gateway.delete("reports/output.json")
-    await gateway.close()
 
-    assert session.client_calls == [
-        (
-            "s3",
-            {
-                "region_name": "ap-southeast-1",
-                "endpoint_url": "http://localstack:4566",
-            },
+    assert await gateway.exists("reports/output.json") is False
+    assert await gateway.get("reports/output.json") is None
+
+
+async def test_get_and_exists_report_a_missing_key(gateway: S3ObjectGateway):
+    assert await gateway.get("missing.txt") is None
+    assert await gateway.exists("missing.txt") is False
+
+
+async def test_list_is_scoped_to_the_prefix_and_limited(gateway: S3ObjectGateway):
+    for name in ("a/1.txt", "a/2.txt", "b/1.txt"):
+        await gateway.put(name, b"x")
+
+    assert sorted(await gateway.list()) == ["a/1.txt", "a/2.txt", "b/1.txt"]
+    assert sorted(await gateway.list("a/")) == ["a/1.txt", "a/2.txt"]
+    assert len(await gateway.list(limit=2)) == 2
+    with pytest.raises(ValueError, match="limit must be positive"):
+        await gateway.list(limit=0)
+
+
+async def test_presigned_urls_grant_scoped_access(gateway: S3ObjectGateway):
+    put_url = await gateway.presign_put(
+        "signed.txt", expires_seconds=60, content_type="text/plain"
+    )
+    async with httpx.AsyncClient() as http:
+        uploaded = await http.put(
+            put_url, content=b"signed", headers={"Content-Type": "text/plain"}
         )
+        assert uploaded.status_code == 200
+
+        get_url = await gateway.presign_get("signed.txt", expires_seconds=60)
+        downloaded = await http.get(get_url)
+
+    assert downloaded.content == b"signed"
+    assert await gateway.get("signed.txt") == b"signed"
+
+
+async def test_open_object_gateway_builds_the_s3_backend_from_settings(
+    infra_settings: Callable[..., Settings],
+    s3_target: S3Target,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", s3_target.access_key)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", s3_target.secret_key)
+    settings = infra_settings(
+        OBJECTS_ENABLED=True,
+        OBJECT_BACKEND="s3",
+        OBJECT_PREFIX=s3_target.prefix,
+        OBJECT_S3_BUCKET=s3_target.bucket,
+        OBJECT_S3_REGION=s3_target.region,
+        OBJECT_S3_ENDPOINT_URL=s3_target.endpoint_url,
+    )
+
+    opened = await open_object_gateway(settings)
+    try:
+        await opened.put("from-settings.txt", b"ok")
+        listed = _boto_client(s3_target).list_objects_v2(
+            Bucket=s3_target.bucket, Prefix=s3_target.prefix
+        )
+    finally:
+        await opened.close()
+
+    assert [item["Key"] for item in listed["Contents"]] == [
+        f"{s3_target.prefix}from-settings.txt"
     ]
-    assert client.put_calls[0] == {
-        "Bucket": "bucket",
-        "Key": "artifacts/reports/output.json",
-        "Body": b"{}",
-        "ContentType": "application/json",
-    }
-    assert client.get_calls[0] == {
-        "Bucket": "bucket",
-        "Key": "artifacts/reports/output.json",
-    }
-    assert client.head_calls[0] == {
-        "Bucket": "bucket",
-        "Key": "artifacts/reports/output.json",
-    }
-    assert client.delete_calls[0] == {
-        "Bucket": "bucket",
-        "Key": "artifacts/reports/output.json",
-    }
-    assert value == b"value"
-    assert exists is True
-    assert (
-        signed_url
-        == "https://signed.test/get_object/artifacts/reports/output.json?ttl=60"
-    )
-    assert session.context.exited is True
 
 
-async def test_open_verifies_the_bucket():
-    client = _FakeS3Client()
-    gateway = await S3ObjectGateway(
-        bucket="bucket", region_name="r", session_factory=lambda: _FakeSession(client)
-    ).open()
+async def test_open_fails_when_the_endpoint_is_unreachable(
+    s3_target: S3Target, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "1")
+    with pytest.raises(RuntimeError, match=s3_target.bucket) as excinfo:
+        await _gateway(s3_target, endpoint_url=UNREACHABLE_ENDPOINT).open()
 
-    assert client.probe_calls == [{"Bucket": "bucket", "Prefix": "app/", "MaxKeys": 1}]
-    await gateway.close()
-
-
-async def test_open_closes_the_client_and_raises_when_the_bucket_is_unreachable():
-    client = _FakeS3Client()
-    client.probe_error = _client_error("NoSuchBucket", "ListObjectsV2")
-    session = _FakeSession(client)
-    gateway = S3ObjectGateway(
-        bucket="missing",
-        region_name="r",
-        endpoint_url="http://s3.test",
-        session_factory=lambda: session,
-    )
-
-    with pytest.raises(RuntimeError, match="missing") as excinfo:
-        await gateway.open()
-
-    assert "http://s3.test" in str(excinfo.value)
-    assert isinstance(excinfo.value.__cause__, ClientError)
-    assert session.context.exited is True
-
-
-def _client_error(code: str, operation: str) -> ClientError:
-    return ClientError({"Error": {"Code": code, "Message": code}}, operation)
-
-
-async def test_open_tolerates_a_missing_list_permission(caplog):
-    # Least-privilege policies often grant Get/PutObject without ListBucket:
-    # credentials and bucket are fine, only the boot-time probe is forbidden.
-    client = _FakeS3Client()
-    client.probe_error = _client_error("AccessDenied", "ListObjectsV2")
-    session = _FakeSession(client)
-
-    gateway = await S3ObjectGateway(
-        bucket="bucket", region_name="r", session_factory=lambda: session
-    ).open()
-
-    assert session.context.exited is False
-    await gateway.put("k", b"v")
-    assert client.put_calls
-    await gateway.close()
+    assert UNREACHABLE_ENDPOINT in str(excinfo.value)
+    assert excinfo.value.__cause__ is not None
 
 
 @pytest.mark.parametrize(
-    "code", ["InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken"]
+    ("access_key", "secret_key"),
+    [("not-an-access-key", None), (None, "wrong-secret")],
+    ids=["unknown_access_key", "wrong_secret"],
 )
-async def test_open_fails_on_bad_credentials(code: str):
-    client = _FakeS3Client()
-    client.probe_error = _client_error(code, "ListObjectsV2")
-    session = _FakeSession(client)
+async def test_open_fails_on_bad_credentials(
+    s3_target: S3Target, access_key: str | None, secret_key: str | None
+):
+    gateway = _gateway(s3_target, access_key=access_key, secret_key=secret_key)
 
-    with pytest.raises(RuntimeError, match="bucket"):
-        await S3ObjectGateway(
-            bucket="bucket", region_name="r", session_factory=lambda: session
-        ).open()
+    with pytest.raises(RuntimeError, match=s3_target.bucket) as excinfo:
+        await gateway.open()
 
-    assert session.context.exited is True
+    assert isinstance(excinfo.value.__cause__, ClientError)
+
+
+async def test_open_tolerates_a_bucket_the_credentials_cannot_list(
+    s3_target: S3Target,
+):
+    gateway = await _gateway(s3_target, bucket="aipt-test-foreign-bucket").open()
+
+    try:
+        with pytest.raises(ClientError) as excinfo:
+            await gateway.put("k", b"v")
+    finally:
+        await gateway.close()
+
+    assert excinfo.value.response["Error"]["Code"] == "AccessDenied"
+
+
+async def test_get_and_exists_raise_when_access_is_denied(s3_target: S3Target):
+    gateway = await _gateway(s3_target, bucket="aipt-test-foreign-bucket").open()
+
+    try:
+        with pytest.raises(ClientError, match="AccessDenied"):
+            await gateway.get("k")
+        with pytest.raises(ClientError):
+            await gateway.exists("k")
+    finally:
+        await gateway.close()
+
+
+def test_gateway_requires_the_aws_extra(monkeypatch: pytest.MonkeyPatch):
+    import app.modules.platform.objects.adapters.s3 as s3_mod
+
+    monkeypatch.setattr(s3_mod, "aioboto3", None)
+
+    with pytest.raises(RuntimeError, match=r"\[aws\] extra"):
+        S3ObjectGateway(bucket="b", region_name="us-east-1")
+
+
+def test_gateway_requires_a_bucket():
+    with pytest.raises(ValueError, match="bucket"):
+        S3ObjectGateway(bucket="", region_name="us-east-1")

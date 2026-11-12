@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
 
 
-ClientlessQueueBackend = Literal["memory", "sqs", "rabbitmq"]
+ClientlessQueueBackend = Literal["sqs", "rabbitmq"]
 
 
 async def open_queue_gateway(
@@ -24,12 +24,6 @@ async def open_queue_gateway(
     startup instead of the first request.
     """
     match backend:
-        case "memory":
-            from app.modules.messaging.queue.adapters.memory import (
-                InMemoryQueueGateway,
-            )
-
-            return InMemoryQueueGateway(name=settings.QUEUE_NAME)
         case "sqs":
             from app.modules.messaging.queue.adapters.sqs import SQSQueueGateway
 
@@ -55,6 +49,7 @@ async def open_queue_gateway(
                 dead_letter_enabled=settings.RABBITMQ_DEAD_LETTER_ENABLED,
                 dead_letter_exchange=settings.RABBITMQ_DEAD_LETTER_EXCHANGE,
                 dead_letter_queue=settings.RABBITMQ_DEAD_LETTER_QUEUE,
+                queue_type=settings.RABBITMQ_QUEUE_TYPE,
             ).open()
 
 

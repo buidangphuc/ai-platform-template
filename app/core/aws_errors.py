@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # The caller is authenticated and the resource is addressable, but the policy
 # does not allow the probe call itself (least-privilege policies often omit
-# s3:ListBucket / sqs:GetQueueAttributes). Not a misconfiguration.
+# s3:ListBucket). Not a misconfiguration.
 _PERMISSION_DENIED_CODES = frozenset(
     {"AccessDenied", "AccessDeniedException", "AllAccessDisabled", "Forbidden"}
 )
