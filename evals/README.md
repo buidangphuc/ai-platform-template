@@ -12,6 +12,8 @@ box on a fresh fork. Case format:
 - `judge` — LLM-as-judge; runs only when `JUDGE_CHAT_MODEL` is set (and the
   `[ai]` extra installed); otherwise the case is **skipped**, keeping CI
   hermetic. `expected` holds the grading criteria text.
+- Any other `metadata.evaluator` value fails the gate, naming the case id
+  and the value, before any case is scored.
 
 ## Point it at your product
 

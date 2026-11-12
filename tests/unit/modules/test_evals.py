@@ -13,6 +13,8 @@ from app.modules.ai.evals.evaluators import (
 )
 from app.modules.ai.evals.runner import (
     EvalCase,
+    EvalCaseResult,
+    EvalReport,
     EvalTargetResult,
     evaluate_one,
     load_jsonl_cases,
@@ -173,6 +175,105 @@ async def test_eval_runner_skips_langfuse_score_without_trace_id():
 
     assert report.passed_scores == 1
     assert tracker.scores == []
+
+
+async def test_run_eval_cases_accepts_a_per_case_selector():
+    async def target(case: EvalCase) -> str:
+        return case.input
+
+    def select(case: EvalCase):
+        if case.metadata.get("evaluator") == "contains":
+            return [ContainsEvaluator()]
+        return [ExactMatchEvaluator()]
+
+    report = await run_eval_cases(
+        [
+            EvalCase(id="a", input="hello world", expected="hello"),
+            EvalCase(
+                id="b",
+                input="hello world",
+                expected="hello",
+                metadata={"evaluator": "contains"},
+            ),
+        ],
+        target=target,
+        evaluators=select,
+    )
+
+    assert [score.name for r in report.results for score in r.scores] == [
+        "exact_match",
+        "contains",
+    ]
+    assert report.passed_scores == 1
+
+
+async def test_run_eval_cases_skips_case_without_evaluators_and_does_not_call_target():
+    calls: list[str] = []
+
+    async def target(case: EvalCase) -> str:
+        calls.append(case.id)
+        return case.input
+
+    report = await run_eval_cases(
+        [
+            EvalCase(id="skipme", input="x", expected="x", metadata={"k": 1}),
+            EvalCase(id="scored", input="x", expected="x"),
+        ],
+        target=target,
+        evaluators=lambda case: [] if case.id == "skipme" else [ExactMatchEvaluator()],
+    )
+
+    assert calls == ["scored"]
+    assert report.total_cases == 2
+    assert report.skipped_cases == 1
+    assert report.total_scores == 1
+    assert report.results[0].skipped is True
+    assert report.results[0].scores == []
+    assert report.results[1].skipped is False
+
+
+def _score(passed: bool, name: str = "exact_match", comment: str | None = None):
+    return EvalScore(
+        name=name, value=passed, data_type="BOOLEAN", passed=passed, comment=comment
+    )
+
+
+def test_eval_report_pass_rate_and_failures():
+    report = EvalReport(
+        results=[
+            EvalCaseResult(
+                case=EvalCase(id="p", input=1), output=1, scores=[_score(True)]
+            ),
+            EvalCaseResult(
+                case=EvalCase(id="f", input=1),
+                output=1,
+                scores=[_score(False, comment="nope")],
+            ),
+            EvalCaseResult(
+                case=EvalCase(id="s", input=1), output=None, scores=[], skipped=True
+            ),
+        ]
+    )
+
+    assert report.total_cases == 3
+    assert report.total_scores == 2
+    assert report.passed_scores == 1
+    assert report.skipped_cases == 1
+    assert report.pass_rate == 0.5
+    assert report.failures == ["f [exact_match] nope"]
+
+
+def test_eval_report_pass_rate_is_zero_without_scores():
+    report = EvalReport(
+        results=[
+            EvalCaseResult(
+                case=EvalCase(id="s", input=1), output=None, scores=[], skipped=True
+            )
+        ]
+    )
+
+    assert report.pass_rate == 0.0
+    assert report.failures == []
 
 
 async def test_json_field_evaluator_reads_nested_values():
