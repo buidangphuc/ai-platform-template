@@ -120,8 +120,8 @@ def test_retry_policy_retry_on_override_retries_everything() -> None:
     assert policy.decision(attempt=1, error=RuntimeError("x")).should_retry is True
 
 
-def test_retry_policy_does_not_retry_errors_when_disabled() -> None:
-    policy = RetryPolicy(max_attempts=3, retry_exceptions=False)
+def test_retry_policy_does_not_retry_errors_the_filter_rejects() -> None:
+    policy = RetryPolicy(max_attempts=3, retry_on=lambda error: False)
 
     assert policy.decision(attempt=1, error=TimeoutError()).should_retry is False
 

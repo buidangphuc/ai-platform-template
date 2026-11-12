@@ -46,7 +46,7 @@ class WebhookOutboxSink:
         self.dispatcher = dispatcher
 
     async def publish(self, record: OutboxRecord, *, now: datetime) -> None:
-        result = await self.dispatcher.dispatch(
+        result = await self.dispatcher.send_once(
             self.url,
             WebhookEnvelope(
                 id=record.id,

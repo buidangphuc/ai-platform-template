@@ -368,6 +368,32 @@ async def test_webhook_outbox_sink_dispatches_generic_envelope(
     assert request.headers["x-webhook-signature"].startswith("v1=")
 
 
+async def test_webhook_outbox_sink_sends_once_per_publish(
+    local_http_server: LocalHttpServer, http_client: httpx.AsyncClient
+):
+    local_http_server.script("/webhooks", Reply(503))
+    sleeps: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    sink = WebhookOutboxSink(
+        url=f"{local_http_server.url}/webhooks",
+        dispatcher=HttpWebhookDispatcher(
+            signer=WebhookSigner(secret="secret"),
+            client=http_client,
+            sleep=record_sleep,
+        ),
+    )
+    record = OutboxRecord(id="evt-1", event_type="generic.event", payload={})
+
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        await sink.publish(record, now=datetime.now(UTC))
+
+    assert len(local_http_server.requests_to("/webhooks")) == 1
+    assert sleeps == []
+
+
 async def test_outbox_publisher_claims_only_its_event_family(
     pg_sessionmaker: Sessions, queue: SQSQueueGateway
 ):
