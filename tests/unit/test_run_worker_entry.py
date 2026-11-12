@@ -11,12 +11,12 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.bootstrap.addons.base import default_resource_addons
 from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.resources import ApplicationResources
 from app.bootstrap.worker import (
     WorkerContext,
     build_worker_message_handler,
-    check_worker_configuration,
     validate_worker_runtime_settings,
     worker_context,
 )
@@ -31,7 +31,7 @@ from app.modules.messaging.queue.worker import (
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.service import TaskService
 from app.modules.messaging.tasks.store import TaskRecord
-from scripts.run_worker import main
+from scripts.run_worker import _run, main
 from tests.factories import build_test_settings
 
 
@@ -195,34 +195,87 @@ def test_worker_runtime_settings_require_queue_and_tasks_enabled():
         )
 
 
-def test_worker_configuration_check_validates_without_opening_sessions(monkeypatch):
-    settings = _settings().model_copy(
-        update={"DATABASE_ENABLED": False, "TASK_STORE_BACKEND": "redis"}
-    )
-
+def test_check_argument_is_rejected_as_unknown(monkeypatch):
     monkeypatch.setattr(
-        "app.bootstrap.worker.get_settings",
-        lambda: settings,
+        "scripts.run_worker._run", lambda: pytest.fail("worker must not start")
     )
-    monkeypatch.setattr(
-        "app.bootstrap.resources.build_engine",
-        lambda _settings: pytest.fail("database should not be opened"),
-    )
-
-    assert check_worker_configuration() is None
-
-
-def test_worker_check_cli_reports_configuration_errors(monkeypatch, capsys):
-    def _raise() -> None:
-        raise RuntimeError("bad worker config")
-
-    monkeypatch.setattr("app.bootstrap.worker.check_worker_configuration", _raise)
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--check"])
 
-    assert exc_info.value.code == 1
-    assert "worker configuration invalid: bad worker config" in capsys.readouterr().err
+    assert str(exc_info.value) == "unknown arguments: --check"
+
+
+async def test_worker_context_rejects_invalid_settings_before_opening_resources(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.bootstrap.worker.open_runtime",
+        lambda *args, **kwargs: pytest.fail("no resource may be opened"),
+    )
+
+    with pytest.raises(RuntimeError, match="TASKS_ENABLED"):
+        async with worker_context(
+            _settings().model_copy(update={"TASKS_ENABLED": False})
+        ):
+            pass
+
+
+async def test_worker_context_opens_the_default_addons(monkeypatch):
+    seen: dict = {}
+
+    class _Stop(Exception): ...
+
+    def fake_open_runtime(settings, **kwargs):
+        seen.update(kwargs)
+        raise _Stop
+
+    monkeypatch.setattr("app.bootstrap.worker.open_runtime", fake_open_runtime)
+
+    with pytest.raises(_Stop):
+        async with worker_context(_settings()):
+            pass
+
+    assert [type(addon) for addon in seen["addons"]] == [
+        type(addon) for addon in default_resource_addons()
+    ]
+
+
+async def test_worker_entry_logs_redacted_settings(monkeypatch):
+    import contextlib
+
+    from loguru import logger
+
+    settings = _settings().model_copy(
+        update={"REDIS_PASSWORD": "redis-secret-value"}  # pragma: allowlist secret
+    )
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record["message"]))
+
+    @contextlib.asynccontextmanager
+    async def fake_worker_context(_settings):
+        messages.append("worker_context opened")
+
+        class _Ctx:
+            async def run(self) -> None:
+                return None
+
+        yield _Ctx()
+
+    monkeypatch.setattr("scripts.run_worker.get_settings", lambda: settings)
+    monkeypatch.setattr("scripts.run_worker.configure_logging", lambda **_: None)
+    monkeypatch.setattr(
+        "scripts.run_worker.worker_bootstrap.worker_context", fake_worker_context
+    )
+    try:
+        await _run()
+    finally:
+        logger.remove(sink_id)
+
+    lines = [m for m in messages if m.startswith("settings ")]
+    assert len(lines) == 1
+    assert "redis-secret-value" not in lines[0]
+    assert messages.index(lines[0]) < messages.index("worker_context opened")
 
 
 class _ScriptedService:

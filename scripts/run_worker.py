@@ -20,19 +20,13 @@ async def _run() -> None:
         settings.QUEUE_BACKEND,
         settings.TASK_STORE_BACKEND,
     )
+    logger.info("settings {}", settings.redacted_summary())
     async with worker_bootstrap.worker_context(settings) as ctx:
         await ctx.run()
 
 
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
-    if args == ["--check"]:
-        try:
-            worker_bootstrap.check_worker_configuration()
-        except Exception as exc:
-            print(f"worker configuration invalid: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-        return
     if args:
         raise SystemExit(f"unknown arguments: {' '.join(args)}")
     asyncio.run(_run())

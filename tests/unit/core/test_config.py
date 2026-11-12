@@ -51,34 +51,60 @@ def test_settings_defaults_are_local_safe():
     assert "API_KEY_BOOTSTRAP_TOKEN" not in Settings.model_fields
 
 
-def test_settings_redacts_secret_values():
+def test_redacted_summary_masks_secret_words():
     settings = build_test_settings(
-        REDIS_PASSWORD="redis-secret",  # pragma: allowlist secret
-        LANGFUSE_SECRET_KEY="langfuse-secret",  # pragma: allowlist secret
+        POSTGRES_PASSWORD="pg-secret-value",  # pragma: allowlist secret
+        REDIS_PASSWORD="redis-secret-value",  # pragma: allowlist secret
+        AUTH_API_KEYS=api_key_entry("svc", "service-token-value", "admin"),
+        WEBHOOK_SIGNING_SECRET="signing-secret-value",  # pragma: allowlist secret
+        LANGFUSE_SECRET_KEY="langfuse-secret-value",  # pragma: allowlist secret
     )
 
     summary = settings.redacted_summary()
 
+    assert summary["POSTGRES_PASSWORD"] == "***"
     assert summary["REDIS_PASSWORD"] == "***"
     assert summary["AUTH_API_KEYS"] == "***"
+    assert summary["WEBHOOK_SIGNING_SECRET"] == "***"
     assert summary["LANGFUSE_SECRET_KEY"] == "***"
-    assert summary["POSTGRES_URL"] == "***"
     assert summary["ENVIRONMENT"] == "test"
+    assert set(summary) == set(settings.model_dump(mode="json"))
 
 
-def test_redacted_summary_redacts_secret_like_future_fields():
+def test_redacted_summary_masks_url_credentials():
+    scheme_mongo = "mongodb://"
+    scheme_amqp = "amqp://"
+    settings = build_test_settings(
+        MONGODB_URI=scheme_mongo + "app-user:app-pass@mongo.internal:27017",
+        RABBITMQ_URL=scheme_amqp + "app-user:app-pass@rabbit.internal:5672/",
+    )
+
+    summary = settings.redacted_summary()
+
+    assert summary["MONGODB_URI"] == "***"
+    assert summary["RABBITMQ_URL"] == "***"
+    assert "@" in settings.POSTGRES_URL
+    assert summary["POSTGRES_URL"] == "***"
+
+
+def test_redacted_summary_keeps_non_secret_values():
     settings = build_test_settings()
 
-    assert settings._redacted_value("FUTURE_SERVICE_TOKEN", "token-value") == "***"
-    assert settings._redacted_value("FUTURE_SIGNING_SECRET", "secret-value") == "***"
+    summary = settings.redacted_summary()
+
+    assert summary["LLM_MAX_TOKENS"] == settings.LLM_MAX_TOKENS
+    assert summary["IDEMPOTENCY_KEY_MAX_LENGTH"] == settings.IDEMPOTENCY_KEY_MAX_LENGTH
     assert (
-        settings._redacted_value(
-            "FUTURE_DATABASE_URL",
-            "postgresql+asyncpg://user:password@localhost/db",  # pragma: allowlist secret
-        )
-        == "***"
+        summary["STREAM_FIRST_TOKEN_TIMEOUT_SECONDS"]
+        == settings.STREAM_FIRST_TOKEN_TIMEOUT_SECONDS
     )
-    assert settings._redacted_value("FUTURE_PUBLIC_VALUE", "visible") == "visible"
+    assert summary["MONGODB_URI"] == "mongodb://localhost:27017"
+
+
+def test_redacted_summary_keeps_empty_secret_empty():
+    settings = build_test_settings(WEBHOOK_SIGNING_SECRET="")
+
+    assert settings.redacted_summary()["WEBHOOK_SIGNING_SECRET"] == ""
 
 
 def test_principal_rate_limit_per_minute_must_be_positive():

@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
+from app.bootstrap.addons.base import default_resource_addons
 from app.bootstrap.features.base import Feature, TaskHandler
 from app.bootstrap.features.registry import FEATURES
 from app.bootstrap.resources import ApplicationResources, TaskServices, opened
@@ -38,7 +38,6 @@ BackgroundLoop = Callable[[asyncio.Event], Coroutine[Any, Any, None]]
 
 @dataclass
 class WorkerContext:
-    settings: Settings
     worker: AsyncPollingWorker
     resources: ApplicationResources
     tasks: TaskServices
@@ -195,20 +194,18 @@ async def worker_context(
     settings: Settings | None = None,
     *,
     features: tuple[Feature, ...] = FEATURES,
-    addons: tuple[BootstrapAddon, ...] | None = None,
 ) -> AsyncIterator[WorkerContext]:
     resolved = settings or get_settings()
     validate_worker_runtime_settings(resolved)
     async with open_runtime(
         resolved,
         init_resources=True,
-        addons=default_resource_addons() if addons is None else addons,
+        addons=default_resource_addons(),
         features=features,
     ) as resources:
         # Guaranteed by validate_worker_runtime_settings (TASKS_ENABLED).
         tasks = opened(resources.tasks, "tasks")
         yield WorkerContext(
-            settings=resolved,
             worker=build_polling_worker(
                 resolved,
                 tasks=tasks,
@@ -219,7 +216,3 @@ async def worker_context(
             tasks=tasks,
             loops=build_background_loops(resolved, resources=resources, tasks=tasks),
         )
-
-
-def check_worker_configuration(settings: Settings | None = None) -> None:
-    validate_worker_runtime_settings(settings or get_settings())
