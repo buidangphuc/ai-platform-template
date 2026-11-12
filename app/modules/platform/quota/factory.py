@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.modules.platform.quota.models import QuotaPolicy
 from app.modules.platform.quota.service import QuotaService
-from app.modules.platform.quota.store import QuotaStore, StaticQuotaPolicyStore
+from app.modules.platform.quota.store import QuotaStore
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,12 +26,5 @@ def build_mongo_quota_store(mongo: MongoGateway) -> MongoQuotaStore:
     return MongoQuotaStore(mongo)
 
 
-def build_quota_service(
-    store: QuotaStore,
-    *,
-    policies: dict[str, QuotaPolicy] | None = None,
-) -> QuotaService:
-    return QuotaService(
-        store=store,
-        policy_store=StaticQuotaPolicyStore(policies),
-    )
+def build_quota_service(store: QuotaStore) -> QuotaService:
+    return QuotaService(store=store)

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.database.model import Base
 from app.modules.platform.quota.adapters.postgres import PostgresQuotaStore
-from app.modules.platform.quota.models import ReserveQuota
+from app.modules.platform.quota.models import QuotaReservationStatus, ReserveQuota
 from app.modules.platform.quota.records import QuotaCounter, QuotaReservationRecord
 
 RESET = datetime.now(UTC) + timedelta(minutes=5)
@@ -107,3 +107,53 @@ async def test_upsert_refreshes_updated_at(pg_sessionmaker):
     async with pg_sessionmaker() as session:
         after = await session.scalar(select(QuotaCounter.updated_at))
     assert after > before
+
+
+async def test_retry_after_refund_charges_again(pg_sessionmaker):
+    store = PostgresQuotaStore(pg_sessionmaker)
+    first = await store.reserve(_command("a", key="k"))
+    assert first is not None
+    await store.refund(first.id)
+
+    retry = await store.reserve(_command("b", key="k"))
+
+    assert retry is not None
+    assert retry.id == first.id
+    assert retry.status == QuotaReservationStatus.RESERVED
+    assert retry.usage.used == 1
+    assert await _used(pg_sessionmaker) == 1
+
+
+async def test_retry_after_refund_is_rejected_at_the_limit(pg_sessionmaker):
+    store = PostgresQuotaStore(pg_sessionmaker)
+    first = await store.reserve(_command("a", key="k"))
+    assert first is not None
+    await store.refund(first.id)
+    for index in range(5):
+        assert await store.reserve(_command(f"o{index}")) is not None
+
+    retry = await store.reserve(_command("b", key="k"))
+
+    assert retry is None
+    assert await _used(pg_sessionmaker) == 5
+    async with pg_sessionmaker() as session:
+        status = await session.scalar(
+            select(QuotaReservationRecord.status).where(
+                QuotaReservationRecord.id == first.id
+            )
+        )
+    assert status == QuotaReservationStatus.REFUNDED.value
+
+
+async def test_concurrent_retries_after_refund_charge_once(pg_sessionmaker):
+    store = PostgresQuotaStore(pg_sessionmaker)
+    first = await store.reserve(_command("a", key="k"))
+    assert first is not None
+    await store.refund(first.id)
+
+    retries = await asyncio.gather(
+        *(store.reserve(_command(f"r{index}", key="k")) for index in range(5))
+    )
+
+    assert all(r is not None and r.id == first.id for r in retries)
+    assert await _used(pg_sessionmaker) == 1

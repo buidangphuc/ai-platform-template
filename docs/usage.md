@@ -241,13 +241,17 @@ principal id. Reusing the same key with a different request returns
 this contract.
 
 Two route guards are provided as opt-in examples; no route in the template
-enables them. `require_quota(resource, cost=1)`
+enables them. `require_quota(policy, cost=1)`
 (`app.modules.platform.quota.http`) is a dependency that reserves quota for the
 principal before the handler runs and answers `429` with `Retry-After` when
-exceeded; it needs `QUOTA_ENABLED=true` and a policy for the resource:
+exceeded; it takes the `QuotaPolicy` that governs the route and needs
+`QUOTA_ENABLED=true`:
 
 ```python
-@router.post("/reports", dependencies=[Depends(require_quota("reports"))])
+REPORTS = QuotaPolicy("reports", limit=100, window_seconds=3600)
+
+
+@router.post("/reports", dependencies=[Depends(require_quota(REPORTS))])
 async def create_report(...): ...
 ```
 

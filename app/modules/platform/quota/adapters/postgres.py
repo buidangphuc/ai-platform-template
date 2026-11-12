@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 from sqlalchemy import case, delete, func, select, update
@@ -27,7 +28,9 @@ class PostgresQuotaStore:
         async with self.sessionmaker() as session, session.begin():
             existing = await _find_idempotent_reservation(session, command)
             if existing is not None:
-                return await _to_reservation(session, existing)
+                if existing.status != QuotaReservationStatus.REFUNDED.value:
+                    return await _to_reservation(session, existing)
+                return await _recharge_refunded(session, command, existing)
 
             await _ensure_counter(session, command)
             inserted = await session.scalar(
@@ -196,6 +199,54 @@ class PostgresQuotaStore:
 
     async def close(self) -> None:
         return None
+
+
+async def _recharge_refunded(
+    session: AsyncSession,
+    command: ReserveQuota,
+    existing: QuotaReservationRecord,
+) -> QuotaReservation | None:
+    """Flip a refunded reservation back to reserved and charge it, atomically.
+
+    The status flip arbitrates concurrent retries: a loser re-evaluates the
+    ``status = 'refunded'`` predicate after the winner commits and matches
+    nothing, so it returns the winner's reservation without charging.
+    """
+    flipped = await session.scalar(
+        update(QuotaReservationRecord)
+        .where(
+            QuotaReservationRecord.id == existing.id,
+            QuotaReservationRecord.status == QuotaReservationStatus.REFUNDED.value,
+        )
+        .values(status=QuotaReservationStatus.RESERVED.value)
+        .returning(QuotaReservationRecord)
+        .execution_options(synchronize_session=False)
+    )
+    if flipped is None:
+        current = await _find_idempotent_reservation(session, command)
+        if current is None:
+            raise RuntimeError("quota reservation vanished during retry")
+        return await _to_reservation(session, current)
+
+    await _ensure_counter(session, command)
+    usage = await _try_increment_counter(session, replace(command, cost=existing.cost))
+    if usage is None:
+        await session.execute(
+            update(QuotaReservationRecord)
+            .where(QuotaReservationRecord.id == existing.id)
+            .values(status=QuotaReservationStatus.REFUNDED.value)
+        )
+        return None
+    return QuotaReservation(
+        id=existing.id,
+        subject_id=existing.subject_id,
+        resource=existing.resource,
+        window_key=existing.window_key,
+        cost=existing.cost,
+        status=QuotaReservationStatus.RESERVED,
+        usage=usage,
+        idempotency_key=existing.idempotency_key,
+    )
 
 
 async def _ensure_counter(session: AsyncSession, command: ReserveQuota) -> None:

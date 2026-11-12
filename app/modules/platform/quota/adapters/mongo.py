@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import asyncio
+from dataclasses import replace
 
 from pymongo import ASCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -19,6 +20,8 @@ DEFAULT_QUOTA_RESERVATION_COLLECTION = "quota_reservations"
 # Documents are kept this long past ``reset_at`` before the TTL monitor drops
 # them, so a late refund/finalize still finds its reservation and counter.
 QUOTA_TTL_GRACE_SECONDS = 24 * 60 * 60
+_KEYED_RESERVE_ATTEMPTS = 5
+_KEYED_RESERVE_BACKOFF_SECONDS = 0.02
 
 
 class MongoQuotaStore:
@@ -69,49 +72,34 @@ class MongoQuotaStore:
         )
 
     async def reserve(self, command: ReserveQuota) -> QuotaReservation | None:
-        await self._migrate_active_counters(command)
-        existing = await self._find_idempotent_reservation(command)
-        if existing is not None:
-            return await self._to_reservation(existing)
+        attempts = _KEYED_RESERVE_ATTEMPTS if command.idempotency_key else 1
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(_KEYED_RESERVE_BACKOFF_SECONDS)
+            existing = await self._find_idempotent_reservation(command)
+            if existing is not None and _is_live(existing):
+                return await self._to_reservation(existing)
+            charge = (
+                replace(command, cost=existing["cost"])
+                if existing is not None
+                else command
+            )
+            counter = await self._charge(charge)
+            if counter is None:
+                continue
+            reservation = await self._record(command, existing, counter)
+            if reservation is not None:
+                return reservation
+        return None
 
-        # The counter exists before any reservation that points at it.
+    async def _charge(self, command: ReserveQuota) -> dict | None:
         counter_key = _counter_key(command)
         await self._counters.update_one(
             counter_key,
-            {
-                "$setOnInsert": {
-                    **counter_key,
-                    "used": 0,
-                },
-                "$set": {
-                    "limit": command.limit,
-                    "reset_at": command.reset_at,
-                },
-            },
+            {"$setOnInsert": {**counter_key, "used": 0}},
             upsert=True,
         )
-        # Claim the reservation (and its idempotency key) BEFORE charging, so a
-        # burst of retries with one key charges once and losers never hit the
-        # limit. The unique partial index on idempotency_key arbitrates.
-        reservation_doc = {
-            "_id": command.reservation_id,
-            "subject_id": command.subject_id,
-            "resource": command.resource,
-            "window_key": command.window_key,
-            "cost": command.cost,
-            "status": QuotaReservationStatus.RESERVED.value,
-            "idempotency_key": command.idempotency_key,
-            "reset_at": command.reset_at,
-        }
-        try:
-            await self._reservations.insert_one(reservation_doc)
-        except DuplicateKeyError:
-            existing = await self._find_idempotent_reservation(command)
-            if existing is None:
-                raise
-            return await self._to_reservation(existing)
-
-        counter = await self._counters.find_one_and_update(
+        return await self._counters.find_one_and_update(
             {
                 **counter_key,
                 "$expr": {
@@ -130,11 +118,52 @@ class MongoQuotaStore:
             },
             return_document=ReturnDocument.AFTER,
         )
-        if counter is None:
-            # Over the limit: release the claim so a later retry can try again.
-            await self._reservations.delete_one({"_id": command.reservation_id})
+
+    async def _uncharge(self, counter_key: dict, cost: int) -> dict | None:
+        return await self._counters.find_one_and_update(
+            counter_key,
+            [{"$set": {"used": {"$max": [0, {"$subtract": ["$used", cost]}]}}}],
+            return_document=ReturnDocument.AFTER,
+        )
+
+    async def _record(
+        self,
+        command: ReserveQuota,
+        existing: dict | None,
+        counter: dict,
+    ) -> QuotaReservation | None:
+        """Record a charged reservation; undo the charge if the key is taken."""
+        usage = _usage_from_counter(counter)
+        if existing is not None:
+            revived = await self._reservations.find_one_and_update(
+                {
+                    "_id": existing["_id"],
+                    "status": QuotaReservationStatus.REFUNDED.value,
+                },
+                {"$set": {"status": QuotaReservationStatus.RESERVED.value}},
+                return_document=ReturnDocument.AFTER,
+            )
+            if revived is None:
+                await self._uncharge(_counter_key(command), existing["cost"])
+                return None
+            return _reservation_from_doc(revived, usage)
+
+        reservation_doc = {
+            "_id": command.reservation_id,
+            "subject_id": command.subject_id,
+            "resource": command.resource,
+            "window_key": command.window_key,
+            "cost": command.cost,
+            "status": QuotaReservationStatus.RESERVED.value,
+            "idempotency_key": command.idempotency_key,
+            "reset_at": command.reset_at,
+        }
+        try:
+            await self._reservations.insert_one(reservation_doc)
+        except DuplicateKeyError:
+            await self._uncharge(_counter_key(command), command.cost)
             return None
-        return _reservation_from_doc(reservation_doc, _usage_from_counter(counter))
+        return _reservation_from_doc(reservation_doc, usage)
 
     async def finalize(self, reservation_id: str) -> QuotaUsage:
         claimed = await self._claim_reserved(
@@ -169,7 +198,13 @@ class MongoQuotaStore:
                 "resource": claimed["resource"],
                 "window_key": claimed["window_key"],
             },
-            {"$inc": {"used": -claimed["cost"]}},
+            [
+                {
+                    "$set": {
+                        "used": {"$max": [0, {"$subtract": ["$used", claimed["cost"]]}]}
+                    }
+                }
+            ],
             return_document=ReturnDocument.AFTER,
         )
         if counter is None:
@@ -177,7 +212,6 @@ class MongoQuotaStore:
         return _usage_from_counter(counter)
 
     async def get_usage(self, query: QuotaUsageQuery) -> QuotaUsage:
-        await self._migrate_active_counters(query)
         counter = await self._counters.find_one_and_update(
             {
                 "subject_id": query.subject_id,
@@ -248,79 +282,6 @@ class MongoQuotaStore:
             }
         )
 
-    async def _migrate_active_counters(
-        self,
-        command: ReserveQuota | QuotaUsageQuery,
-    ) -> None:
-        now = datetime.now(UTC)
-        cursor = self._counters.find(
-            {
-                "subject_id": command.subject_id,
-                "resource": command.resource,
-            }
-        )
-        target: dict | None = None
-        stale: list[dict] = []
-        async for counter in cursor:
-            if counter["window_key"] == command.window_key:
-                target = counter
-            elif counter["reset_at"] > now:
-                stale.append(counter)
-
-        if not stale:
-            if target is not None:
-                await self._counters.update_one(
-                    {
-                        "subject_id": command.subject_id,
-                        "resource": command.resource,
-                        "window_key": command.window_key,
-                    },
-                    {
-                        "$set": {
-                            "limit": command.limit,
-                            "reset_at": command.reset_at,
-                        }
-                    },
-                )
-            return
-
-        counter_key = {
-            "subject_id": command.subject_id,
-            "resource": command.resource,
-            "window_key": command.window_key,
-        }
-        for counter in stale:
-            stale_key = {
-                "subject_id": command.subject_id,
-                "resource": command.resource,
-                "window_key": counter["window_key"],
-            }
-            # Atomically claim the stale counter (delete returns its document)
-            # so concurrent migrations never move the same usage twice.
-            claimed = await self._counters.find_one_and_delete(stale_key)
-            if claimed is None:
-                continue
-            await self._counters.update_one(
-                counter_key,
-                {
-                    "$inc": {"used": int(claimed["used"])},
-                    "$set": {
-                        "limit": command.limit,
-                        "reset_at": command.reset_at,
-                    },
-                },
-                upsert=True,
-            )
-            await self._reservations.update_many(
-                stale_key,
-                {
-                    "$set": {
-                        "window_key": command.window_key,
-                        "reset_at": command.reset_at,
-                    }
-                },
-            )
-
     async def _require_reservation(self, reservation_id: str) -> dict:
         reservation = await self._reservations.find_one({"_id": reservation_id})
         if reservation is None:
@@ -343,6 +304,10 @@ class MongoQuotaStore:
         return _reservation_from_doc(
             reservation, await self._usage_for_reservation(reservation)
         )
+
+
+def _is_live(reservation: dict) -> bool:
+    return reservation["status"] != QuotaReservationStatus.REFUNDED.value
 
 
 def _counter_key(command: ReserveQuota) -> dict:
