@@ -21,7 +21,7 @@ valid for that model). Case format:
 
 ## Point it at your product
 
-1. Copy this file to `evals/<your-domain>.jsonl` and write real cases.
+1. Copy `evals/completions_smoke.jsonl` to `evals/<your-domain>.jsonl` and write real cases.
 2. Register your handler in the completions feature (`handler_factory`); the
    gate picks it up because it composes services like the app does.
 3. Gate: `python -m scripts.run_eval --cases evals/<file>.jsonl --min-score 0.8`

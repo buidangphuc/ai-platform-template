@@ -28,7 +28,8 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 | Object storage | `OBJECTS_ENABLED=true` | S3 (`uv sync --extra aws`) |
 | MongoDB | `MONGO_ENABLED=true` | mongo (`--extra mongo`) |
 | Idempotency keys | `IDEMPOTENCY_ENABLED=true` | postgres |
-| Outbox / webhooks | `OUTBOX_ENABLED` / `WEBHOOKS_ENABLED` | postgres |
+| Outbox | `OUTBOX_ENABLED=true` | postgres |
+| Webhooks | `WEBHOOKS_ENABLED=true` + `WEBHOOK_SIGNING_SECRET` | none (outbound HTTP) |
 | Quota | `QUOTA_ENABLED=true` | postgres/mongo |
 | LLM + tracing + RAG | `uv sync --extra ai`, then `CHAT_MODEL=...`, `LANGFUSE_ENABLED`, `RAG_ENABLED` | provider keys / langfuse |
 
@@ -172,7 +173,7 @@ Feature(
 
 Any HTTP model server fits: the ML template's `Dockerfile.serve` container,
 vLLM/TGI/llama.cpp for LLMs (OpenAI-compatible servers plug into the `[ai]`
-LangChain client via `base_url`), or a managed endpoint. Add it as a compose
+LangChain client through the provider's base-URL env var, e.g. `OPENAI_BASE_URL`), or a managed endpoint. Add it as a compose
 service — profile-gate it if it needs a GPU — and select the backend with a
 settings flag so a stub/fallback path keeps working without it.
 

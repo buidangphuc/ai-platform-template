@@ -88,6 +88,7 @@ if settings.ENVIRONMENT.is_production:
 - `*` in `CORS_ALLOW_ORIGINS` / `TRUSTED_HOSTS`
 - An `AUTH_API_KEYS` entry whose digest is a known placeholder token (`WEAK_AUTH_DIGESTS`)
 - Missing `AUTH_API_KEYS` outside dev/local/test (a malformed entry fails in every environment)
+- `LLM_ENABLED=True` with an empty `CHAT_MODEL` outside dev/local/test
 
 ### Redacted summary
 
@@ -125,7 +126,7 @@ There is no per-request session dependency. Stores take an
 | `AppError` | Base — carries `code`, `message`, `status_code`, `data`, optional `headers` |
 | `BadRequestError` (400), `UnauthorizedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `UnprocessableEntityError` (422), `RateLimitError` (429), `ServiceUnavailableError` (503) | Concrete subclasses |
 | `_envelope(...)` | `{"error": {"code", "message", "request_id", "data?"}}` |
-| `register_exception_handlers(app)` | Wires `AppError`, `RequestValidationError`, `HTTPException` to JSONResponse |
+| `register_exception_handlers(app)` | Wires `AppError`, `RequestValidationError`, `HTTPException` and a catch-all `Exception` (logged, 500 envelope) to JSONResponse |
 | `format_validation_errors(errors)` | Maps Pydantic error codes (`missing`, `too_long`...) to user-friendly messages |
 | `PYDANTIC_ERROR_MESSAGES` | Lookup table for the formatter |
 
@@ -234,7 +235,7 @@ The request_id flows through:
 
 ## logging.py
 
-`configure_logging(level, json_mode, enqueue)` — sets up loguru handler, intercepts stdlib `logging` (`InterceptHandler`), and injects `request_id` into every record via context binding.
+`configure_logging(*, level="INFO", json_mode=False, enqueue=False)` — sets up loguru handler, intercepts stdlib `logging` (`InterceptHandler`), and injects `request_id` into every record via context binding.
 
 `LOG_JSON=true` switches loguru output to JSON for production log aggregators.
 
