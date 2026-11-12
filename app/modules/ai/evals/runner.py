@@ -34,6 +34,7 @@ class EvalCaseResult:
     output: Any
     scores: list[EvalScore]
     trace_id: str | None = None
+    skipped: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,8 +58,27 @@ class EvalReport:
             if score.passed is True
         )
 
+    @property
+    def skipped_cases(self) -> int:
+        return sum(1 for result in self.results if result.skipped)
+
+    @property
+    def pass_rate(self) -> float:
+        total = self.total_scores
+        return self.passed_scores / total if total else 0.0
+
+    @property
+    def failures(self) -> list[str]:
+        return [
+            f"{result.case.id} [{score.name}] {score.comment or ''}"
+            for result in self.results
+            for score in result.scores
+            if not score.passed
+        ]
+
 
 EvalTarget = Callable[[EvalCase], Awaitable[EvalTargetResult | Any]]
+EvaluatorSelector = Callable[[EvalCase], Sequence[Evaluator]]
 
 
 class EvalScoreTracker(Protocol):
@@ -150,18 +170,30 @@ async def run_eval_cases(
     cases: Sequence[EvalCase],
     *,
     target: EvalTarget,
-    evaluators: Sequence[Evaluator],
+    evaluators: Sequence[Evaluator] | EvaluatorSelector,
     tracker: EvalScoreTracker | None = None,
     timeout: TimeoutPolicy | None = None,
 ) -> EvalReport:
+    """Run ``target`` on each case and score it.
+
+    ``evaluators`` is a sequence applied to every case or a callable choosing
+    the sequence per case. A case with no evaluators is skipped: the target is
+    not called and the result has ``skipped=True``.
+    """
     results: list[EvalCaseResult] = []
     for case in cases:
+        case_evaluators = evaluators(case) if callable(evaluators) else evaluators
+        if not case_evaluators:
+            results.append(
+                EvalCaseResult(case=case, output=None, scores=[], skipped=True)
+            )
+            continue
         raw_result = await target(case)
         target_result = _normalize_target_result(raw_result)
         scores = await evaluate_one(
             output=target_result.output,
             expected=case.expected,
-            evaluators=evaluators,
+            evaluators=case_evaluators,
             timeout=timeout,
         )
         if tracker is not None and target_result.trace_id:

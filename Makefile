@@ -1,4 +1,4 @@
-.PHONY: help dev test test-infra infra-up eval lint format typecheck check ci hooks-install \
+.PHONY: help dev worker test test-fast check-env test-infra infra-up eval lint format typecheck check ci hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse

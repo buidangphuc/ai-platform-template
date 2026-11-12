@@ -10,6 +10,7 @@ If something is specific to a single business feature → it belongs in `app/mod
 core/
 ├── config/           # Pydantic Settings (mixin package)
 ├── database/         # Postgres engine + ORM mixins (subpackage)
+├── aws_errors.py     # Classifies AWS errors from the boot-time reachability probes
 ├── errors.py         # AppError hierarchy + response envelope + validation formatter
 ├── health.py         # HealthService — generic check registry
 ├── logging.py        # loguru ↔ stdlib bridge + request_id context injection
@@ -19,7 +20,9 @@ core/
 ├── redaction.py      # RedactionPolicy for PII / secrets
 ├── redis.py          # build_redis_client + check_redis_connection
 ├── request_context.py # RequestIdMiddleware + ContextVar accessor
-└── resilience.py     # RetryPolicy, CircuitBreaker, TimeoutPolicy
+├── resilience.py     # RetryPolicy, CircuitBreaker, TimeoutPolicy
+├── telemetry.py      # LlmSink contract + NOOP_SINK, no OpenTelemetry install needed
+└── telemetry_otel.py # OpenTelemetry-backed sink (optional `otel` extra)
 ```
 
 ---
@@ -35,9 +38,11 @@ config/
 ├── http.py           # CORS, trusted hosts, body limit, security headers, gzip, request timeout
 ├── infra.py          # Postgres + Redis
 ├── mongo.py          # Mongo (MONGO_ENABLED, MONGODB_URI, timeouts) — disabled by default
+├── conversations.py  # CONVERSATIONS_ENABLED + its requirements
 ├── ai.py             # LLM router + Langfuse + RAG (pgvector on Postgres)
 ├── messaging.py      # Queue, tasks, worker, outbox, webhooks
-└── platform.py       # Auth, rate limit, cache, objects, idempotency, quota
+├── platform.py       # Auth, rate limit, cache, objects, idempotency, quota
+└── telemetry.py      # OpenTelemetry (OTEL_ENABLED, endpoint, sampling)
 ```
 
 ### Adding a field
@@ -84,6 +89,10 @@ if settings.ENVIRONMENT.is_production:
 - An `AUTH_API_KEYS` entry whose digest is a known placeholder token (`WEAK_AUTH_DIGESTS`)
 - Missing `AUTH_API_KEYS` outside dev/local/test (a malformed entry fails in every environment)
 
+### Redacted summary
+
+`Settings.redacted_summary()` returns the settings with secret values masked. The API (lifespan start, when resources are initialised) and the worker (`scripts/run_worker.py`) log it once at start.
+
 ---
 
 ## database/
@@ -114,7 +123,7 @@ There is no per-request session dependency. Stores take an
 | Symbol | Purpose |
 |---|---|
 | `AppError` | Base — carries `code`, `message`, `status_code`, `data`, optional `headers` |
-| `BadRequestError` (400), `UnauthorizedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `UnprocessableEntityError` (422), `RateLimitError` (429), `ServerError` (500), `ServiceUnavailableError` (503), `TokenError` | Concrete subclasses |
+| `BadRequestError` (400), `UnauthorizedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `UnprocessableEntityError` (422), `RateLimitError` (429), `ServiceUnavailableError` (503) | Concrete subclasses |
 | `_envelope(...)` | `{"error": {"code", "message", "request_id", "data?"}}` |
 | `register_exception_handlers(app)` | Wires `AppError`, `RequestValidationError`, `HTTPException` to JSONResponse |
 | `format_validation_errors(errors)` | Maps Pydantic error codes (`missing`, `too_long`...) to user-friendly messages |
@@ -175,7 +184,6 @@ retry and the breaker; deterministic 4xx never retries or trips failover.
 RetryPolicy(
     max_attempts: int,
     retry_status_codes: tuple[int, ...],
-    retry_exceptions: bool,
     retry_on: Callable[[BaseException], bool],  # default is_transient_error
     base_delay_seconds: float,   # capped exponential, full jitter
     max_delay_seconds: float,
@@ -192,7 +200,7 @@ breaker.try_acquire() / record_success() / record_failure(error)
 TimeoutPolicy(timeout_seconds: float)  # Used by callers with asyncio.wait_for
 ```
 
-Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (per-target circuit breakers for the ordered failover chain), `ai/rag/service.py` (timeout), `ai/evals/runner.py` (timeout), `messaging/outbox/publisher.py`. (Worker retry uses `WORKER_MAX_ATTEMPTS`, not a `RetryPolicy`.)
+Used by: `messaging/webhooks/dispatcher.py`, `ai/llm/router.py` (per-target circuit breakers for the ordered failover chain), `ai/rag/service.py` (timeout), `ai/evals/runner.py` (timeout), `messaging/outbox/publisher.py`, `platform/http/upstream.py`. (Worker retry uses `WORKER_MAX_ATTEMPTS`, not a `RetryPolicy`.)
 
 ---
 
@@ -227,6 +235,8 @@ The request_id flows through:
 `configure_logging(level, json_mode, enqueue)` — sets up loguru handler, intercepts stdlib `logging` (`InterceptHandler`), and injects `request_id` into every record via context binding.
 
 `LOG_JSON=true` switches loguru output to JSON for production log aggregators.
+
+`configure_logging` always sets the noisy third-party loggers (`sqlalchemy.engine`, `sqlalchemy.pool`, `httpx`, `httpcore`, `uvicorn.access`) to WARNING.
 
 `LOG_ENQUEUE=true` puts logging on a background queue (avoids blocking event loop on slow handlers).
 
@@ -269,7 +279,7 @@ class ListResponse(BaseModel, Generic[ItemT]):
 
 The keyword-only helper `build_list_response(*, items, total, params) -> ListResponse[ItemT]` assembles the `PaginationMeta` from `params` and `total`.
 
-Not yet wired into any endpoint. Template scaffold — use when adding `/list` style endpoints.
+Used by `app/api/v1/conversations/router.py`.
 
 ---
 

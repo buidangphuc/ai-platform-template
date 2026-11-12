@@ -18,6 +18,7 @@ validator only for cross-field or semantic checks that ``Field`` can't express.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 from pydantic import model_validator
@@ -36,7 +37,8 @@ from app.core.config.runtime import (
 )
 from app.core.config.telemetry import TelemetrySettingsMixin
 
-_SECRET_MARKERS = ("PASSWORD", "SECRET", "TOKEN", "KEY", "PEPPER")
+_SECRET_WORDS = frozenset({"PASSWORD", "SECRET", "TOKEN", "KEY", "KEYS", "PEPPER"})
+_URL_USERINFO = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@")
 
 
 class Settings(
@@ -81,17 +83,11 @@ class Settings(
         return {key: self._redacted_value(key, value) for key, value in values.items()}
 
     def _redacted_value(self, key: str, value: object) -> object:
-        if not value:
+        if not isinstance(value, str) or not value:
             return value
-        key_upper = key.upper()
-        if any(marker in key_upper for marker in _SECRET_MARKERS):
+        if _SECRET_WORDS.intersection(key.upper().split("_")):
             return "***"
-        if (
-            key_upper.endswith("_URL")
-            and isinstance(value, str)
-            and "://" in value
-            and "@" in value
-        ):
+        if _URL_USERINFO.match(value):
             return "***"
         return value
 

@@ -51,6 +51,9 @@ def retry_after_seconds(error: BaseException) -> float | None:
     return seconds if seconds is not None and seconds >= 0 else None
 
 
+_hint_from_error = retry_after_seconds
+
+
 def is_transient_error(error: BaseException) -> bool:
     """True for failures that a later attempt or another provider can fix.
 
@@ -84,7 +87,6 @@ class RetryPolicy:
 
     max_attempts: int = 3
     retry_status_codes: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
-    retry_exceptions: bool = True
     retry_on: Callable[[BaseException], bool] = is_transient_error
     base_delay_seconds: float = 0.5
     max_delay_seconds: float = 30.0
@@ -109,10 +111,10 @@ class RetryPolicy:
         if attempt >= self.max_attempts:
             return RetryDecision(should_retry=False)
         if error is not None:
-            if not (self.retry_exceptions and self.retry_on(error)):
+            if not self.retry_on(error):
                 return RetryDecision(should_retry=False)
             if retry_after_seconds is None:
-                retry_after_seconds = _error_retry_after(error)
+                retry_after_seconds = _hint_from_error(error)
         elif status_code not in self.retry_status_codes:
             return RetryDecision(should_retry=False)
         return RetryDecision(True, self._delay(attempt, retry_after_seconds))
@@ -125,10 +127,6 @@ class RetryPolicy:
         if retry_after is not None:
             delay = max(delay, min(retry_after, self.max_delay_seconds))
         return delay
-
-
-def _error_retry_after(error: BaseException) -> float | None:
-    return retry_after_seconds(error)
 
 
 @dataclass(frozen=True)
@@ -232,9 +230,6 @@ class CircuitBreaker:
         self.failure_count += 1
         if self.failure_count >= self.failure_threshold:
             self._open()
-
-    def reset(self) -> None:
-        self.record_success()
 
     def _open(self) -> None:
         self.state = BreakerState.OPEN

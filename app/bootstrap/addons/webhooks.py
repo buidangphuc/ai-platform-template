@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from contextlib import AsyncExitStack
+from dataclasses import replace
 
 import httpx
 
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.resilience import TimeoutPolicy
-from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
+from app.modules.messaging.webhooks.dispatcher import (
+    DEFAULT_WEBHOOK_RETRY_POLICY,
+    HttpWebhookDispatcher,
+)
 from app.modules.messaging.webhooks.signing import WebhookSigner
 
 
@@ -36,6 +40,10 @@ class WebhookAddon:
             client=client,
             timeout_policy=TimeoutPolicy(
                 timeout_seconds=settings.WEBHOOK_TIMEOUT_SECONDS
+            ),
+            retry_policy=replace(
+                DEFAULT_WEBHOOK_RETRY_POLICY,
+                max_attempts=settings.WEBHOOK_MAX_ATTEMPTS,
             ),
         )
         resources.webhook_signer = signer

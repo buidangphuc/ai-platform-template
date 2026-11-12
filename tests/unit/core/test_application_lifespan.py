@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
+from loguru import logger
 from pymongo.errors import InvalidOperation
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -135,6 +136,48 @@ async def test_lifespan_flush_tolerates_missing_langfuse_package(
 
     async with lifespan(_bare_app()):
         pass
+
+
+def _capture_logs() -> tuple[list[str], int]:
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record["message"]))
+    return messages, sink_id
+
+
+async def test_lifespan_logs_redacted_settings_once(test_settings: Settings):
+    settings = test_settings.model_copy(
+        update={"REDIS_PASSWORD": "redis-secret-value"}  # pragma: allowlist secret
+    )
+    messages, sink_id = _capture_logs()
+    try:
+        lifespan = _build_lifespan(
+            settings, init_resources=True, addons=(), features=FEATURES
+        )
+        async with lifespan(_bare_app()):
+            pass
+    finally:
+        logger.remove(sink_id)
+
+    lines = [message for message in messages if message.startswith("settings ")]
+    assert len(lines) == 1
+    assert "redis-secret-value" not in lines[0]
+    assert "REDIS_PASSWORD" in lines[0]
+
+
+async def test_lifespan_without_resources_does_not_log_settings(
+    test_settings: Settings,
+):
+    messages, sink_id = _capture_logs()
+    try:
+        lifespan = _build_lifespan(
+            test_settings, init_resources=False, addons=(), features=FEATURES
+        )
+        async with lifespan(_bare_app()):
+            pass
+    finally:
+        logger.remove(sink_id)
+
+    assert [m for m in messages if m.startswith("settings ")] == []
 
 
 @pytest.fixture()

@@ -76,7 +76,7 @@ Evals are the test suite for AI behavior. `runner.py` provides:
 - `EvalCase(id, input, expected, metadata)` and `load_jsonl_cases(path)`: keep cases as `.jsonl` regression fixtures.
 - `Evaluator` protocol returning `EvalScore` (see `evaluators.py`).
 - `evaluate_one(output=, expected=, evaluators=, timeout=)`: score one output.
-- `run_eval_cases(cases, target=, evaluators=, tracker=, timeout=)` -> `EvalReport` with `total_cases` / `passed_scores`. Pass a tracker to push scores to Langfuse.
+- `run_eval_cases(cases, *, target, evaluators, tracker=None, timeout=None)` -> `EvalReport`. `evaluators` is a sequence applied to every case or a callable `EvalCase -> Sequence[Evaluator]`; a case whose sequence is empty is skipped (target not called, `EvalCaseResult.skipped`). The report exposes `total_cases`, `total_scores`, `passed_scores`, `skipped_cases`, `pass_rate` and `failures`. Pass a tracker to push scores to Langfuse. `scripts/run_eval.py` (the CI gate) scores through it, selecting by `metadata.evaluator` (`exact` default, `contains`, `judge`); an unknown value fails the gate.
 
 Two integration patterns (documented on `evaluate_one`):
 
@@ -99,7 +99,7 @@ Factory + bootstrap-addon pattern (`factory.py`):
 The API/view shape is in `docs/agents/architecture.md` ("Canonical Feature: completions").
 
 - `ports.py`: `CompletionHandler` Protocol = `complete(request)` + `stream(request)`; `stream` yields `CompletionStreamChunk` only (the last chunk may carry `usage`, `finish_reason`, `model`).
-- `service.py`: `CompletionService(handler, *, guards, sink, policy)` wraps one handler and exposes the same two methods. Behavior lives in the handler. One instance per app is registered on `ApplicationResources.services` and read with `resources.service(CompletionService)`; the API and the worker share it.
+- `service.py`: `CompletionService(handler, *, guards, policy)` wraps one handler and exposes the same two methods. Behavior lives in the handler. One instance per app is registered on `ApplicationResources.services` and read with `resources.service(CompletionService)`; the API and the worker share it.
 - Observation lives in `LLMInstance`, not the service (see "Observation" above): the service records nothing and the echo handler produces no `completion ...` line.
 - Stream deadlines: `StreamPolicy(first_token_timeout, idle_timeout)` comes from `STREAM_FIRST_TOKEN_TIMEOUT_SECONDS` / `STREAM_IDLE_TIMEOUT_SECONDS`; a missed deadline raises `StreamTimeoutError` (504, `stream_timeout`, defined in `llm/runtime.py`). `LlmCompletionHandler(llm, policy)` passes them to `astream`, which enforces them and records outcome `timeout`; the service enforces them itself only for handlers that do not set `enforces_stream_policy`.
 - `handlers/echo.py` is the scaffold handler. `handlers/llm.py` `LlmCompletionHandler(llm)` calls `LLMInstance.ainvoke` / `astream` and fills `content`, `model`, `usage` and `finish_reason`. `completions_feature` uses it when `resources.llm` is set (`LLM_ENABLED=true`) and the echo handler otherwise, in the API and the worker alike.

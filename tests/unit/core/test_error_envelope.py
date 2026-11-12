@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Response
+from pydantic import BaseModel, Field
 
 from app.bootstrap.application import create_app
-from app.core.errors import AppError
+from app.core.errors import PYDANTIC_ERROR_MESSAGES, AppError
 from app.core.request_context import get_request_id
 from tests.factories import api_client_for, build_test_settings
 
@@ -147,3 +148,52 @@ async def test_405_uses_standard_error_envelope():
     assert response.status_code == 405
     assert response.json()["error"]["code"] == "method_not_allowed"
     assert response.json()["error"]["request_id"] == "req-405"
+
+
+class _Body(BaseModel):
+    name: str = Field(min_length=3)
+    age: int
+
+
+def _validation_app():
+    router = APIRouter()
+
+    @router.post("/validated")
+    async def validated(body: _Body):
+        return {"ok": True}
+
+    app = create_app(settings=build_test_settings(), init_resources=False)
+    app.include_router(router)
+    return app
+
+
+async def test_422_missing_field_uses_template_message():
+    async with api_client_for(_validation_app()) as client:
+        response = await client.post(
+            "/validated",
+            json={"name": "abc"},
+            headers={"X-Request-ID": "req-422"},
+        )
+
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "validation_error"
+    assert error["message"] == "Request validation failed"
+    assert error["request_id"] == "req-422"
+    [entry] = error["data"]
+    assert entry["type"] == "missing"
+    assert entry["loc"] == ["body", "age"]
+    assert entry["msg"] == PYDANTIC_ERROR_MESSAGES["missing"]
+
+
+async def test_422_formats_message_from_ctx():
+    async with api_client_for(_validation_app()) as client:
+        response = await client.post("/validated", json={"name": "ab", "age": 1})
+
+    assert response.status_code == 422
+    [entry] = response.json()["error"]["data"]
+    assert entry["type"] == "string_too_short"
+    assert entry["msg"] == PYDANTIC_ERROR_MESSAGES["string_too_short"].format(
+        min_length=3
+    )
+    assert entry["msg"] == "String is too short (min 3)"

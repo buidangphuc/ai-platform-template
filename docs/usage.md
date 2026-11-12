@@ -4,7 +4,7 @@ How to run, configure and operate this template. For an overview of the repo see
 
 ## Requirements
 
-- Python 3.12+
+- Python >=3.12,<3.14
 - uv
 - Docker and Docker Compose for local container checks
 
@@ -70,7 +70,7 @@ make docker-build
 make docker-run
 ```
 
-The Docker path is a local golden path only. It builds the API image and runs the API, PostgreSQL, and Redis with `ops/compose/local.yaml`.
+The Docker path is a local golden path only. It builds the image and runs the API, a worker, PostgreSQL, and Redis with `ops/compose/local.yaml`, with queue, tasks and outbox enabled.
 
 To run the API with a local self-hosted Langfuse stack for AI tracing, prompt
 management, and eval scores:
@@ -111,7 +111,8 @@ Run `make help` for every target. The main ones:
 
 ```bash
 make dev                    # run local API with uvicorn reload
-make test                   # run full pytest suite
+make test                   # pytest -m "not infra" (what CI runs)
+make test-infra             # every test on localinfra, 80% coverage gate
 make smoke-langfuse         # exercise the Langfuse callback against the local stack
 make smoke-langfuse-prompt  # exercise the Langfuse prompt-management flow
 make check-env              # verify .env.example matches Settings fields
@@ -262,9 +263,11 @@ running the handler; without the header the handler runs untouched. It needs
 async def create_report(payload: Payload, request: Request) -> dict: ...
 ```
 
-App observability, experiment tracking, LLM response caching, object storage,
-and job queues are intentionally not wrapped by template adapters in this phase.
-Use the tools required by the target project directly at the module boundary.
+Experiment tracking and LLM response caching are intentionally not wrapped by
+template adapters in this phase. Object storage (`app/modules/platform/objects`),
+queues (`app/modules/messaging/queue`) and OpenTelemetry
+(`app/core/telemetry_otel.py`) are wrapped. Use the tools required by the target
+project directly at the module boundary for anything else.
 Database access goes through stores that take a `sessionmaker` (see above).
 
 Langfuse is only wired at the AI execution boundary. Use

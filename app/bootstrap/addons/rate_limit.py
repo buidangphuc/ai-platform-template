@@ -6,7 +6,6 @@ from contextlib import AsyncExitStack
 
 from app.bootstrap.resources import ApplicationResources, opened
 from app.core.config import Settings
-from app.modules.platform.rate_limit.factory import build_redis_rate_limiter
 from app.modules.platform.rate_limit.service import RedisRateLimiter
 
 
@@ -48,8 +47,8 @@ def _build_limiter(
 ) -> RedisRateLimiter:
     match settings.RATE_LIMIT_BACKEND:
         case "redis":
-            return build_redis_rate_limiter(
-                opened(resources.redis, "redis"),
+            return RedisRateLimiter(
+                redis=opened(resources.redis, "redis"),
                 limit=limit,
                 window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
                 prefix=f"{settings.RATE_LIMIT_REDIS_PREFIX}:{scope}",

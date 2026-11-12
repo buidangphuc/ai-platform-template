@@ -7,7 +7,8 @@ when the pass rate drops below --min-score.
 
 Per-case evaluator selection via metadata.evaluator: exact | contains |
 judge. Judge cases need JUDGE_CHAT_MODEL (+ the [ai] extra); without it they
-are SKIPPED so the gate stays hermetic in CI.
+are SKIPPED so the gate stays hermetic in CI. An unknown value fails the gate
+before any case is scored.
 
     python -m scripts.run_eval                    # default dataset + 0.8 gate
     python -m scripts.run_eval --cases evals/x.jsonl --min-score 0.9
@@ -32,12 +33,14 @@ from app.modules.ai.evals.evaluators import (
 from app.modules.ai.evals.runner import (
     EvalCase,
     EvalTargetResult,
-    evaluate_one,
+    EvaluatorSelector,
     load_jsonl_cases,
+    run_eval_cases,
 )
 from app.modules.business.completions.schemas import CompletionRequest
 
 DEFAULT_CASES = "evals/completions_smoke.jsonl"
+_EVALUATOR_KINDS = ("exact", "contains", "judge")
 
 
 def _build_target(settings) -> Callable[[EvalCase], Awaitable[EvalTargetResult]]:
@@ -50,61 +53,53 @@ def _build_target(settings) -> Callable[[EvalCase], Awaitable[EvalTargetResult]]
     return target
 
 
-def _build_evaluators(settings=None) -> dict[str, Evaluator | None]:
-    settings = settings or get_settings()
+def _build_selector(cases: list[EvalCase], settings) -> EvaluatorSelector:
+    for case in cases:
+        kind = case.metadata.get("evaluator", "exact")
+        if kind not in _EVALUATOR_KINDS:
+            raise SystemExit(
+                f"unknown evaluator {kind!r} in case {case.id!r}; "
+                f"expected one of {', '.join(_EVALUATOR_KINDS)}"
+            )
     judge: Evaluator | None = None
     if settings.JUDGE_CHAT_MODEL:
         judge = build_llm_judge(settings)
-    return {
+    by_kind: dict[str, Evaluator | None] = {
         "exact": ExactMatchEvaluator(),
         "contains": ContainsEvaluator(),
         "judge": judge,
     }
 
+    def select(case: EvalCase) -> list[Evaluator]:
+        evaluator = by_kind[case.metadata.get("evaluator", "exact")]
+        return [] if evaluator is None else [evaluator]
+
+    return select
+
 
 async def _run(args: argparse.Namespace, settings=None) -> int:
+    settings = settings or get_settings()
     cases = load_jsonl_cases(args.cases)
-    evaluators = _build_evaluators(settings)
-    target = _build_target(settings or get_settings())
-
-    scored = passed = skipped = 0
-    failures: list[str] = []
-    for case in cases:
-        kind = case.metadata.get("evaluator", "exact")
-        evaluator = evaluators.get(kind)
-        if evaluator is None:
-            skipped += 1
-            continue
-        target_result = await target(case)
-        scores = await evaluate_one(
-            output=target_result.output,
-            expected=case.expected,
-            evaluators=[evaluator],
-        )
-        for score in scores:
-            scored += 1
-            if score.passed:
-                passed += 1
-            else:
-                failures.append(f"{case.id} [{score.name}] {score.comment or ''}")
-
-    rate = (passed / scored) if scored else 0.0
+    selector = _build_selector(cases, settings)
+    report = await run_eval_cases(
+        cases, target=_build_target(settings), evaluators=selector
+    )
     print(
         json.dumps(
             {
-                "cases": len(cases),
-                "scored": scored,
-                "passed": passed,
-                "skipped_judge": skipped,
-                "pass_rate": round(rate, 4),
+                "cases": report.total_cases,
+                "scored": report.total_scores,
+                "passed": report.passed_scores,
+                "skipped_judge": report.skipped_cases,
+                "pass_rate": round(report.pass_rate, 4),
                 "min_score": args.min_score,
-                "failures": failures,
+                "failures": report.failures,
             },
             sort_keys=True,
             ensure_ascii=False,
         )
     )
-    return 0 if rate >= args.min_score else 1
+    return 0 if report.pass_rate >= args.min_score else 1
 
 
 def main(argv: list[str] | None = None) -> None:

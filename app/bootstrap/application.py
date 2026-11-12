@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
+from loguru import logger
 
 from app.api.router import build_api_router
 from app.bootstrap.addons.base import BootstrapAddon, default_resource_addons
@@ -76,6 +77,8 @@ def _build_lifespan(
 ):
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if init_resources:
+            logger.info("settings {}", settings.redacted_summary())
         async with open_runtime(
             settings,
             init_resources=init_resources,

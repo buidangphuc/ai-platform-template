@@ -200,17 +200,6 @@ class RateLimitError(AppError):
         )
 
 
-class ServerError(AppError):
-    def __init__(
-        self,
-        message: str = "Internal server error",
-        *,
-        code: str = "internal_server_error",
-        data: Any = None,
-    ) -> None:
-        super().__init__(code=code, message=message, status_code=500, data=data)
-
-
 class ServiceUnavailableError(AppError):
     def __init__(
         self,
@@ -220,16 +209,6 @@ class ServiceUnavailableError(AppError):
         data: Any = None,
     ) -> None:
         super().__init__(code=code, message=message, status_code=503, data=data)
-
-
-class TokenError(UnauthorizedError):
-    def __init__(
-        self,
-        message: str = "Invalid or expired token",
-        *,
-        code: str = "invalid_token",
-    ) -> None:
-        super().__init__(message=message, code=code)
 
 
 _HTTP_STATUS_CODE_MAP: dict[int, str] = {

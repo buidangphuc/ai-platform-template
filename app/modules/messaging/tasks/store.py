@@ -6,7 +6,7 @@ service layer and worker can swap durability without touching call sites.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -26,7 +26,6 @@ class TaskRecord:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     locked_until: datetime | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
     # Authenticated subject that submitted the task. "" only for rows created
     # before ownership existed (no principal matches it, so the API never serves them).
     principal_id: str = ""

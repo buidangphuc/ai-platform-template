@@ -18,7 +18,7 @@ Deployment pipelines are intentionally out of scope. Each team or client environ
 
 ## Minimal core and opt-in capabilities
 
-A fresh boot opens **zero addons**: app factory, bearer auth, health probes, and Swagger only. No database, Redis, queue, or AI packages are required.
+A fresh boot opens **zero addons**: app factory, bearer auth, health probes, and Swagger only. No connection is opened and no optional package is needed, but `POSTGRES_*` and `REDIS_HOST` must be set (the values in `.env.example` are enough).
 
 Every capability (Postgres, Redis, queue and tasks, rate limit, cache, objects, Mongo, idempotency, outbox, webhooks, quota) is enabled by its `*_ENABLED` flag. The LLM/RAG/tracing stack installs separately via the `ai` extra (`uv sync --extra ai`). There is no in-memory backend: an enabled capability needs its real service (defaults: queue `redis`, task store `postgres`, rate limit and cache `redis`, objects `s3`, quota `postgres`, RAG `pgvector` on the same Postgres, so `RAG_ENABLED` needs `DATABASE_ENABLED` and a database with the `vector` extension installed), and `Settings` rejects `memory`. The [template guide](docs/template-guide.md) has the capability table and the add-a-domain walkthrough.
 

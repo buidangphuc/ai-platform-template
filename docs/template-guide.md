@@ -34,10 +34,9 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +
 RATE_LIMIT. [`ops/compose/local.yaml`](../ops/compose/local.yaml) is the worked example of the
-DATABASE + REDIS half; flip `QUEUE_ENABLED`/`TASKS_ENABLED`/`RATE_LIMIT_ENABLED`
-in `.env` on top of it, and when you enable TASKS add a second compose service
-running the worker (`python -m scripts.run_worker` — the same command
-`make worker` runs locally).
+whole stack except rate limit: api + worker + postgres + redis with QUEUE, TASKS
+and OUTBOX on. Flip `RATE_LIMIT_ENABLED` in `.env` on top of it. The worker is
+`python -m scripts.run_worker`, the same command `make worker` runs locally.
 
 ## 2. Add a business domain (the one pattern to copy)
 
@@ -49,8 +48,9 @@ app/modules/business/<domain>/
   stores/           # own the table/collection details
   integrations/     # external HTTP APIs — __init__(self, client: UpstreamClient, ...plain options)
 app/api/v1/<domain>/
-  router.py         # mounts leaf routers, attaches Depends(require_principal)
-  <leaf>.py         # thin endpoints: get_app_resources(request.app).service(<Domain>Service) -> one call
+  router.py         # thin endpoints: get_app_resources(request.app).service(<Domain>Service) -> one call;
+                    # declares its own prefix and Depends(require_principal)
+  tasks.py          # only for task_routers (mounted when TASKS_ENABLED)
 app/bootstrap/features/<domain>.py
   <domain>_feature(...) -> Feature: service type, build(resources, settings),
   routers, task_routers, tasks (type -> handler), models, enabled(settings)
@@ -100,10 +100,11 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 
 | Extra | Brings | Needed for |
 |---|---|---|
-| `ai` | langchain, langchain-openai, langfuse, llama-index-core, llama-index-vector-stores-postgres, openai | `app/modules/ai/*` (LLM router, tracing, RAG) |
+| `ai` | langchain, langchain-openai, langfuse, llama-index-core, llama-index-vector-stores-postgres | `app/modules/ai/*` (LLM router, tracing, RAG) |
 | `aws` | aioboto3 | S3 object storage, SQS queue |
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |
+| `otel` | opentelemetry-api, opentelemetry-sdk, opentelemetry-exporter-otlp-proto-http, opentelemetry-instrumentation-fastapi | OpenTelemetry traces and GenAI metrics (`OTEL_ENABLED=true`) |
 
 RabbitMQ `receive_count` drives dead-lettering after repeated failures. On a classic queue a message that keeps crashing the worker is only flagged "redelivered", so its count stops at 2. Set `RABBITMQ_QUEUE_TYPE=quorum` (or create the queue in a vhost whose default type is quorum) to get an exact count from the broker. Empty keeps the vhost default; changing the type of an existing queue requires deleting it first.
 
@@ -187,6 +188,6 @@ service.
 
 ## 7. Verify as you go
 
-`make test` (full pytest) · `make lint` + `make typecheck` · `make dev` for
+`make test` (`pytest -m "not infra"`) · `make test-infra` (everything, on localinfra) · `make lint` + `make typecheck` · `make dev` for
 the live server · `make docker-run` for the composed standard stack ·
 `make docker-run-langfuse` to layer self-hosted tracing.

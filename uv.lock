@@ -544,7 +544,6 @@ ai = [
     { name = "langfuse" },
     { name = "llama-index-core" },
     { name = "llama-index-vector-stores-postgres" },
-    { name = "openai" },
 ]
 aws = [
     { name = "aioboto3" },
@@ -592,7 +591,6 @@ requires-dist = [
     { name = "llama-index-vector-stores-postgres", marker = "extra == 'ai'", specifier = ">=0.8,<0.9" },
     { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
     { name = "motor", marker = "extra == 'mongo'", specifier = ">=3.6.0,<4.0.0" },
-    { name = "openai", marker = "extra == 'ai'", specifier = ">=1.69.0,<3.0.0" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.30,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.30,<2" },
     { name = "opentelemetry-instrumentation-fastapi", marker = "extra == 'otel'", specifier = ">=0.51b0,<1" },

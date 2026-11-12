@@ -7,7 +7,6 @@ from app.bootstrap.addons.rate_limit import RateLimitAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.middleware import IPRateLimitMiddleware
-from app.modules.platform.rate_limit.factory import build_redis_rate_limiter
 from app.modules.platform.rate_limit.service import RedisRateLimiter
 from tests.factories import build_test_settings, open_addon
 
@@ -121,9 +120,9 @@ def _settings(**overrides: object) -> Settings:
     return build_test_settings(**overrides)
 
 
-def test_build_redis_rate_limiter_uses_prefix(redis_client: Redis):
-    limiter = build_redis_rate_limiter(
-        redis_client, limit=5, window_seconds=30, prefix="rate-limit:ip"
+def test_redis_rate_limiter_keeps_its_prefix(redis_client: Redis):
+    limiter = RedisRateLimiter(
+        redis=redis_client, limit=5, window_seconds=30, prefix="rate-limit:ip"
     )
 
     assert isinstance(limiter, RedisRateLimiter)

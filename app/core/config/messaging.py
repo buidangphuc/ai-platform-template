@@ -88,6 +88,7 @@ class MessagingSettingsMixin(BaseModel):
     WEBHOOK_SIGNING_SECRET: str = ""
     WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS: int = Field(default=300, gt=0)
     WEBHOOK_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0)
+    WEBHOOK_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
 
     @model_validator(mode="after")
     def validate_messaging_requirements(self) -> MessagingSettingsMixin:
