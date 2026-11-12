@@ -367,7 +367,7 @@ class _SdkTimeoutModel(FakeListChatModel):
 
 
 async def test_hung_primary_reaches_the_fallback_within_the_deadline(test_settings):
-    scale = 0.003
+    scale = 0.01
     defaults = {
         name: Settings.model_fields[name].default
         for name in (
@@ -387,6 +387,9 @@ async def test_hung_primary_reaches_the_fallback_within_the_deadline(test_settin
             * scale,
         }
     )
+
+    budget = timeout * (settings.LLM_MAX_RETRIES + 1)
+    assert settings.LLM_CHAIN_DEADLINE_SECONDS - budget >= 0.3
 
     def build(target: str) -> BaseChatModel:
         if target == "primary":
