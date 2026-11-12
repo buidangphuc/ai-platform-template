@@ -252,10 +252,15 @@ async def create_report(...): ...
 ```
 
 `@idempotent` (`app.modules.platform.idempotency.http`) wraps a synchronous
-route that declares `request: Request` and returns a dict or Pydantic model. A
-repeated `Idempotency-Key` replays the stored response (status 200) without
-running the handler; without the header the handler runs untouched. It needs
-`IDEMPOTENCY_ENABLED=true`:
+route that declares `request: Request`. A repeated `Idempotency-Key` replays the
+response the first request received without running the handler: the route's
+declared `status_code` and the body after `response_model` filtering (any JSON
+value: object, list, scalar or null). The request hash covers method, path,
+query string, body and principal, so the same key with another query string is a
+`409 idempotency_key_conflict`. If the handler raises or is cancelled the key is
+released and the next request with it runs the handler again. A handler that
+returns a `Response` object is not stored (its key is released). Without the
+header the handler runs untouched. It needs `IDEMPOTENCY_ENABLED=true`:
 
 ```python
 @router.post("/reports")

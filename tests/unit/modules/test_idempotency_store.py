@@ -98,6 +98,40 @@ def test_request_hash_scopes_key_to_method_path_body_and_principal():
     assert first != other_user
 
 
+def test_request_hash_includes_the_query_string():
+    plain = build_request_hash(method="POST", path="/j", body=b"", principal_id="p")
+    with_query = build_request_hash(
+        method="POST", path="/j", body=b"", principal_id="p", query_string="a=1"
+    )
+    other_query = build_request_hash(
+        method="POST", path="/j", body=b"", principal_id="p", query_string="a=2"
+    )
+
+    assert len({plain, with_query, other_query}) == 3
+
+
+async def test_rows_written_before_body_wrapping_still_replay(
+    pg_sessionmaker: Sessions,
+):
+    async with pg_sessionmaker() as session, session.begin():
+        session.add(
+            IdempotencyKey(
+                key="job-1",
+                principal_id="svc-local",
+                request_hash=_hash(),
+                status="completed",
+                claim_token=None,
+                response_status_code=201,
+                response_body={"id": "legacy"},
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+
+    cached = await _claim(pg_sessionmaker)
+
+    assert cached == IdempotencyCachedResponse(status_code=201, body={"id": "legacy"})
+
+
 def test_compute_idempotency_expires_at_uses_settings_ttl():
     settings = _settings(IDEMPOTENCY_TTL_SECONDS=3600)
     fixed_now = datetime(2026, 5, 23, 10, 0, tzinfo=UTC)

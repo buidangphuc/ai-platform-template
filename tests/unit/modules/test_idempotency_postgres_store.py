@@ -201,3 +201,40 @@ async def test_delete_expired_purges_only_expired_rows_in_bounded_batches(
         left = (await session.scalars(select(IdempotencyKey.key))).all()
     assert batches == [2, 2, 1]
     assert left == ["k"]
+
+
+async def test_release_removes_only_the_claim_it_made(pg_sessionmaker):
+    store = _store(pg_sessionmaker)
+    first = _token(await _claim(store, "h"))
+    await _age_record(pg_sessionmaker, seconds=3600)
+    second = _token(await _claim(store, "h"))
+
+    released_stale = await store.release(key="k", principal_id="p", claim_token=first)
+    async with pg_sessionmaker() as session:
+        survivors = list(await session.scalars(select(IdempotencyKey)))
+    released_own = await store.release(key="k", principal_id="p", claim_token=second)
+    async with pg_sessionmaker() as session:
+        remaining = list(await session.scalars(select(IdempotencyKey)))
+
+    assert released_stale is False
+    assert [row.claim_token for row in survivors] == [second]
+    assert released_own is True
+    assert remaining == []
+
+
+async def test_release_does_not_remove_a_completed_response(pg_sessionmaker):
+    store = _store(pg_sessionmaker)
+    token = _token(await _claim(store, "h"))
+    await store.store_response(
+        key="k",
+        principal_id="p",
+        claim_token=token,
+        status_code=200,
+        response_body=[1, 2],
+    )
+
+    released = await store.release(key="k", principal_id="p", claim_token=token)
+    replay = await _claim(store, "h")
+
+    assert released is False
+    assert replay.body == [1, 2]

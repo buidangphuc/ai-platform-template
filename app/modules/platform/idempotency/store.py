@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -9,7 +8,7 @@ from typing import Any, Protocol
 @dataclass(frozen=True, slots=True)
 class IdempotencyCachedResponse:
     status_code: int
-    body: dict[str, Any]
+    body: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,9 +37,19 @@ class IdempotencyStore(Protocol):
         principal_id: str,
         claim_token: str,
         status_code: int,
-        response_body: Mapping[str, Any],
+        response_body: Any,
     ) -> bool:
         """Complete the claim; ``False`` when it was fenced off (reclaimed/completed)."""
+        ...
+
+    async def release(
+        self,
+        *,
+        key: str,
+        principal_id: str,
+        claim_token: str,
+    ) -> bool:
+        """Drop the in-progress claim this request made; ``False`` if it is not ours."""
         ...
 
     async def delete_expired(self, *, before: datetime, limit: int) -> int:

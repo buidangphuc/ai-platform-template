@@ -5,15 +5,20 @@ See module docstring in ``__init__.py`` for the conflict rationale and the
 recommended async pattern.
 """
 
+import asyncio
 import functools
-from collections.abc import Awaitable, Callable, Mapping
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from fastapi.utils import is_body_allowed_for_status_code
+from pydantic import TypeAdapter
 
 from app.bootstrap.state import get_app_resources, get_app_settings, require
 from app.core.errors import AppError
@@ -29,6 +34,8 @@ from app.modules.platform.idempotency.store import (
 from app.modules.platform.identity.auth import require_principal
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +79,7 @@ async def replay_or_start_idempotent_request(
     principal_id: str,
     body: bytes,
     expires_at: datetime,
-) -> JSONResponse | IdempotentCall | None:
+) -> Response | IdempotentCall | None:
     """Claim the request's key.
 
     Returns ``None`` when no ``Idempotency-Key`` header is present, a
@@ -90,6 +97,7 @@ async def replay_or_start_idempotent_request(
         path=request.url.path,
         body=body,
         principal_id=principal_id,
+        query_string=request.url.query,
     )
     outcome = await store.check_or_store(
         key=idempotency_key,
@@ -99,6 +107,8 @@ async def replay_or_start_idempotent_request(
     )
     match outcome:
         case IdempotencyCachedResponse():
+            if not is_body_allowed_for_status_code(outcome.status_code):
+                return Response(status_code=outcome.status_code)
             return JSONResponse(status_code=outcome.status_code, content=outcome.body)
         case IdempotencyClaim():
             return IdempotentCall(
@@ -113,7 +123,7 @@ async def store_idempotent_response(
     call: IdempotentCall,
     *,
     status_code: int,
-    response_body: Mapping[str, Any],
+    response_body: Any,
 ) -> bool:
     """Cache the response; ``False`` if the claim was reclaimed meanwhile."""
     return await call.store.store_response(
@@ -125,20 +135,65 @@ async def store_idempotent_response(
     )
 
 
+async def release_idempotent_call(call: IdempotentCall) -> bool:
+    """Drop the claim this request made so the key can be retried."""
+    return await call.store.release(
+        key=call.key,
+        principal_id=call.principal_id,
+        claim_token=call.claim_token,
+    )
+
+
+def declared_response(request: Request, result: Any) -> tuple[int, Any]:
+    """Status and JSON body FastAPI sends for ``result`` on the matched route.
+
+    Honours ``status_code``, ``response_model`` and the route's
+    ``response_model_include/exclude/by_alias/exclude_unset/exclude_defaults/
+    exclude_none``. Without a ``response_model`` the body is
+    ``jsonable_encoder(result)``.
+    """
+    route = request.scope.get("route")
+    if not isinstance(route, APIRoute):
+        return 200, jsonable_encoder(result)
+    status_code = route.status_code or 200
+    if route.response_model is None:
+        return status_code, jsonable_encoder(result)
+    adapter = TypeAdapter(route.response_model)
+    validated = adapter.validate_python(result, from_attributes=True)
+    body = adapter.dump_python(
+        validated,
+        mode="json",
+        include=route.response_model_include,
+        exclude=route.response_model_exclude,
+        by_alias=route.response_model_by_alias,
+        exclude_unset=route.response_model_exclude_unset,
+        exclude_defaults=route.response_model_exclude_defaults,
+        exclude_none=route.response_model_exclude_none,
+    )
+    return status_code, body
+
+
 def idempotent(handler: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
     """Optional route guard: replay a repeated ``Idempotency-Key`` request.
 
     Opt-in example: no route in this template enables it. Place it under the route
     decorator on a handler that declares ``request: Request`` and returns
-    a dict or Pydantic model (stored and replayed with status 200)::
+    any JSON-serializable value::
 
         @router.post("/reports")
         @idempotent
         async def create_report(payload: Payload, request: Request) -> dict: ...
 
     Without the header the handler runs untouched. With it, a completed key
-    replays the stored response without running the handler, and the first
-    successful result is stored. Requires ``IDEMPOTENCY_ENABLED=true``.
+    replays the stored response without running the handler. The stored
+    response is what the client received for the first request: the route's
+    ``status_code`` (200 when none) and the body after ``response_model``
+    filtering (any JSON value, including lists and scalars). The request hash
+    covers method, path, query string, body and principal. When the handler
+    raises or is cancelled, the claim is released so the next request with the
+    same key runs the handler again. A handler that returns a ``Response``
+    object is not stored: its claim is released. Requires
+    ``IDEMPOTENCY_ENABLED=true``.
     """
 
     @functools.wraps(handler)
@@ -155,16 +210,32 @@ def idempotent(handler: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitabl
             body=await request.body(),
             expires_at=compute_idempotency_expires_at(get_app_settings(request.app)),
         )
-        if isinstance(outcome, JSONResponse):
+        if isinstance(outcome, Response):
             return outcome
-        result = await handler(*args, **kwargs)
-        if outcome is not None:
-            await store_idempotent_response(
-                outcome, status_code=200, response_body=jsonable_encoder(result)
-            )
+        if outcome is None:
+            return await handler(*args, **kwargs)
+        try:
+            result = await handler(*args, **kwargs)
+            if isinstance(result, Response):
+                await _release_quietly(outcome)
+                return result
+            status_code, response_body = declared_response(request, result)
+        except BaseException:
+            await _release_quietly(outcome)
+            raise
+        await store_idempotent_response(
+            outcome, status_code=status_code, response_body=response_body
+        )
         return result
 
     return wrapper
+
+
+async def _release_quietly(call: IdempotentCall) -> None:
+    try:
+        await asyncio.shield(release_idempotent_call(call))
+    except Exception:
+        logger.warning("idempotency_release_failed", exc_info=True)
 
 
 def _require_enabled_store(request: Request) -> IdempotencyStore:
