@@ -38,6 +38,15 @@ repos:
         pass_filenames: false
         files: ^(\.env\.example|app/core/config/.*\.py)$
 
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: Enforce layer import rules
+        entry: uv run --all-extras lint-imports
+        language: system
+        pass_filenames: false
+        files: ^app/.*\.py$
+
   # Commit message (Conventional Commits)
   - repo: https://github.com/commitizen-tools/commitizen
     rev: v3.28.0

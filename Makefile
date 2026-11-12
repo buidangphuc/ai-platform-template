@@ -1,4 +1,4 @@
-.PHONY: help dev worker test test-fast check-env test-infra infra-up eval lint format typecheck check ci hooks-install \
+.PHONY: help dev worker test test-fast test-ci eval-ci hooks verify check-env test-infra infra-up eval lint format typecheck arch check ci new-domain hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse
@@ -8,6 +8,7 @@ UV := PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv
 # Dev/test run with every optional extra installed ([ai], [aws], [mongo], ...).
 # Production installs pick extras explicitly: `uv sync --extra ai` etc.
 UV_RUN := $(UV) run --all-extras
+SRC := app tests scripts alembic
 LOCALINFRA_DIR ?= $(HOME)/Documents/localinfra
 
 help: ## Show this help
@@ -31,18 +32,24 @@ test-infra: ## Run every test on localinfra with the 80% coverage gate
 eval: ## Run the eval gate (deterministic cases; judge cases need JUDGE_CHAT_MODEL)
 	$(UV_RUN) python -m scripts.run_eval --min-score 0.8
 
+test-ci: ## Tests without infra, with the CI coverage gate
+	$(UV_RUN) pytest -q -m "not infra" --cov=app --cov-report=term-missing --cov-fail-under=74
+
+eval-ci: ## Eval gate on .env.example defaults
+	$(UV) run --env-file .env.example --all-extras python -m scripts.run_eval --min-score 0.8
+
 test-fast: ## Run pytest in parallel via pytest-xdist
-	$(UV_RUN) pytest -n auto
+	$(UV_RUN) pytest -n auto -m "not infra"
 
 lint: ## Ruff lint
-	$(UV_RUN) ruff check .
+	$(UV_RUN) ruff check $(SRC)
 
 format: ## Ruff format
-	$(UV_RUN) ruff format .
+	$(UV_RUN) ruff format $(SRC)
 
 check: ## Ruff lint + format check (no auto-fix)
-	$(UV_RUN) ruff check .
-	$(UV_RUN) ruff format --check .
+	$(UV_RUN) ruff check $(SRC)
+	$(UV_RUN) ruff format --check $(SRC)
 
 check-env: ## Verify .env.example matches Settings fields
 	$(UV_RUN) python -m scripts.check_env_example
@@ -50,7 +57,18 @@ check-env: ## Verify .env.example matches Settings fields
 typecheck: ## Pyright type check
 	$(UV_RUN) pyright
 
-ci: check check-env typecheck test-infra ## Full suite locally, infra included
+arch: ## Enforce layer import rules
+	$(UV_RUN) lint-imports
+
+hooks: ## Run all pre-commit hooks (commit-msg stage skipped)
+	SKIP=commitizen $(UV) run pre-commit run --all-files --hook-stage pre-commit
+
+verify: check typecheck arch hooks test-ci eval-ci ## Exactly what CI runs
+
+ci: verify test-infra ## verify plus every test on real services
+
+new-domain: ## Scaffold a business domain: make new-domain NAME=orders
+	$(UV_RUN) python -m scripts.new_domain $(NAME)
 
 hooks-install: ## Install pre-commit hooks
 	$(UV) run pre-commit install --install-hooks

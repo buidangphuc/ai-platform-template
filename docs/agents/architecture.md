@@ -14,6 +14,8 @@ Where code lives and how it is wired. This repo is a template, not a plugin plat
 | `app/modules/business` | Domain/product logic only. |
 | `app/core` | Settings, infra primitives, health, errors, middleware. |
 
+Import rules between these layers are enforced by `make arch` and defined in `pyproject.toml`.
+
 Layer flow:
 
 - API routers parse HTTP input and call a business service.
@@ -29,7 +31,7 @@ Prefer existing repo patterns over new abstractions.
 - Calls one business service method per endpoint when possible.
 - Views read services from `get_app_resources(request.app)` (the deliberate `app.state` seam). Feature-gated groups use one typed accessor in `app/bootstrap/state.py` (e.g. `get_task_services`).
 - Endpoint files never build stores, DB clients, HTTP clients, quota adapters, LLMs or generators, and never hold business workflow decisions.
-- No generic `app/api/deps.py` that collects unrelated wiring.
+- No generic `deps.py` in `app/api` that collects unrelated wiring.
 
 ### Bootstrap (`app/bootstrap`)
 
@@ -67,6 +69,8 @@ service consumes interface/capability
 `__init__.py` files stay empty (a docstring is allowed); no re-exports, no `__all__`. Import each symbol from the file that defines it, and only what you use. `tests/unit/test_package_inits.py` enforces this.
 
 ## Adding or changing a service
+
+Start a new domain with `make new-domain NAME=<domain>`; the steps below describe what it generates and what you edit next.
 
 1. Define one `<Domain>Service` class in `app/modules/business/<domain>/service.py` (e.g. `CompletionService`); add schemas/types/models/stores/integrations under the same domain.
 2. Keep stores, handlers and external integrations as constructor dependencies.

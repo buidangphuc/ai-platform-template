@@ -55,10 +55,11 @@ make dev
 curl http://localhost:8000/healthz
 ```
 
-The API starts on `http://localhost:8000`. For Docker, Langfuse, configuration and auth, see [docs/usage.md](docs/usage.md).
+`make verify` runs exactly what CI runs (lint, types, layer rules, hooks, tests, eval gate). The API starts on `http://localhost:8000`. For Docker, Langfuse, configuration and auth, see [docs/usage.md](docs/usage.md).
 
 ## Documentation
 
+- [AGENTS.md](AGENTS.md): entry point for coding agents (commands, docs to read, hard rules).
 - [docs/usage.md](docs/usage.md): requirements, quickstart, Docker, commands, env defaults, bearer auth.
 - [docs/template-guide.md](docs/template-guide.md): fork checklist, enabling capabilities, adding a business domain.
 - [docs/agents/project.md](docs/agents/project.md): feedback loops, checks, and an index of the architecture and AI-engineering docs.
