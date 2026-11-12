@@ -1,5 +1,3 @@
-import sys
-import types
 from collections.abc import Callable
 
 import pytest
@@ -13,29 +11,15 @@ from app.bootstrap import (
     application as application_module,
     resources as resources_module,
 )
+from app.bootstrap.addons.llm import LlmAddon
 from app.bootstrap.application import _build_lifespan, create_app
 from app.bootstrap.features.registry import FEATURES
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
 from app.core.health import HealthService
+from app.modules.ai.llm import langfuse as langfuse_module
 from app.modules.platform.mongo.gateway import MongoGateway
 from tests.infra import SqsQueue, require
-
-
-class _FakeLangfuseClient:
-    def __init__(self) -> None:
-        self.flushed = False
-
-    def flush(self) -> None:
-        self.flushed = True
-
-
-def _install_fake_langfuse(monkeypatch: pytest.MonkeyPatch) -> _FakeLangfuseClient:
-    client = _FakeLangfuseClient()
-    fake_module = types.ModuleType("langfuse")
-    fake_module.get_client = lambda: client  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "langfuse", fake_module)
-    return client
 
 
 def _bare_app() -> FastAPI:
@@ -46,96 +30,41 @@ def _bare_app() -> FastAPI:
     return app
 
 
-async def test_lifespan_flushes_langfuse_client_when_enabled(
+class _FakeLangfuseClient:
+    def __init__(self) -> None:
+        self.flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
+
+
+async def test_lifespan_flushes_langfuse_through_the_llm_addon(
     monkeypatch: pytest.MonkeyPatch,
     test_settings: Settings,
 ):
-    fake_client = _install_fake_langfuse(monkeypatch)
-    settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
+    client = _FakeLangfuseClient()
+    monkeypatch.setattr(langfuse_module, "_build_langfuse_client", lambda s: client)
+    settings = test_settings.model_copy(
+        update={
+            "LLM_ENABLED": True,
+            "LANGFUSE_ENABLED": True,
+            "LANGFUSE_PUBLIC_KEY": "lf-public",
+            "LANGFUSE_SECRET_KEY": "lf-private",  # pragma: allowlist secret
+        }
+    )
 
     lifespan = _build_lifespan(
         settings,
         init_resources=True,
-        addons=(),
+        addons=(LlmAddon(),),
         features=FEATURES,
     )
 
     async with lifespan(_bare_app()):
-        assert fake_client.flushed is False
+        assert client.flushes == 0
 
-    assert fake_client.flushed is True
-
-
-async def test_lifespan_skips_flush_when_init_resources_is_false(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
-):
-    flush_calls: list[str] = []
-
-    def _should_not_be_called() -> None:
-        flush_calls.append("called")
-
-    monkeypatch.setattr(
-        application_module,
-        "_flush_langfuse_client",
-        _should_not_be_called,
-    )
-    settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
-
-    lifespan = _build_lifespan(
-        settings,
-        init_resources=False,
-        addons=(),
-        features=FEATURES,
-    )
-
-    async with lifespan(_bare_app()):
-        pass
-
-    assert flush_calls == []
-
-
-async def test_lifespan_skips_flush_when_langfuse_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
-):
-    flush_calls: list[str] = []
-
-    monkeypatch.setattr(
-        application_module,
-        "_flush_langfuse_client",
-        lambda: flush_calls.append("called"),
-    )
-
-    lifespan = _build_lifespan(
-        test_settings,
-        init_resources=True,
-        addons=(),
-        features=FEATURES,
-    )
-
-    async with lifespan(_bare_app()):
-        pass
-
-    assert flush_calls == []
-
-
-async def test_lifespan_flush_tolerates_missing_langfuse_package(
-    monkeypatch: pytest.MonkeyPatch,
-    test_settings: Settings,
-):
-    monkeypatch.setitem(sys.modules, "langfuse", None)
-    settings = test_settings.model_copy(update={"LANGFUSE_ENABLED": True})
-
-    lifespan = _build_lifespan(
-        settings,
-        init_resources=True,
-        addons=(),
-        features=FEATURES,
-    )
-
-    async with lifespan(_bare_app()):
-        pass
+    assert client.flushes == 1
+    assert not hasattr(application_module, "_flush_langfuse_client")
 
 
 def _capture_logs() -> tuple[list[str], int]:

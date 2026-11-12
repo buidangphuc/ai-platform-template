@@ -1,9 +1,10 @@
 """Eval gate for the completions surface.
 
-Runs the JSONL dataset against the CompletionService built by the completions
-feature (echo handler by default — pass your product handler factory to
-completions_feature when you fork) and FAILS (exit != 0)
-when the pass rate drops below --min-score.
+Runs the JSONL dataset against the CompletionService the app itself composes
+(``open_runtime`` with the default addons and features): the echo handler with
+LLM_ENABLED=false (hermetic), the model-backed handler with LLM_ENABLED=true.
+Pass your product handler factory to completions_feature when you fork. FAILS
+(exit != 0) when the pass rate drops below --min-score.
 
 Per-case evaluator selection via metadata.evaluator: exact | contains |
 judge. Judge cases need JUDGE_CHAT_MODEL (+ the [ai] extra); without it they
@@ -21,8 +22,9 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 
-from app.bootstrap.features.completions import completions_feature
-from app.bootstrap.resources import ApplicationResources
+from app.bootstrap.addons.base import default_resource_addons
+from app.bootstrap.features.registry import FEATURES
+from app.bootstrap.services import open_runtime
 from app.core.config import get_settings
 from app.modules.ai.evals.evaluators import (
     ContainsEvaluator,
@@ -38,14 +40,15 @@ from app.modules.ai.evals.runner import (
     run_eval_cases,
 )
 from app.modules.business.completions.schemas import CompletionRequest
+from app.modules.business.completions.service import CompletionService
 
 DEFAULT_CASES = "evals/completions_smoke.jsonl"
 _EVALUATOR_KINDS = ("exact", "contains", "judge")
 
 
-def _build_target(settings) -> Callable[[EvalCase], Awaitable[EvalTargetResult]]:
-    service = completions_feature().build(ApplicationResources(), settings)
-
+def _build_target(
+    service: CompletionService,
+) -> Callable[[EvalCase], Awaitable[EvalTargetResult]]:
     async def target(case: EvalCase) -> EvalTargetResult:
         result = await service.complete(CompletionRequest(**case.input))
         return EvalTargetResult(output=result.content)
@@ -81,9 +84,17 @@ async def _run(args: argparse.Namespace, settings=None) -> int:
     settings = settings or get_settings()
     cases = load_jsonl_cases(args.cases)
     selector = _build_selector(cases, settings)
-    report = await run_eval_cases(
-        cases, target=_build_target(settings), evaluators=selector
-    )
+    async with open_runtime(
+        settings,
+        init_resources=True,
+        addons=default_resource_addons(),
+        features=FEATURES,
+    ) as resources:
+        report = await run_eval_cases(
+            cases,
+            target=_build_target(resources.service(CompletionService)),
+            evaluators=selector,
+        )
     print(
         json.dumps(
             {

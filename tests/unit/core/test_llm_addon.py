@@ -1,7 +1,10 @@
+import pytest
+
 from app.bootstrap.addons.base import default_resource_addons
 from app.bootstrap.addons.llm import LlmAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.telemetry import FanOutSink, LogLlmSink
+from app.modules.ai.llm import langfuse as langfuse_module
 from app.modules.ai.llm.runtime import LLMInstance
 from tests.factories import build_test_settings, open_addon
 
@@ -54,3 +57,49 @@ async def test_llm_addon_sink_fans_out_to_telemetry():
     sink = resources.llm.sink
     assert isinstance(sink, FanOutSink)
     assert sink.sinks[1] is telemetry
+
+
+class _FakeLangfuseClient:
+    def __init__(self) -> None:
+        self.flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
+
+
+def _langfuse_settings(**overrides: object):
+    return build_test_settings(
+        LLM_ENABLED=True,
+        LANGFUSE_ENABLED=True,
+        LANGFUSE_PUBLIC_KEY="lf-public",
+        LANGFUSE_SECRET_KEY="lf-private",  # pragma: allowlist secret
+        **overrides,
+    )
+
+
+async def test_llm_addon_flushes_langfuse_on_close(monkeypatch: pytest.MonkeyPatch):
+    client = _FakeLangfuseClient()
+    monkeypatch.setattr(langfuse_module, "_build_langfuse_client", lambda s: client)
+    resources = ApplicationResources()
+
+    stack = await open_addon(LlmAddon(), resources, _langfuse_settings())
+
+    assert client.flushes == 0
+    await stack.aclose()
+    assert client.flushes == 1
+    assert resources.llm is None
+
+
+async def test_llm_addon_does_not_flush_when_langfuse_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = _FakeLangfuseClient()
+    monkeypatch.setattr(langfuse_module, "_build_langfuse_client", lambda s: client)
+    resources = ApplicationResources()
+
+    stack = await open_addon(
+        LlmAddon(), resources, build_test_settings(LLM_ENABLED=True)
+    )
+    await stack.aclose()
+
+    assert client.flushes == 0

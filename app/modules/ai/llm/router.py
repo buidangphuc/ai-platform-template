@@ -142,6 +142,10 @@ class ModelRouter:
         require_langchain()
         from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
+        logger.warning(
+            "CHAT_MODEL is empty: serving the local fake model; "
+            "set CHAT_MODEL to call a real provider"
+        )
         return FakeListChatModel(responses=["fake response"])
 
     def _breaker(self, role: ModelRole, target: str) -> CircuitBreaker:

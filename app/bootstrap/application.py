@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -96,8 +95,6 @@ def _build_lifespan(
             finally:
                 health_service.begin_draining()
                 await _drain_in_flight(app, settings.GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS)
-                if init_resources and settings.LANGFUSE_ENABLED:
-                    await asyncio.to_thread(_flush_langfuse_client)
         app.state.resources = ApplicationResources()
         app.state.health_service = HealthService(check_external_dependencies=False)
 
@@ -111,14 +108,6 @@ async def _drain_in_flight(app: FastAPI, timeout_seconds: int) -> None:
     if tracker is None:
         return
     await tracker.wait_idle(timeout=timeout_seconds)
-
-
-def _flush_langfuse_client() -> None:
-    try:
-        from langfuse import get_client
-    except ImportError:
-        return
-    get_client().flush()
 
 
 def _instrument_fastapi(app: FastAPI) -> None:

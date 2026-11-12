@@ -63,6 +63,10 @@ class Settings(
     def validate_runtime_safety(self) -> Settings:
         if not self.ENVIRONMENT.is_local and not self.auth_api_keys:
             raise ValueError("AUTH_API_KEYS is required outside dev/local/test")
+        if not self.ENVIRONMENT.is_local and self.LLM_ENABLED and not self.CHAT_MODEL:
+            raise ValueError(
+                "CHAT_MODEL is required when LLM_ENABLED is true outside dev/local/test"
+            )
         if not self.ENVIRONMENT.is_production:
             return self
 
