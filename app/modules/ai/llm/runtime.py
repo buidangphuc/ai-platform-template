@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from time import perf_counter, time_ns
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
@@ -11,9 +11,16 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings
+from app.core.config.ai import ModelPrice
 from app.core.errors import AppError, ServiceUnavailableError
 from app.core.resilience import is_transient_error
-from app.core.telemetry import NOOP_SINK, LlmObservation, LlmSink, Outcome
+from app.core.telemetry import (
+    NOOP_SINK,
+    LlmObservation,
+    LlmSink,
+    Outcome,
+    record_llm_usage,
+)
 from app.modules.ai.llm.langfuse import (
     LangfuseLLMTracker,
     LLMTraceContext,
@@ -99,6 +106,7 @@ class _Call:
 
     mode: Literal["sync", "stream"]
     sink: LlmSink
+    prices: Mapping[str, ModelPrice] = field(default_factory=dict)
     started_at: float = field(default_factory=perf_counter)
     started_ns: int = field(default_factory=time_ns)
     target: str | None = None
@@ -125,21 +133,33 @@ class _Call:
         if self.mode == "stream" and self.ttft_s is None and message.text:
             self.ttft_s = perf_counter() - self.started_at
 
+    def _cost_usd(self, model: str | None) -> float | None:
+        if self.input_tokens is None or self.output_tokens is None:
+            return None
+        price = self.prices.get(model or "")
+        if price is None:
+            return None
+        return (
+            self.input_tokens * price.input + self.output_tokens * price.output
+        ) / 1_000_000
+
     def record(self, outcome: Outcome) -> None:
-        self.sink.record_llm(
-            LlmObservation(
-                mode=self.mode,
-                outcome=outcome,
-                started_ns=self.started_ns,
-                duration_s=perf_counter() - self.started_at,
-                ttft_s=self.ttft_s,
-                model=self.model or self.target or None,
-                finish_reason=self.finish_reason,
-                input_tokens=self.input_tokens,
-                output_tokens=self.output_tokens,
-                total_tokens=self.total_tokens,
-            )
+        model = self.model or self.target or None
+        observation = LlmObservation(
+            mode=self.mode,
+            outcome=outcome,
+            started_ns=self.started_ns,
+            duration_s=perf_counter() - self.started_at,
+            ttft_s=self.ttft_s,
+            model=model,
+            finish_reason=self.finish_reason,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            total_tokens=self.total_tokens,
+            cost_usd=self._cost_usd(model),
         )
+        record_llm_usage(observation)
+        self.sink.record_llm(observation)
 
 
 @dataclass(frozen=True)
@@ -179,7 +199,7 @@ class LLMInstance:
         role: ModelRole = "default",
         context: LLMTraceContext | None = None,
     ) -> BaseMessage:
-        call = _Call("sync", self.sink)
+        call = _Call("sync", self.sink, self.router.settings.LLM_PRICES)
         outcome: Outcome = "disconnected"  # what a cancelled call means
         try:
             call.target, message = await self._invoke_chain(input, role, context)
@@ -274,7 +294,7 @@ class LLMInstance:
         comes after output reached the client, so it raises ``StreamTimeoutError``
         and releases the attempt without counting against the breaker.
         """
-        call = _Call("stream", self.sink)
+        call = _Call("stream", self.sink, self.router.settings.LLM_PRICES)
         outcome: Outcome = "disconnected"  # what a closed or cancelled stream means
         deadline_seconds = self.router.settings.LLM_CHAIN_DEADLINE_SECONDS
         loop = asyncio.get_running_loop()

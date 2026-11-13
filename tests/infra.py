@@ -10,6 +10,8 @@ import asyncpg
 import boto3
 import pytest
 import redis.asyncio as aioredis
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
+from aiokafka.admin import AIOKafkaAdminClient, NewTopic
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
@@ -42,6 +44,7 @@ ENGINE_VARS = {
     "sqs": "TEST_SQS_ENDPOINT_URL",
     "rabbitmq": "TEST_RABBITMQ_URL",
     "rabbitmq_container": "TEST_RABBITMQ_CONTAINER",
+    "kafka": "TEST_KAFKA_BOOTSTRAP_SERVERS",
 }
 
 INFRA_FIXTURES = frozenset(
@@ -58,6 +61,7 @@ INFRA_FIXTURES = frozenset(
         "sqs_queue",
         "rabbitmq_url",
         "rabbitmq_queue_name",
+        "kafka_topic",
     }
 )
 
@@ -351,3 +355,98 @@ def redis_queue(
         redis=redis_client,
         stream=f"{redis_prefix}:queue",
     )
+
+
+@dataclass(frozen=True)
+class KafkaTopic:
+    bootstrap_servers: str
+    username: str
+    password: str
+    topic: str
+    group_id: str
+
+    def client_config(self) -> dict[str, Any]:
+        return {
+            "bootstrap_servers": self.bootstrap_servers,
+            "security_protocol": "SASL_PLAINTEXT",
+            "sasl_mechanism": "SCRAM-SHA-256",
+            "sasl_plain_username": self.username,
+            "sasl_plain_password": self.password,
+        }
+
+    def settings(self, **overrides: object) -> Settings:
+        values: dict[str, object] = {
+            "KAFKA_CONSUMER_ENABLED": True,
+            "KAFKA_BOOTSTRAP_SERVERS": self.bootstrap_servers,
+            "KAFKA_SECURITY_PROTOCOL": "SASL_PLAINTEXT",
+            "KAFKA_SASL_MECHANISM": "SCRAM-SHA-256",
+            "KAFKA_SASL_USERNAME": self.username,
+            "KAFKA_SASL_PASSWORD": self.password,
+            "KAFKA_CONSUMER_GROUP_ID": self.group_id,
+            "KAFKA_POLL_TIMEOUT_MS": 200,
+            "KAFKA_FAILURE_BACKOFF_SECONDS": 0.05,
+            "KAFKA_MAX_BACKOFF_SECONDS": 0.2,
+        }
+        values.update(overrides)
+        return settings_from_env(**values)
+
+    async def produce(self, *values: bytes) -> None:
+        producer = AIOKafkaProducer(**self.client_config())
+        await producer.start()
+        try:
+            for value in values:
+                await producer.send_and_wait(self.topic, value, partition=0)
+        finally:
+            await producer.stop()
+
+    async def read(self) -> list[tuple[bytes | None, bytes | None]]:
+        consumer = AIOKafkaConsumer(**self.client_config(), enable_auto_commit=False)
+        await consumer.start()
+        try:
+            partition = TopicPartition(self.topic, 0)
+            consumer.assign([partition])
+            await consumer.seek_to_beginning(partition)
+            end = (await consumer.end_offsets([partition]))[partition]
+            records: list[tuple[bytes | None, bytes | None]] = []
+            while await consumer.position(partition) < end:
+                batch = await consumer.getmany(partition, timeout_ms=1000)
+                records.extend(
+                    (record.key, record.value) for record in batch.get(partition, [])
+                )
+            return records
+        finally:
+            await consumer.stop()
+
+    async def committed_offset(self) -> int | None:
+        admin = AIOKafkaAdminClient(**self.client_config())
+        await admin.start()
+        try:
+            offsets = await admin.list_consumer_group_offsets(self.group_id)
+        finally:
+            await admin.close()
+        entry = offsets.get(TopicPartition(self.topic, 0))
+        return None if entry is None else entry.offset
+
+
+@pytest.fixture()
+async def kafka_topic() -> AsyncIterator[KafkaTopic]:
+    suffix = uuid.uuid4().hex[:8]
+    target = KafkaTopic(
+        bootstrap_servers=require("kafka"),
+        username=_env("TEST_KAFKA_USERNAME"),
+        password=_env("TEST_KAFKA_PASSWORD"),
+        topic=f"aipt.t-{suffix}",
+        group_id=f"aipt.g-{suffix}",
+    )
+    admin = AIOKafkaAdminClient(**target.client_config())
+    await admin.start()
+    try:
+        await admin.create_topics(
+            [NewTopic(name=target.topic, num_partitions=1, replication_factor=1)]
+        )
+        yield target
+    finally:
+        try:
+            await admin.delete_topics([target.topic])
+        finally:
+            await admin.close()

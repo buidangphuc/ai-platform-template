@@ -8,7 +8,9 @@ With telemetry off it is ``NOOP_SINK``; with it on, the OTel-backed handle in
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -33,6 +35,42 @@ class LlmObservation:
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None = None
+    cost_usd: float | None = None
+
+
+@dataclass
+class LlmUsage:
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float | None = None
+    unpriced_calls: int = 0
+
+
+_collectors: ContextVar[tuple[LlmUsage, ...]] = ContextVar(
+    "llm_usage_collectors", default=()
+)
+
+
+@contextmanager
+def collect_llm_usage() -> Iterator[LlmUsage]:
+    usage = LlmUsage()
+    token = _collectors.set((*_collectors.get(), usage))
+    try:
+        yield usage
+    finally:
+        _collectors.reset(token)
+
+
+def record_llm_usage(observation: LlmObservation) -> None:
+    for usage in _collectors.get():
+        usage.calls += 1
+        usage.input_tokens += observation.input_tokens or 0
+        usage.output_tokens += observation.output_tokens or 0
+        if observation.cost_usd is None:
+            usage.unpriced_calls += 1
+        else:
+            usage.cost_usd = (usage.cost_usd or 0.0) + observation.cost_usd
 
 
 class LlmSink(Protocol):
@@ -66,9 +104,10 @@ class LogLlmSink:
             input_tokens=observation.input_tokens,
             output_tokens=observation.output_tokens,
             total_tokens=observation.total_tokens,
+            cost_usd=observation.cost_usd,
         ).info(
             "completion mode={} outcome={} model={} duration_ms={:.1f} ttft_ms={} "
-            "finish_reason={} input_tokens={} output_tokens={} total_tokens={}",
+            "finish_reason={} input_tokens={} output_tokens={} total_tokens={}{}",
             observation.mode,
             observation.outcome,
             observation.model,
@@ -78,6 +117,7 @@ class LogLlmSink:
             observation.input_tokens,
             observation.output_tokens,
             observation.total_tokens,
+            "" if observation.cost_usd is None else f" cost_usd={observation.cost_usd}",
         )
 
 

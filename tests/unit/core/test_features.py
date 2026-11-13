@@ -5,6 +5,7 @@ import pytest
 from fastapi import APIRouter, Request
 
 from app.bootstrap.application import create_app
+from app.bootstrap.consumer import consumer_context
 from app.bootstrap.features.base import Feature, import_models
 from app.bootstrap.features.completions import completions_feature
 from app.bootstrap.features.registry import FEATURES
@@ -18,7 +19,7 @@ from app.modules.business.completions.service import CompletionService
 from app.modules.messaging.queue.worker import NonRetryableMessageError
 from app.modules.messaging.tasks.models import TaskStatus
 from app.modules.messaging.tasks.store import TaskRecord
-from tests.factories import api_client_for
+from tests.factories import api_client_for, build_test_settings
 
 URL = "/api/v1/completions"
 HEADERS = {"Authorization": "Bearer test-token"}
@@ -222,3 +223,71 @@ def test_feature_models_appear_in_base_metadata(tmp_path, monkeypatch):
         if probe is not None:
             Base.metadata.remove(probe)
         sys.modules.pop("feature_models_probe", None)
+
+
+async def _noop_consumer(resources, records) -> None:
+    return None
+
+
+def _consumer_settings(**overrides: object) -> Settings:
+    return build_test_settings(
+        KAFKA_CONSUMER_ENABLED=True,
+        KAFKA_BOOTSTRAP_SERVERS="127.0.0.1:1",
+        KAFKA_CONSUMER_GROUP_ID="aipt.unit",
+        **overrides,
+    )
+
+
+def _consumer_feature(name: str, service: type, topic: str, **overrides) -> Feature:
+    return Feature(
+        name=name,
+        service=service,
+        build=lambda resources, settings: service(),
+        consumers=lambda settings: {topic: _noop_consumer},
+        **overrides,
+    )
+
+
+class _ServiceA:
+    pass
+
+
+class _ServiceB:
+    pass
+
+
+def test_feature_declares_no_consumers_by_default():
+    assert ping_feature().consumers(build_test_settings()) == {}
+
+
+async def test_consumer_subscribes_to_enabled_features_only():
+    settings = _consumer_settings()
+    features = (
+        _consumer_feature("a", _ServiceA, "topic.a"),
+        _consumer_feature("b", _ServiceB, "topic.b", enabled=lambda settings: False),
+    )
+    async with consumer_context(settings, features=features) as ctx:
+        assert ctx.topics == ("topic.a",)
+
+
+async def test_consumer_rejects_a_topic_declared_twice():
+    features = (
+        _consumer_feature("a", _ServiceA, "topic.shared"),
+        _consumer_feature("b", _ServiceB, "topic.shared"),
+    )
+    with pytest.raises(ValueError, match="topic.shared"):
+        async with consumer_context(_consumer_settings(), features=features):
+            pass
+
+
+async def test_consumer_refuses_to_start_when_no_feature_declares_one():
+    with pytest.raises(RuntimeError, match="enabled feature that declares a consumer"):
+        async with consumer_context(_consumer_settings(), features=(ping_feature(),)):
+            pass
+
+
+async def test_consumer_refuses_to_start_when_the_flag_is_off():
+    features = (_consumer_feature("a", _ServiceA, "topic.a"),)
+    with pytest.raises(RuntimeError, match="KAFKA_CONSUMER_ENABLED"):
+        async with consumer_context(build_test_settings(), features=features):
+            pass

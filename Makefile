@@ -1,4 +1,4 @@
-.PHONY: help dev worker test test-fast test-ci eval-ci hooks verify check-env test-infra infra-up eval lint format typecheck arch check ci new-domain hooks-install \
+.PHONY: help dev worker consumer test test-fast test-ci eval-ci hooks verify check-env test-infra infra-up eval lint format typecheck arch check ci new-domain hooks-install \
         migrate migration-new migrate-down \
         smoke-langfuse smoke-langfuse-prompt \
         docker-build docker-run docker-run-langfuse
@@ -20,11 +20,14 @@ dev: ## Run dev server with autoreload
 worker: ## Run async task worker
 	$(UV_RUN) python -m scripts.run_worker
 
+consumer: ## Run Kafka consumer process
+	$(UV_RUN) python -m scripts.run_consumer
+
 test: ## Run pytest without infra (what CI runs)
 	$(UV_RUN) pytest -q -m "not infra"
 
 infra-up: ## Start the localinfra services the tests need
-	cd $(LOCALINFRA_DIR) && bin/li up redis postgres mongo minio elasticmq rabbitmq
+	cd $(LOCALINFRA_DIR) && bin/li up redis postgres mongo minio elasticmq rabbitmq redpanda
 
 test-infra: ## Run every test on localinfra with the 80% coverage gate
 	$(UV_RUN) --env-file .env.test pytest -q --cov=app --cov-fail-under=80

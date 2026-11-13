@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field, model_validator
 RagBackend = Literal["pgvector"]
 
 
+class ModelPrice(BaseModel):
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+
+
 class AISettingsMixin(BaseModel):
     DATABASE_ENABLED: bool
 
@@ -35,6 +40,7 @@ class AISettingsMixin(BaseModel):
     # primary is probed again.
     LLM_BREAKER_FAILURE_THRESHOLD: int = Field(default=3, gt=0)
     LLM_BREAKER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0)
+    LLM_PRICES: dict[str, ModelPrice] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _chain_deadline_covers_the_retry_budget(self) -> AISettingsMixin:

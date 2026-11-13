@@ -443,3 +443,30 @@ def test_rag_requires_database():
 def test_rag_table_name_must_be_a_plain_identifier():
     with pytest.raises(ValidationError, match="RAG_PGVECTOR_TABLE"):
         build_test_settings(RAG_PGVECTOR_TABLE="rag; DROP TABLE users")
+
+
+def test_llm_prices_default_to_empty():
+    assert build_test_settings().LLM_PRICES == {}
+
+
+def test_llm_prices_are_parsed_from_the_environment(monkeypatch):
+    monkeypatch.setenv("LLM_PRICES", '{"m": {"input": 1.0, "output": 2.5}}')
+
+    settings = build_test_settings()
+
+    assert settings.LLM_PRICES["m"].input == 1.0
+    assert settings.LLM_PRICES["m"].output == 2.5
+
+
+@pytest.mark.parametrize(
+    "prices",
+    [
+        {"m": {"input": -1, "output": 1}},
+        {"m": {"input": 1, "output": -0.5}},
+        {"m": {"input": 1}},
+        {"m": {"output": 1}},
+    ],
+)
+def test_llm_prices_reject_a_bad_table(prices):
+    with pytest.raises(ValidationError, match="LLM_PRICES"):
+        build_test_settings(LLM_PRICES=prices)
