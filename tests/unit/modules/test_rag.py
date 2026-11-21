@@ -10,12 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.bootstrap.addons.rag import RagAddon
 from app.bootstrap.resources import ApplicationResources
 from app.core.config import Settings
+from app.core.errors import ServiceUnavailableError
 from app.modules.ai.rag.factory import build_embed_model, build_rag_service
 from app.modules.ai.rag.service import (
     KnowledgeRetrievalService,
     build_rag_node_parser,
 )
 from tests.factories import build_test_settings, open_addon
+from tests.http_server import LocalHttpServer, Reply
 
 
 async def test_knowledge_service_indexes_and_searches(rag_service):
@@ -255,8 +257,116 @@ async def test_rag_addon_opens_service_and_closes_connections(
     assert await _app_connection_count(pg_engine, rag_settings.POSTGRES_DB) == 0
 
 
-def test_build_embed_model_raises_for_unimplemented_provider():
-    with pytest.raises(RuntimeError, match="not implemented"):
-        build_embed_model(
-            build_test_settings(RAG_EMBED_MODEL="openai:text-embedding-3-small")
+async def test_model_server_embeddings_let_search_rank_by_meaning(
+    rag_settings: Settings, local_http_server: LocalHttpServer
+):
+    def unit(axis: int, tilt: float = 0.0) -> list[float]:
+        vector = [0.0] * rag_settings.RAG_EMBED_DIM
+        vector[axis] = 1.0
+        vector[(axis + 1) % len(vector)] = tilt
+        return vector
+
+    document_a = "refunds are processed within five business days"
+    document_b = "the api rotates signing keys every ninety days"
+    query = "how often are signing keys rotated"
+    local_http_server.script(
+        "/embed",
+        Reply(json={"embeddings": [unit(0)]}),
+        Reply(json={"embeddings": [unit(1)]}),
+        Reply(json={"embeddings": [unit(1, tilt=0.2)]}),
+    )
+    settings = rag_settings.model_copy(
+        update={
+            "RAG_EMBED_BACKEND": "model_server",
+            "RAG_EMBED_SERVER_URL": local_http_server.url,
+        }
+    )
+    service = build_rag_service(settings)
+    try:
+        await service.index(
+            [
+                Document(id_="doc-a", text=document_a, metadata={}),
+                Document(id_="doc-b", text=document_b, metadata={}),
+            ]
         )
+
+        found = await service.search(query, top_k=2)
+    finally:
+        await service.aclose()
+        await service.embed_model.aclose()
+
+    posted = [r.json()["texts"] for r in local_http_server.requests_to("/embed")]
+    assert [len(texts) for texts in posted] == [1, 1, 1]
+    assert posted[0][0].endswith(document_a)
+    assert posted[1][0].endswith(document_b)
+    assert posted[2] == [query]
+    assert [m.node.metadata["document_id"] for m in found] == ["doc-b", "doc-a"]
+    assert found[0].score > found[1].score
+
+
+def test_build_embed_model_is_mock_by_default():
+    from llama_index.core.embeddings import MockEmbedding
+
+    model = build_embed_model(build_test_settings(RAG_EMBED_DIM=7))
+
+    assert isinstance(model, MockEmbedding)
+    assert len(model.get_query_embedding("x")) == 7
+
+
+async def test_build_embed_model_for_model_server_uses_the_configured_endpoint(
+    local_http_server: LocalHttpServer,
+):
+    local_http_server.script("/vec", Reply(json=[[0.5, 0.5]]))
+    model = build_embed_model(
+        build_test_settings(
+            RAG_EMBED_BACKEND="model_server",
+            RAG_EMBED_SERVER_URL=local_http_server.url,
+            RAG_EMBED_SERVER_PATH="/vec",
+            RAG_EMBED_DIM=2,
+        )
+    )
+    try:
+        assert await model.aget_query_embedding("x") == [0.5, 0.5]
+    finally:
+        await model.aclose()
+
+
+async def test_rag_addon_closes_the_embedding_client_with_the_stack(
+    rag_settings: Settings, local_http_server: LocalHttpServer
+):
+    local_http_server.script(
+        "/embed", Reply(json={"embeddings": [[1.0] * rag_settings.RAG_EMBED_DIM]})
+    )
+    settings = rag_settings.model_copy(
+        update={
+            "RAG_EMBED_BACKEND": "model_server",
+            "RAG_EMBED_SERVER_URL": local_http_server.url,
+        }
+    )
+    resources = ApplicationResources()
+
+    stack = await open_addon(RagAddon(), resources, settings)
+    service = resources.rag_service
+    assert service is not None
+    embed_model = service.embed_model
+    assert await embed_model.aget_query_embedding("x") == [1.0] * 16
+
+    await stack.aclose()
+
+    with pytest.raises(ServiceUnavailableError) as exc:
+        await embed_model.aget_query_embedding("x")
+    assert exc.value.code == "embedding_server_unavailable"
+    assert len(local_http_server.requests) == 1
+
+
+async def test_rag_addon_with_mock_embedding_opens_no_embedding_client(
+    rag_settings: Settings,
+):
+    resources = ApplicationResources()
+
+    stack = await open_addon(RagAddon(), resources, rag_settings)
+    try:
+        assert resources.rag_service is not None
+        assert not hasattr(resources.rag_service.embed_model, "aclose")
+    finally:
+        await stack.aclose()
