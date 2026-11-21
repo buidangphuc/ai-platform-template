@@ -64,6 +64,14 @@ service consumes interface/capability
 - Services receive explicit constructor dependencies. Stores own collection/table details; integrations own external API details; AI generation owns prompt building and model parsing.
 - A business service never reads `Request` or `app.state`, never uses a global service locator, and never opens app-lifetime runtime resources itself.
 
+### Event consumers
+
+A feature subscribes to Kafka topics with `Feature.consumers=lambda settings: {"<topic>": handler}`, where `handler(resources, records)` is `async` and receives a sequence of `EventRecord` (`app/modules/messaging/events/consumer.py`). `make consumer` (`scripts/run_consumer.py`, `app/bootstrap/consumer.py`) is a separate process, like the worker: it needs `KAFKA_CONSUMER_ENABLED`, `KAFKA_BOOTSTRAP_SERVERS` and `KAFKA_CONSUMER_GROUP_ID`, subscribes to the union of topics declared by enabled features and refuses to start when there are none; two enabled features declaring one topic fail at startup. `KafkaConsumerLoop` fetches with auto-commit off, hands each partition's batch to the topic's handler and commits `last offset + 1` only after the handler returns, so delivery is at-least-once and a handler must be idempotent. A handler error commits nothing, rewinds the partition, backs off (`KAFKA_FAILURE_BACKOFF_SECONDS`, doubling up to `KAFKA_MAX_BACKOFF_SECONDS`, interrupted by shutdown) and delivers the same records again; there is no dead-letter path, so a poison record blocks its partition until the handler accepts it. Kafka is not behind `QueueGateway`: that protocol acks single messages, Kafka advances an offset. Tests run against the localinfra Redpanda (`kafka_topic` fixture in `tests/infra.py`).
+
+### Event producer
+
+`KAFKA_PRODUCER_ENABLED` opens one `KafkaEventProducer` (`app/modules/messaging/events/producer.py`, built by `build_kafka_producer`: `acks="all"`, idempotent, same connection options as the consumer) through the `kafka_producer` addon and stores it on `resources.event_producer`; the API, the worker and the consumer each open their own. `await producer.send(topic, key=..., value=...)` returns after the broker acknowledged and raises otherwise. A business service never imports it: the feature file injects a publisher callable that builds the topic and bytes from the service's event. There is no outbox: a failed send fails the task or the consumer batch and the retry sends again, so consumers of the topic must tolerate duplicates.
+
 ### Package `__init__.py`
 
 `__init__.py` files stay empty (a docstring is allowed); no re-exports, no `__all__`. Import each symbol from the file that defines it, and only what you use. `tests/unit/test_package_inits.py` enforces this.

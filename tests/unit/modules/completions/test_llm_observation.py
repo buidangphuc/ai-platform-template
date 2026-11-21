@@ -326,6 +326,33 @@ def test_log_sink_emits_the_completion_line_and_bound_fields() -> None:
     assert record["extra"]["duration_ms"] == 12.3
 
 
+def test_log_sink_adds_the_cost_only_when_there_is_one() -> None:
+    records: list[dict] = []
+    handle = logger.add(lambda m: records.append(m.record), format="{message}")
+    try:
+        LogLlmSink().record_llm(
+            LlmObservation(
+                mode="sync",
+                outcome="ok",
+                started_ns=0,
+                duration_s=0.1,
+                ttft_s=None,
+                model="m",
+                finish_reason="stop",
+                input_tokens=2,
+                output_tokens=3,
+                total_tokens=5,
+                cost_usd=0.002,
+            )
+        )
+    finally:
+        logger.remove(handle)
+
+    (record,) = records
+    assert record["message"].endswith("total_tokens=5 cost_usd=0.002")
+    assert record["extra"]["cost_usd"] == 0.002
+
+
 def test_fan_out_sink_reaches_every_sink() -> None:
     a, b = _Sink(), _Sink()
     obs = LlmObservation(

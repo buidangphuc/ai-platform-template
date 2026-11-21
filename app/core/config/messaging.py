@@ -1,4 +1,4 @@
-"""Messaging settings: queue, tasks + worker, outbox, webhooks."""
+"""Messaging settings: queue, tasks + worker, outbox, webhooks, kafka consumer."""
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ QueueBackend = Literal["redis", "sqs", "rabbitmq"]
 TaskStoreBackend = Literal["postgres", "redis"]
 OutboxBackend = Literal["postgres"]
 RabbitMQQueueType = Literal["", "classic", "quorum"]
+KafkaSecurityProtocol = Literal["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"]
+KafkaSaslMechanism = Literal["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"]
+KafkaAutoOffsetReset = Literal["earliest", "latest"]
 
 
 class MessagingSettingsMixin(BaseModel):
@@ -87,6 +90,21 @@ class MessagingSettingsMixin(BaseModel):
     WEBHOOK_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0)
     WEBHOOK_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
 
+    KAFKA_CONSUMER_ENABLED: bool = False
+    KAFKA_PRODUCER_ENABLED: bool = False
+    KAFKA_BOOTSTRAP_SERVERS: str = ""
+    KAFKA_SECURITY_PROTOCOL: KafkaSecurityProtocol = "SASL_SSL"
+    KAFKA_SASL_MECHANISM: KafkaSaslMechanism = "SCRAM-SHA-512"
+    KAFKA_SASL_USERNAME: str = ""
+    KAFKA_SASL_PASSWORD: str = ""
+    KAFKA_SSL_CAFILE: str = ""
+    KAFKA_CONSUMER_GROUP_ID: str = ""
+    KAFKA_AUTO_OFFSET_RESET: KafkaAutoOffsetReset = "earliest"
+    KAFKA_MAX_POLL_RECORDS: int = Field(default=200, gt=0)
+    KAFKA_POLL_TIMEOUT_MS: int = Field(default=1000, gt=0)
+    KAFKA_FAILURE_BACKOFF_SECONDS: float = Field(default=1.0, ge=0)
+    KAFKA_MAX_BACKOFF_SECONDS: float = Field(default=60.0, ge=0)
+
     @model_validator(mode="after")
     def validate_messaging_requirements(self) -> MessagingSettingsMixin:
         if self.QUEUE_ENABLED and self.QUEUE_BACKEND == "redis":
@@ -112,6 +130,20 @@ class MessagingSettingsMixin(BaseModel):
             _require(
                 bool(self.WEBHOOK_SIGNING_SECRET),
                 "WEBHOOK_SIGNING_SECRET is required when WEBHOOKS_ENABLED is true",
+            )
+        if self.KAFKA_CONSUMER_ENABLED:
+            _require(
+                bool(self.KAFKA_BOOTSTRAP_SERVERS),
+                "KAFKA_BOOTSTRAP_SERVERS is required when KAFKA_CONSUMER_ENABLED is true",
+            )
+            _require(
+                bool(self.KAFKA_CONSUMER_GROUP_ID),
+                "KAFKA_CONSUMER_GROUP_ID is required when KAFKA_CONSUMER_ENABLED is true",
+            )
+        if self.KAFKA_PRODUCER_ENABLED:
+            _require(
+                bool(self.KAFKA_BOOTSTRAP_SERVERS),
+                "KAFKA_BOOTSTRAP_SERVERS is required when KAFKA_PRODUCER_ENABLED is true",
             )
         return self
 

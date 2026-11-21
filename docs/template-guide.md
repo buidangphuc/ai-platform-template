@@ -31,6 +31,9 @@ Architecture rules live in [agents/architecture.md](agents/architecture.md) — 
 | Outbox | `OUTBOX_ENABLED=true` | postgres |
 | Webhooks | `WEBHOOKS_ENABLED=true` + `WEBHOOK_SIGNING_SECRET` | none (outbound HTTP) |
 | Quota | `QUOTA_ENABLED=true` | postgres/mongo |
+| Kafka consumer (`make consumer`) | `KAFKA_CONSUMER_ENABLED=true` + `KAFKA_BOOTSTRAP_SERVERS` + `KAFKA_CONSUMER_GROUP_ID` (`--extra kafka`) | kafka |
+| Kafka producer | `KAFKA_PRODUCER_ENABLED=true` + `KAFKA_BOOTSTRAP_SERVERS` (`--extra kafka`) | kafka |
+| LLM cost per call | `LLM_PRICES` (USD per million tokens by model name) | none |
 | LLM + tracing + RAG | `uv sync --extra ai`, then `CHAT_MODEL=...`, `LANGFUSE_ENABLED`, `RAG_ENABLED` | provider keys / langfuse |
 
 The standard stack for a typical service is DATABASE + REDIS + QUEUE + TASKS +
@@ -106,6 +109,7 @@ read `Request`/`app.state`; touch bootstrap only for app-lifetime resources.
 | `aws` | aioboto3 | S3 object storage, SQS queue |
 | `mongo` | motor, pymongo | Mongo gateway |
 | `rabbitmq` | aio-pika | RabbitMQ queue backend |
+| `kafka` | aiokafka | Kafka consumer process and event producer |
 | `otel` | opentelemetry-api, opentelemetry-sdk, opentelemetry-exporter-otlp-proto-http, opentelemetry-instrumentation-fastapi | OpenTelemetry traces and GenAI metrics (`OTEL_ENABLED=true`) |
 
 RabbitMQ `receive_count` drives dead-lettering after repeated failures. On a classic queue a message that keeps crashing the worker is only flagged "redelivered", so its count stops at 2. Set `RABBITMQ_QUEUE_TYPE=quorum` (or create the queue in a vhost whose default type is quorum) to get an exact count from the broker. Empty keeps the vhost default; changing the type of an existing queue requires deleting it first.

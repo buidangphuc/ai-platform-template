@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from app.core.telemetry_otel import Telemetry
     from app.modules.ai.llm.runtime import LLMInstance
     from app.modules.ai.rag.service import KnowledgeRetrievalService
+    from app.modules.messaging.events.producer import KafkaEventProducer
     from app.modules.messaging.outbox.store import OutboxStore
     from app.modules.messaging.webhooks.dispatcher import HttpWebhookDispatcher
     from app.modules.messaging.webhooks.signing import WebhookSigner
@@ -85,6 +86,7 @@ class ApplicationResources:
     mongo: MongoGateway | None = None
     quota: QuotaService | None = None
     outbox_store: OutboxStore | None = None
+    event_producer: KafkaEventProducer | None = None
     principal_rate_limiter: RedisRateLimiter | None = None
     ip_rate_limiter: RedisRateLimiter | None = None
     rag_service: KnowledgeRetrievalService | None = None

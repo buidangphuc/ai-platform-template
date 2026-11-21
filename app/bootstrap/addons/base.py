@@ -27,6 +27,7 @@ class BootstrapAddon(Protocol):
 def default_resource_addons() -> tuple[BootstrapAddon, ...]:
     from app.bootstrap.addons.cache import CacheAddon
     from app.bootstrap.addons.idempotency import IdempotencyAddon
+    from app.bootstrap.addons.kafka_producer import KafkaProducerAddon
     from app.bootstrap.addons.llm import LlmAddon
     from app.bootstrap.addons.mongo import MongoAddon
     from app.bootstrap.addons.objects import ObjectAddon
@@ -47,6 +48,7 @@ def default_resource_addons() -> tuple[BootstrapAddon, ...]:
         MongoAddon(),
         QuotaAddon(),
         OutboxAddon(),
+        KafkaProducerAddon(),
         WebhookAddon(),
         RagAddon(),
     )

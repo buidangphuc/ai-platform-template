@@ -10,6 +10,11 @@ RagBackend = Literal["pgvector"]
 RagEmbedBackend = Literal["mock", "model_server"]
 
 
+class ModelPrice(BaseModel):
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+
+
 class AISettingsMixin(BaseModel):
     DATABASE_ENABLED: bool
 
@@ -18,6 +23,7 @@ class AISettingsMixin(BaseModel):
     CHAT_MODEL: str = ""
     CHAT_FALLBACK_MODELS: str = ""
     JUDGE_CHAT_MODEL: str = ""
+    VISION_CHAT_MODEL: str = ""
     # Every provider call is bounded: output cap, per-request timeout and the
     # SDK's own hidden retry budget. LLM_MAX_RETRIES is kept at 1 because the
     # breaker only sees a call after the SDK has exhausted its retries, so each
@@ -35,6 +41,7 @@ class AISettingsMixin(BaseModel):
     # primary is probed again.
     LLM_BREAKER_FAILURE_THRESHOLD: int = Field(default=3, gt=0)
     LLM_BREAKER_COOLDOWN_SECONDS: float = Field(default=30.0, gt=0)
+    LLM_PRICES: dict[str, ModelPrice] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _chain_deadline_covers_the_retry_budget(self) -> AISettingsMixin:

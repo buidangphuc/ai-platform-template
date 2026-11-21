@@ -7,6 +7,7 @@ from tests.factories import api_client_for, build_test_settings
 from tests.http_server import local_http_server as local_http_server
 from tests.infra import (
     infra_settings as infra_settings,
+    kafka_topic as kafka_topic,
     mongo_gateway as mongo_gateway,
     pg_engine as pg_engine,
     pg_sessionmaker as pg_sessionmaker,

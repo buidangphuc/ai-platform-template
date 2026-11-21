@@ -62,6 +62,13 @@ With `LLM_ENABLED=true` each LLM call (API and worker, sync or stream) logs one
 `completion mode=... outcome=... model=... duration_ms=... ttft_ms=... finish_reason=... input_tokens=...`
 line (no content). The default echo handler makes no LLM call and logs no such line.
 
+`LLM_PRICES` is a JSON object of USD per million tokens by model name,
+`{"gpt-4.1-mini": {"input": 0.4, "output": 1.6}}`; it defaults to empty. A call
+whose model (the name the provider reports back) is in the table and that
+reported both token counts carries `cost_usd` and the log line gains
+` cost_usd=...`; otherwise `cost_usd` is null. Prices are configuration, not
+fetched: a stale price gives a stale cost.
+
 ## Docker
 
 ```bash
